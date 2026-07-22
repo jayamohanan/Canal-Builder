@@ -1247,6 +1247,12 @@ console.log(
         // stays continuous until the tunnels physically open.
         const severedM = !!(CONFIG.ROAD.TUNNEL && CONFIG.ROAD.TUNNEL.ENABLED);
 
+        // Flat-land mode: leave the height field at zero. Every "if (!flat)"
+        // below skips a pass that only shapes elevation — the paint loop then
+        // sees h === 0 everywhere and fills the whole band with GROUND_COLOR,
+        // borders fading out exactly as the flat land around the mountain did.
+        const flat = !!IS.FLAT;
+
         const shoulderS = s(IS.SHOULDER);
         const shoulderC = s(IS.CURVE_SHOULDER);
         const falloffS  = Math.max(1, s(IS.MERGE_FALLOFF) * k);
@@ -1254,7 +1260,7 @@ console.log(
         const maxHalf   = Math.max(...r.spines.map((sp) => sp.halfW));
         const win       = Math.ceil((maxHalf + shoulderS) * k + falloffS + 2);
         const F = new Float32Array(tw * th).fill(1);
-        for (const sp of r.spines) {
+        if (!flat) for (const sp of r.spines) {
             const span = Math.max(1e-6, sp.halfW - r.laneW / 2);
             for (let si = 0; si < sp.pts.length - 1; si++) {
                 const a = sp.pts[si], b = sp.pts[si + 1];
@@ -1292,7 +1298,7 @@ console.log(
         // mountain, within the curved span. The gorge depth ramps off these.
         const GO = IS.GORGE;
         let G = null, GW = null, GE = null, rampT = 0;
-        const gorgeOn = GO && GO.ENABLED && isl && IS.PASS_SIDE;
+        const gorgeOn = !flat && GO && GO.ENABLED && isl && IS.PASS_SIDE;
         if (gorgeOn) {
             // Outer road of the pass: left road when wrapping the left end,
             // right road when wrapping the right.
@@ -1384,7 +1390,7 @@ console.log(
         const hfreq    = freq * 0.7;
         const GO_DEPTH = gorgeOn ? GO.DEPTH : 0;
         const H = new Float32Array(tw * th);
-        for (let y = 0; y < th; y++) {
+        if (!flat) for (let y = 0; y < th; y++) {
             for (let x = 0; x < tw; x++) {
                 const i = y * tw + x;
                 const border = Math.min(x, tw - 1 - x, y, th - 1 - y) / fadeT;
@@ -1431,7 +1437,7 @@ console.log(
 
         // Smooth the field before painting: rounds every contour at once —
         // silhouette, terraces and shading all soften together.
-        if (IS.SMOOTHING > 0) this._blurField(H, tw, th, Math.round(IS.SMOOTHING));
+        if (IS.SMOOTHING > 0 && !flat) this._blurField(H, tw, th, Math.round(IS.SMOOTHING));
 
         // Pass 2: paint.
         // Key includes the band so two live segments never share a texture.
@@ -1533,8 +1539,11 @@ console.log(
             .setDisplaySize(bw, bh)
             .setDepth(1.5), seg);
 
-        this._spawnTreeTops(H, tw, th, bx, by, k, seed, seg);
-        this._spawnRocks(H, tw, th, bx, by, k, seed, seg);
+        // Scenery belongs to the mountain landscape — flat mode is bare ground.
+        if (!flat) {
+            this._spawnTreeTops(H, tw, th, bx, by, k, seed, seg);
+            this._spawnRocks(H, tw, th, bx, by, k, seed, seg);
+        }
     }
 
     // Screen-space distance from a point to the nearest road EDGE (negative
@@ -6001,6 +6010,17 @@ console.log(
     }
 
     createStartOverlay() {
+        // Dev toggle: with the tutorial off there is no mask and no pointer, and
+        // play starts immediately (removeStartOverlay's side effects run here).
+        if (!CONFIG.POINTER.TUTORIAL_ENABLED) {
+            this.startOverlay = null;
+            this.startOverlayB = null;
+            this.startPointer = null;
+            this.hasStartedPlaying = true;
+            this.levelUpTimer = this.time.now;
+            this.firstLevelUpTimer = true;
+            return;
+        }
         const W = this.scale.width;
         const H = this.scale.height;
         const L = this.layoutConfig;
@@ -6012,6 +6032,19 @@ console.log(
         const maskColor = parseInt(CONFIG.POINTER.TUTORIAL_MASK_COLOR.substring(1), 16);
         this.startOverlay = this.add.rectangle(gameW / 2, gameH / 2, gameW, gameH, maskColor,
             CONFIG.POINTER.TUTORIAL_MASK_OPACITY).setAlpha(0).setDepth(99);
+
+        // camB renders AFTER the main camera, so the landscape it owns would be
+        // painted straight over the mask above and read as "highlighted". Give
+        // camB its own copy of the mask, pinned to its viewport (scrollFactor 0
+        // so panning can't slide it off), faded in lockstep with the main one.
+        this.startOverlayB = null;
+        if (this.camB) {
+            this.startOverlayB = this._addB(this.add.rectangle(
+                this.camB.width / 2, this.camB.height / 2,
+                this.camB.width, this.camB.height, maskColor,
+                CONFIG.POINTER.TUTORIAL_MASK_OPACITY)
+                .setScrollFactor(0).setAlpha(0).setDepth(99), null);
+        }
 
         // Position pointer based on spawn button location
         let pointerX = this.spawnButton.x;
@@ -6036,7 +6069,7 @@ console.log(
         this.time.delayedCall(CONFIG.POINTER.TUTORIAL_START_DELAY, () => {
             if (!this.startOverlay || !pCont.active) return;
             this.tweens.add({
-                targets: this.startOverlay, alpha: 1,
+                targets: [this.startOverlay, this.startOverlayB].filter(Boolean), alpha: 1,
                 duration: CONFIG.POINTER.TUTORIAL_FADE_DURATION, ease: 'Linear',
                 onComplete: () => {
                     if (!pCont.active) return;
@@ -6058,8 +6091,10 @@ console.log(
     removeStartOverlay() {
         if (!this.startOverlay) return;
         this.startOverlay.destroy();
+        if (this.startOverlayB) this.startOverlayB.destroy();
         if (this.startPointer) this.startPointer.destroy();
         this.startOverlay = null;
+        this.startOverlayB = null;
         this.hasStartedPlaying = true;
         this.levelUpTimer = this.time.now;
         this.firstLevelUpTimer = true;

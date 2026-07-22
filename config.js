@@ -124,6 +124,8 @@ var CONFIG = {
     },
 
     POINTER: {
+        TUTORIAL_ENABLED: false,       // set true just before shipping — the start mask +
+                                       // spawn-button pointer are off during development
         SCALE: 1,
         FILL_COLOR: "#ffd251",
         STROKE_COLOR: "#6d5727",
@@ -608,6 +610,14 @@ var CONFIG = {
             // shade and a bold outline. Perlin gives every contour its own
             // organic outline (no rings, no symmetry); the terracing keeps it
             // cartoon instead of photoreal.
+            FLAT:       true,      // FLAT LAND MODE: skip the height field entirely —
+                                   // no massif, no hills, no gorge, no terraces, just
+                                   // the flat GROUND_COLOR the roads sit on. Only the
+                                   // terrain ART is affected: the roads still dead-end
+                                   // at the island's band and the augers still drill it
+                                   // (the tunnels key off the island GEOMETRY, and the
+                                   // soil-colour cut is painted by the bore itself).
+                                   // Set false to bring the mountain back.
             SEED:       7,         // change per level — the only thing that varies
             DETAIL:     2.6,       // noise features per oblong-radius: lower = one
                                    // broad massif, higher = busier ridges
