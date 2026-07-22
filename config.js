@@ -456,9 +456,12 @@ var CONFIG = {
                                    // through the curve — the concentric spacing is
                                    // derived from road width + this gap, so they
                                    // stay separated (never touching) at any value > 0
-        LANE_FACTOR:  1.6,         // lane width as a multiple of car width — drives the
+        LANE_FACTOR:  2.4,         // lane width as a multiple of car width — drives the
                                    // road width (lanes × lane), so lanes always hug the
-                                   // cars instead of leaving a phantom empty lane
+                                   // cars instead of leaving a phantom empty lane.
+                                   // Was 1.6: widened 50%, which carries straight
+                                   // through to the cut channel and the auger, since
+                                   // both are sized off the road's width
         LANE_SQUEEZE: 0.72,        // pulls lanes toward their road's centre line (1 = sit
                                    // dead centre in the lane, 0 = all stacked on the centre
                                    // line). Keeps vehicles off the edge stripes without
@@ -512,7 +515,11 @@ var CONFIG = {
             ADVANCE_PER_CHARGE: 2, // px of drilling banked per unit of battery charge
             SCROLL: 90,            // UV scroll speed (screen px/s) on the auger's
                                    // spiral section — the perceived rotation speed
-            BLADE_LEN: 48,         // FIXED machine length (px @ platformScale): the
+            BLADE_LEN: 72,         // was 48: scaled 50% with the bore so the rig keeps
+                                   // its proportions — width comes from BLADE_DIAM ×
+                                   // the bore, length is set here, so they must be
+                                   // moved together.
+                                   // FIXED machine length (px @ platformScale): the
                                    // auger is a vehicle-sized rig that climbs with
                                    // the face, paving road behind itself — not a
                                    // shaft stretching back to the entry
@@ -523,7 +530,10 @@ var CONFIG = {
                                    // traffic's direction). true: each road's rig
                                    // starts at its own queue's mouth — the down
                                    // road's cuts top→bottom instead
-            MARGIN: 6,             // channel width beyond the roads' outer edges
+            MARGIN: 9,             // was 6: scaled 50% with the road so the bore
+                                   // (and the auger sized off it) widens by exactly
+                                   // 50% rather than a bit less.
+                                   // channel width beyond the roads' outer edges
                                    // (px @ platformScale) — the visible cut walls
 
             // ── Toll gantry (mid-tunnel) ──────────────────────────────────
