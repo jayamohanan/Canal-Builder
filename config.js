@@ -439,9 +439,18 @@ var CONFIG = {
         // direction (-1 = down, +1 = up), so the list length is the lane count.
         // Divided 4-lane highway: each carriageway is one-way, split by the median.
         ROADS: [
-            { LANE_DIRS: [ 1,  1] },   // left carriageway:  2 lanes, both heading up
-            { LANE_DIRS: [-1, -1] },   // right carriageway: 2 lanes, both heading down
+            { LANE_DIRS: [ 1,  1] },   // the one carriageway: 2 lanes, both heading up.
+                                       // A single road is centred in partB by
+                                       // construction, so it sits symmetrically
+                                       // about the half's centre line
         ],
+
+        TRAFFIC_ENABLED: false,        // false: no vehicles at all — no pool, no
+                                       // spawning, no queues. The road geometry
+                                       // (and the lane widths derived from the car
+                                       // art) is kept; only the traffic is gone.
+                                       // With no queue to form, the boring machine
+                                       // starts digging as soon as it has charge
         ROAD_GAP:     4,           // gap between adjacent roads (px @ platformScale).
                                    // Also sets how far apart the two tracks run
                                    // through the curve — the concentric spacing is

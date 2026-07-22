@@ -1073,6 +1073,10 @@ console.log(
             this._createMountain(island);
         }
 
+        // Traffic off: the road (and its lanes) exist, but nothing drives on
+        // them — no pool, no seeding, no spawn timer.
+        if (RC.TRAFFIC_ENABLED === false) return;
+
         // Pre-build the whole vehicle pool up front; it never grows past CAR_POOL.
         // Pooled sprites are type-agnostic — the texture and size are stamped on
         // at spawn, so one pool serves cars, vans, trucks and buses alike.
@@ -2664,11 +2668,16 @@ console.log(
         // front vehicle stopped at the barrier, held for QUEUE_WAIT_MS so a
         // few more come to a rest behind it.
         if (!tn.digOk) {
-            if (!this._upQueueHalted()) { tn.haltT = 0; return; }
-            if (!tn.haltT) { tn.haltT = this.time.now; return; }
-            if (this.time.now - tn.haltT <
-                (CONFIG.ROAD.TUNNEL.QUEUE_WAIT_MS || 1500)) return;
-            tn.digOk = true;
+            // With traffic off there is no queue to wait on: dig on first charge.
+            if (CONFIG.ROAD.TRAFFIC_ENABLED === false) {
+                tn.digOk = true;
+            } else {
+                if (!this._upQueueHalted()) { tn.haltT = 0; return; }
+                if (!tn.haltT) { tn.haltT = this.time.now; return; }
+                if (this.time.now - tn.haltT <
+                    (CONFIG.ROAD.TUNNEL.QUEUE_WAIT_MS || 1500)) return;
+                tn.digOk = true;
+            }
         }
         let total = 0;
         for (let i = 0; i < 3; i++) {
