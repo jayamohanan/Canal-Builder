@@ -923,6 +923,7 @@ console.log(
         // plain registry push — behaviour is identical to before.
         this.segments  = [];
         this._worldBSet = new Set();
+        this._camBSnapDone = false;   // fresh build (incl. scene.restart on resize) → the set must refill
         this.camB = null;
         const endless = severed && RC.ENDLESS && RC.ENDLESS.ENABLED;
         if (endless) {
