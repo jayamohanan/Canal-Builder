@@ -1,0 +1,106 @@
+
+
+I have added two sprites in graphics/car named chassis.png and tire.png.
+
+How to setup car.
+
+Sprite	Display Width	Display Height	Source
+Chassis	120 px	60 px	CHASSIS_WIDTH × CHASSIS_HEIGHT
+Wheel (each)	30 px	30 px	WHEEL_RADIUS × 2 = 15 × 2
+
+
+Place each wheel body(two copy of wheel sprite) relative to the chassis center. Rear wheel at (-0.317·W, +0.417·H), front wheel at (+0.317·W, +0.417·H), where W and H are the chassis sprite's display width/height and +Y is downward. Wheel radius = 0.25·H. Connect each with a length-0 constraint whose pointA is that offset and pointB is (0,0).
+
+
+
+
+
+
+
+I'm giving you two image files:
+
+chassis.png — the car body
+wheel.png — a single tire (you'll use it twice: front + rear wheel)
+Build a physics-driven car in Phaser 3 using the Matter.js physics engine, following this exact spec. The car is 3 physics bodies (1 chassis + 2 wheels) joined by constraints, with 3 separate display sprites synced to the bodies every frame. Do not use this.matter.add.image — keep physics bodies and display sprites separate.
+
+1. Sizes (display sizes are forced, native PNG resolution is irrelevant)
+Chassis: 120 × 60 px (2:1 aspect ratio)
+Each wheel: 30 × 30 px square (physics circle radius = 15)
+2. Physics bodies
+All three bodies share one collision group so they never collide with each other:
+
+
+const group = this.matter.world.nextGroup(true);
+
+chassis = this.matter.add.rectangle(x, y, 120, 60, {
+    density: 0.002, friction: 0.9,
+    chamfer: { radius: 30 },              // rounded ends (half of height)
+    collisionFilter: { group }
+});
+rearWheel = this.matter.add.circle(x - 38, y + 25, 15, {
+    density: 0.001, friction: 0.9, restitution: 0,
+    collisionFilter: { group }
+});
+frontWheel = this.matter.add.circle(x + 38, y + 25, 15, {
+    density: 0.001, friction: 0.9, restitution: 0,
+    collisionFilter: { group }
+});
+Note: +X = right/front, +Y = down. The chassis does NOT collide with the ground — only the two wheels do (handled automatically by the shared group + circle contact).
+
+3. Wheel placement relative to chassis center (origin = chassis geometric center)
+Rear wheel offset: (-38, +25)
+Front wheel offset: (+38, +25)
+As size-independent ratios: offsetX = ±0.317 × chassisWidth, offsetY = +0.417 × chassisHeight, wheelRadius = 0.25 × chassisHeight.
+4. Joints (rigid axles)
+Connect each wheel to its anchor point on the chassis with a length-0, low-stiffness constraint (rigid but with slight give to avoid jitter). The wheels remain free to spin at the anchor.
+
+
+this.matter.add.constraint(chassis, rearWheel, 0, 0.2, {
+    pointA: { x: -38, y: 25 }, pointB: { x: 0, y: 0 }
+});
+this.matter.add.constraint(chassis, frontWheel, 0, 0.2, {
+    pointA: { x: 38, y: 25 }, pointB: { x: 0, y: 0 }
+});
+5. Display sprites (visual layer only)
+
+rearWheelSprite  = this.add.image(0, 0, 'wheel').setDepth(5);
+frontWheelSprite = this.add.image(0, 0, 'wheel').setDepth(5);
+chassisSprite    = this.add.image(0, 0, 'chassis').setDepth(10);
+chassisSprite.setDisplaySize(120, 60);
+rearWheelSprite.setDisplaySize(30, 30);
+frontWheelSprite.setDisplaySize(30, 30);
+Wheels at depth 5 (behind), chassis at depth 10 (front).
+
+6. Every frame in update() — sync sprites to bodies
+
+chassisSprite.setPosition(chassis.position.x, chassis.position.y);
+chassisSprite.setRotation(chassis.angle);
+rearWheelSprite.setPosition(rearWheel.position.x, rearWheel.position.y);
+rearWheelSprite.setRotation(rearWheel.angle);
+frontWheelSprite.setPosition(frontWheel.position.x, frontWheel.position.y);
+frontWheelSprite.setRotation(frontWheel.angle);
+7. Driving (constant-torque motor on REAR wheel only)
+Speed is not set directly — it emerges from torque vs friction/mass. Front wheel spins passively from ground friction.
+
+
+// in update():
+const torque = 40;                                    // MOTOR_TORQUE
+const angularAccel = torque / rearWheel.inertia;      // α = τ / I
+this.matter.body.setAngularVelocity(rearWheel,
+    rearWheel.angularSpeed + angularAccel);
+8. Matter world config
+
+physics: {
+  default: 'matter',
+  matter: {
+    gravity: { y: 1 },
+    enableSleeping: false,
+    positionIterations: 10,
+    velocityIterations: 10,
+    constraintIterations: 10
+  }
+}
+
+
+
+

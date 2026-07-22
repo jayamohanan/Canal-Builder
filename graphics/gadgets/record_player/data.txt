@@ -1,0 +1,7 @@
+
+
+Player Size : (252, 245)
+Disc 1 Size & Offset : (110, 110) (6.5,11)
+Disc 2 Size & Offset : (110, 110) (136, 11)
+Tape 1 Size & Offset : (78, 78) (22.5, 27)
+Tape 2 Size & Offset : (78, 78) (152, 27)
