@@ -381,39 +381,6 @@ var CONFIG = {
     // ===================================================================
     // CAR + INCLINE (right-half pivot: batteries charge a car that climbs)
     // ===================================================================
-    CAR: {
-        ENABLED: false,            // master switch — when true, partB shows the car/incline instead of a gadget
-
-        // ── Body dimensions (forced display sizes, per car spec) ──────────
-        CHASSIS_WIDTH:  120,
-        CHASSIS_HEIGHT: 60,
-        WHEEL_RADIUS:   15,        // physics circle radius (sprite = 30×30)
-        // Wheel offsets from chassis centre (size-independent ratios baked in)
-        REAR_WHEEL_OFFSET_X:  -38, // -0.317 × width
-        FRONT_WHEEL_OFFSET_X:  38, // +0.317 × width
-        WHEEL_OFFSET_Y:        25, // +0.417 × height
-
-        // ── Physics properties ────────────────────────────────────────────
-        CHASSIS_DENSITY: 0.002,
-        WHEEL_DENSITY:   0.001,
-        WHEEL_FRICTION:  0.9,
-        GROUND_FRICTION: 0.9,
-        CHASSIS_CHAMFER: 30,       // rounded ends (half of chassis height)
-        AXLE_STIFFNESS:  0.2,      // constraint stiffness (rigid-ish axle)
-
-        // ── Motor ─────────────────────────────────────────────────────────
-        MOTOR_TORQUE: 40,          // constant torque applied to rear wheel while driving
-
-        // ── Incline ───────────────────────────────────────────────────────
-        INCLINE_ANGLE_DEG: 15,     // straight incline, rising to the right
-        INCLINE_LENGTH:    8000,   // effectively endless for now (plateau added later)
-        INCLINE_THICKNESS: 200,    // ground slab thickness (only the surface matters)
-
-        // ── Charge → distance mapping ─────────────────────────────────────
-        // "every 1 unit of charge delivered by the slots → travel 0.2 units up the incline"
-        DISTANCE_PER_CHARGE: 0.2,  // distance-units earned per unit of charge
-        PX_PER_UNIT:         8,    // pixels along the incline per distance-unit (tunable)
-    },
 
     // ===================================================================
     // ROAD (right-half pivot: congested traffic above the battery slots)
@@ -431,355 +398,95 @@ var CONFIG = {
     // and the battery slots, so zooming out shrinks the scenery and reveals more
     // straight road rather than shortening it. STRIPE_WIDTH is deliberately held
     // back from scaling (see below).
+    // ── The land in partB, and the canal being dug up the middle of it ────
+    // Batteries power one boring machine. It parks at the head of the canal
+    // already built at the foot of the band and digs upward through the green
+    // land; water follows it up the cut. When it reaches the top of the band
+    // the next band is generated above and the camera rides up to it.
     ROAD: {
-        ENABLED: true,             // master switch — when true, partB shows the road
+        ENABLED: true,             // master switch — when true, partB shows the land
 
-        // ── Geometry (laid out inside partB) ──────────────────────────────
-        // One entry per road, left to right; LANE_DIRS gives each lane's travel
-        // direction (-1 = down, +1 = up), so the list length is the lane count.
-        // Divided 4-lane highway: each carriageway is one-way, split by the median.
-        ROADS: [
-            { LANE_DIRS: [ 1,  1] },   // the one carriageway: 2 lanes, both heading up.
-                                       // A single road is centred in partB by
-                                       // construction, so it sits symmetrically
-                                       // about the half's centre line
-        ],
+        BOTTOM_GAP:   40,          // gap above the batteries/junction where the
+                                   // land band stops (px @ platformScale)
+        LAND_COLOR:   0x8ed04f,    // the green ground the channel is cut through
 
-        TRAFFIC_ENABLED: false,        // false: no vehicles at all — no pool, no
-                                       // spawning, no queues. The road geometry
-                                       // (and the lane widths derived from the car
-                                       // art) is kept; only the traffic is gone.
-                                       // With no queue to form, the boring machine
-                                       // starts digging as soon as it has charge
-        ROAD_GAP:     4,           // gap between adjacent roads (px @ platformScale).
-                                   // Also sets how far apart the two tracks run
-                                   // through the curve — the concentric spacing is
-                                   // derived from road width + this gap, so they
-                                   // stay separated (never touching) at any value > 0
-        LANE_FACTOR:  2.4,         // lane width as a multiple of car width — drives the
-                                   // road width (lanes × lane), so lanes always hug the
-                                   // cars instead of leaving a phantom empty lane.
-                                   // Was 1.6: widened 50%, which carries straight
-                                   // through to the cut channel and the auger, since
-                                   // both are sized off the road's width
-        LANE_SQUEEZE: 0.72,        // pulls lanes toward their road's centre line (1 = sit
-                                   // dead centre in the lane, 0 = all stacked on the centre
-                                   // line). Keeps vehicles off the edge stripes without
-                                   // narrowing the road itself
-        BOTTOM_GAP:   40,          // gap above the batteries/junction where the road starts
-
-        // ── Curve bottleneck: 2 lanes → 1 through the hug ─────────────────
-        // Around the mountain each carriageway narrows to a single lane: the
-        // two lanes taper onto the centre line, the asphalt narrows with them,
-        // and cars yield across lanes at the merge point so they file through
-        // one at a time. Congestion at the mouth of the curve is the point.
-        CURVE_MERGE: {
-            ENABLED: true,
-            TAPER:   16,           // arc length over which the lanes converge and
-                                   // the asphalt narrows (px @ platformScale). The
-                                   // taper sits just inside the bend — lanes stay
-                                   // parallel and vertical until the curve starts,
-                                   // then snap together quickly
-            WINDOW:  85,           // how far before the merge cars start yielding
-                                   // to the other lane — the queue forms here
-            ZONE_SPEED: 6,         // crawl speed through the single-lane stretch
-                                   // (px/sec @ platformScale). This is the choke:
-                                   // the curve discharges slower than the straights
-                                   // deliver, so a standing queue builds at the
-                                   // mouth — the congestion IS this mismatch
+        // ── The channel ───────────────────────────────────────────────────
+        CANAL: {
+            WIDTH:       40.8,     // channel width (px @ platformScale)
+            HEAD_OFFSET: 108,      // the built canal's head — where the machine
+                                   // parks and the dig starts — sits this far
+                                   // above the band's centre line
         },
 
-        // ── Tunnel: the battery-powered boring machine ────────────────────
-        // Merged batteries bank drilling distance; a blade pierces the mountain
-        // bottom → top. The "rotation" is a barber-pole illusion: a helix
-        // rotating about its long axis reads from above as its flights sliding
-        // ALONG the axis, so the shaft is a TileSprite whose diagonal-stripe
-        // texture scrolls, under a static cylinder-shade overlay (lighting
-        // doesn't rotate with the drill).
-        //
-        // Each carriageway gets its OWN bore and machine: two tunnels drilled
-        // side by side in lockstep, mountain left standing between them. On
-        // breakthrough the roads simply continue straight through — two lanes
-        // up in one tunnel, two lanes down in the other, no merge, no speed
-        // limit — as if the obstacle had never been there.
         TUNNEL: {
             ENABLED: true,
 
-            // ── Drilling ──────────────────────────────────────────────────
-            QUEUE_WAIT_MS: 1500,   // the dig starts only after the lead upstream
-                                   // vehicle has stood at the barrier this long
-                                   // (a few more halt behind it meanwhile)
+            // ── Digging ───────────────────────────────────────────────────
             PULSE_MS: 450,         // burst length: each 1s battery tick jolts the
                                    // machine — it spins and advances for this long,
                                    // then sits dead until the next tick
-            ADVANCE_PER_CHARGE: 2, // px of drilling banked per unit of battery charge
+            ADVANCE_PER_CHARGE: 2, // px of digging banked per unit of battery charge
             SCROLL: 90,            // UV scroll speed (screen px/s) on the auger's
                                    // spiral section — the perceived rotation speed
-            BLADE_LEN: 72,         // was 48: scaled 50% with the bore so the rig keeps
-                                   // its proportions — width comes from BLADE_DIAM ×
-                                   // the bore, length is set here, so they must be
-                                   // moved together.
-                                   // FIXED machine length (px @ platformScale): the
-                                   // auger is a vehicle-sized rig that climbs with
-                                   // the face, paving road behind itself — not a
-                                   // shaft stretching back to the entry
+            BLADE_LEN: 72,         // FIXED machine length (px @ platformScale): the
+                                   // rig climbs with the face rather than being a
+                                   // shaft stretching back to where it started.
+                                   // Width comes from BLADE_DIAM × the bore, so move
+                                   // the two together to keep the rig's proportions
             BLADE_DIAM: 0.82,      // machine width (the auger art's flight is its
                                    // widest part) as a fraction of the bore
-            OPPOSED_DRILL: false,  // false: both rigs park at the bottom mouth
-                                   // and cut bottom→top (machines advance in the
-                                   // traffic's direction). true: each road's rig
-                                   // starts at its own queue's mouth — the down
-                                   // road's cuts top→bottom instead
-            MARGIN: 9,             // was 6: scaled 50% with the road so the bore
-                                   // (and the auger sized off it) widens by exactly
-                                   // 50% rather than a bit less.
-                                   // channel width beyond the roads' outer edges
-                                   // (px @ platformScale) — the visible cut walls
+            MARGIN: 9,             // loose ground the bore takes beyond the channel
+                                   // on each side (px @ platformScale). The machine
+                                   // is sized off the bore, so this widens it too
 
-            // ── Toll gantry (mid-tunnel) ──────────────────────────────────
-            TOLL: {
-                ENABLED: true,
-                PER_VEHICLE: 1,    // coins per vehicle crossing mid-tunnel
-                FLUSH_MS: 5000,    // every this often, the tolls collected on
-                                   // the right half are banked into the main
-                                   // coin account (the merge-spawn currency)
-            },
-
-            // ── Road tiling (after breakthrough) ──────────────────────────
-            TILE_COUNT: 5,         // the tunnel road is laid as this many equal
-                                   // sections after drilling completes
-            TILE_MS: 300,          // delay between one section landing and the
-                                   // next (entry → exit order)
-
-            // ── Cut walls (open-cutting elevation) ────────────────────────
-            WALL_W: 8,             // horizontal width of the carved wall face
-                                   // beside each road edge (px @ platformScale)
-            WALL_ALPHA: 0.4,       // how much the sand wall darkens at its foot
-                                   // (road edge); eases to full sand at the
-                                   // crest — 0 = flat sand, 1 = black foot
-            WALL_FADE: 36,         // vertical fade length (px @ platformScale)
-                                   // at each tunnel mouth, where the sand wall
-                                   // melts into the surrounding green
+            // (the last dry stretch is flooded by the water's own flow — see
+            //  WATER.FLOW_TAU / MIN_SPEED, not a timed animation)
 
             // ── Colours ───────────────────────────────────────────────────
             // (machine look comes from graphics/auger.png)
-            CUT_COLOR:     0x84694a,  // raw sand exposed in the bore under the
-                                      // machine, before the road is paved behind
+            CUT_COLOR:     0x84694a,  // raw soil exposed in the cut under the
+                                      // machine, before the water reaches it
             DEBRIS_COLORS: [0x8a7454, 0x9c8a66, 0x6b5d45, 0xa89066],
-                                      // sandy spoil chip tints, picked at random
+                                      // soil spoil chip tints, picked at random
             DUST_COLOR:    0xa89878,  // soft dust cloud drifting off the cut
         },
 
-        // ── Endless progression (requires TUNNEL.ENABLED) ─────────────────
-        // After each breakthrough the next mountain is generated ABOVE the
-        // current one; once the 5s toll cycle banks, the camera pans up the
-        // highway to it — same cars, same lanes, literally continuous — and
-        // the world rebases so the loop runs forever.
         ENDLESS: {
             ENABLED: true,
-            PAN_MS: 2500,          // camera travel time to the next mountain
-            SEED_STEP: 1,          // segment k's terrain seed = SEED + k*STEP
+            SETTLE_MS: 5000,       // how long the finished stretch stays on
+                                   // screen before the camera moves on
+            PAN_MS: 2500,          // camera travel time to the next dig site
         },
 
-        // ── Island (the mountain range that severs the roads) ─────────────
-        // In tunnel mode the mountain is a continuous horizontal range across
-        // the whole half: there is no way around it. Both roads dead-end into
-        // its faces (up traffic queues at the bottom face, down traffic at the
-        // top face) until the boring machines cut through and the missing road
-        // segment is paved. WIDTH and the curve/detour settings below only
-        // apply when TUNNEL is disabled (the old wrap-around layout).
-        //
-        // Legacy header (wrap-around mode):
-        // A broad horizontal oblong straddling the road at its vertical centre —
-        // a mountain the highway has to detour around. It's far wider than the
-        // road, so each carriageway hugs its face: out along the near side,
-        // around the end cap, and back along the far side. The up road wraps its
-        // left end, the down road its right end, mirroring around it.
-        //
-        // The oblong is the shape the ROAD hugs. The mountain drawn inside it is
-        // procedural and irregular, and always stays within the oblong — so the
-        // art can change freely (per level, via SEED) without touching the road
-        // geometry. Gaps between kerb and mountain vary, which is what makes it
-        // read as terrain rather than a kerbed median.
-        ISLAND: {
-            ENABLED:    true,
-            WIDTH:      480,       // px @ platformScale — much wider than the road,
-                                   // which is what forces the detour around the end
-            HEIGHT:     216,       // depth across the road; ends are semicircles of
-                                   // HEIGHT/2, so this also sets how broad the wrap is.
-                                   // Keep well under the road's length or the hill
-                                   // crowds out the straights and the turns clamp
-            CLEARANCE:  2,         // gap held between the oblong and the asphalt edge
-                                   // for the whole hug — kerb-tight, the road presses
-                                   // against the mountain foot
-            TURN_RADIUS: 40,       // radius of the two turns where the straight road
-                                   // swings into the hug. Larger = longer, lazier
-                                   // sweep; clamped to whatever actually fits
-            PASS_SIDE:  0,         // unused in tunnel mode (roads are severed, no
-                                   // detour exists). Legacy: which end of the mountain
-                                   // detour around: 1 = right, -1 = left. They run
-                                   // concentric through the curve (the road nearer
-                                   // the wrapped end takes the inner track). 0 =
-                                   // each road wraps its own nearest end instead
-
-            // ── Mountain art (Perlin height field, baked once at create) ──
-            // A genuine Perlin-fBm height field shaped by a dome that falls to
-            // zero at the oblong's edge, painted as FLAT TERRACES in the bright
-            // palette — grass foot, rock, snow — with a light two-tone slope
-            // shade and a bold outline. Perlin gives every contour its own
-            // organic outline (no rings, no symmetry); the terracing keeps it
-            // cartoon instead of photoreal.
-            FLAT:       true,      // FLAT LAND MODE: skip the height field entirely —
-                                   // no massif, no hills, no gorge, no terraces, just
-                                   // the flat GROUND_COLOR the roads sit on. Only the
-                                   // terrain ART is affected: the roads still dead-end
-                                   // at the island's band and the augers still drill it
-                                   // (the tunnels key off the island GEOMETRY, and the
-                                   // soil-colour cut is painted by the bore itself).
-                                   // Set false to bring the mountain back.
-            SEED:       7,         // change per level — the only thing that varies
-            DETAIL:     2.6,       // noise features per oblong-radius: lower = one
-                                   // broad massif, higher = busier ridges
-
-            // ── Terrain merge (mountain ↔ road environment) ───────────────
-            // The terrain covers the WHOLE road area, and the roads carve flat
-            // corridors through it — the road sits at zero elevation, which is
-            // exactly why the road runs where it does. The oblong just holds
-            // the tallest peak; lower hills continue outside the road curve so
-            // mountain and road read as one environment, not an exhibit.
-            HILLS:         0.5,    // height of the surrounding hills relative to
-                                   // the main peak (0 = old isolated-oblong look)
-
-            // ── Gorge (the outer side of the curve) ───────────────────────
-            // Along the curved hug, the ground on the OUTSIDE of the roads
-            // falls away into a steep gorge — the cliffhanger stretch: mountain
-            // wall on one side of the road, a drop on the other. It exists only
-            // through the curve span and fades back to normal terrain at both
-            // ends and beyond WIDTH, where the hills resume as the far wall.
-            GORGE: {
-                ENABLED: false,    // gorge belonged to the cliffhanger curve —
-                                   // no curve exists in tunnel (severed) mode
-                DEPTH:  0.55,      // how deep the drop reads (same units as the
-                                   // terrain height, 1 = the main peak's scale)
-                WIDTH:  70,        // px @ platformScale the canyon floor extends
-                                   // beyond the cliff edge before hills resume
-                LEDGE:  1.5,       // flat lip kept between the asphalt and the
-                                   // drop — a bare kerb, the road hangs on it
-                TAPER:  34,        // fade of the gorge along the road at the two
-                                   // ends of the curve span
-                COLORS: [0x6da344, 0x49702f, 0x2f4d20, 0x1c3115], // shallow→deep
-            },
-            GROUND_COLOR: 0x8ed04f,// elevation-zero ground — the flat grassland the
-                                   // roads run through and the terrain rises from.
-                                   // Deliberately DISTINCT from the game background:
-                                   // it has to read as land under the roads, not as
-                                   // backdrop. The bake borders alpha-fade into the
-                                   // backdrop instead
-            SHOULDER:      10,     // flat verge beside the asphalt on the STRAIGHTS
+        WATER: {
+            COLOR:      0x2f8fd0,  // the canal surface
+            EDGE_COLOR: 0x7fd4f0,  // brighter shallows along each bank — a lit
+                                   // rim that separates water from the earth wall
+            EDGE_WIDTH: 2,         // width of that rim (px @ platformScale)
+            LAG:        1.0,       // how much dry cut the blade keeps open ahead of
+                                   // the water, in machine lengths. This is a LIMIT,
+                                   // not a leash: 1 = the rig works on dry soil
+            FLOW_TAU:   0.9,       // seconds for the level to close most of the gap
+                                   // to that limit. This is what stops the water
+                                   // reading as a strip towed by the auger — it
+                                   // lingers behind a lurch and keeps creeping up
+                                   // the cut after the machine has gone quiet.
+                                   // Higher = lazier, more obviously flowing
+            MIN_SPEED:  30,        // steady creep floor (px/s @ platformScale). The
+                                   // exponential chase above would crawl to a halt
+                                   // as it closes the last of the gap — this keeps
+                                   // the final run to the mouth moving at the same
+                                   // pace it had while chasing the blade
+            FRONT:      12,        // length of the wavering leading edge
                                    // (px @ platformScale)
-            CURVE_SHOULDER: 1,     // verge through the curve — almost nothing, the
-                                   // cliffhanger stretch has no spare ground
-            CURVE_FALLOFF:  8,     // terrain rise distance through the curve: the
-                                   // mountain wall climbs right at the kerb instead
-                                   // of over MERGE_FALLOFF
-            MERGE_FALLOFF: 44,     // distance over which terrain climbs from the
-                                   // road verge to full height. Generous, so a band
-                                   // of flat grassland travels with the roads
-            EDGE_FADE:     26,     // terrain fade at the bake borders, so it meets
-                                   // the background without a hard seam
-            SMOOTHING:  2,         // blur radius (texture px) applied to the height
-                                   // field before painting — rounds ragged terrace
-                                   // boundaries into smooth contours. 0 = off
-            WALL_H:     0.45,      // the mountain rim rises as a steep WALL to this
-                                   // height within WALL_W of its edge — so the
-                                   // silhouette starts beside the road, not after a
-                                   // long green skirt of slowly-rising skirt terrain
-            WALL_W:     0.10,      // rim wall thickness, fraction of the cap radius
-            STEEPNESS:  1.5,       // dome exponent. >1 pulls the upper terraces in
-                                   // toward the summit, so the peak reads TALL and
-                                   // steep instead of a broad mound; 1 = the old
-                                   // even slope
-            OCTAVES:    4,         // fBm layers: detail per octave, halving in size
-            THRESHOLD:  0.10,      // height where the mountain starts — the cut is
-                                   // what makes the outline organic, and it always
-                                   // falls inside the oblong, clear of the road
-            SHADE:      0.73,      // shadow-tone multiplier for slopes facing away
-                                   // from the light (up-left). Two tones only
-            TERRACE_EDGE: 0.85,    // darkening on the lip of each terrace — with no
-                                   // outline or drop shadow (the terrain is
-                                   // continuous now, there's no silhouette to line
-                                   // or to shadow), these lips and the slope shade
-                                   // carry all the relief
-            MAX_RES:    512,       // bake resolution cap (px, long side)
-            // Colour ramp stops, base → summit: bright grass, deep grass, warm
-            // rock, pale rock, snow. These are STOPS, not terraces — STEPS says
-            // how many terraces to cut, and their colours are interpolated
-            // along this ramp. More steps = finer elevation gradation.
-            COLORS: [0x74c046, 0x5fae3c, 0xcf9d63, 0xe2b77f, 0xffffff],
-            STEPS:  10,            // number of flat terraces cut from the ramp
-
-            // ── Tree tops (flat green ground decoration) ──────────────────
-            TREES: {
-                ENABLED: true,
-                SIZE:    32,       // tree-top sprite width (px @ platformScale);
-                                   // height follows the art's aspect ratio
-                SPACING: 26,       // jittered placement grid cell — larger =
-                                   // sparser woods, smaller = denser
-                DENSITY: 0.6,      // chance a grid cell plants a tree (0..1)
-                TREELINE: 0.5,     // max terrain height (0..1) that grows trees —
-                                   // ~the top of the grass terraces; above this
-                                   // it's bare rock and snow
-            },
-
-            // ── Rocks (sparse boulders, any elevation) ────────────────────
-            ROCKS: {
-                ENABLED:  true,
-                COUNT:    10,      // how many boulders to scatter
-                MIN_SIZE: 12,      // smallest boulder width (px @ platformScale)
-                MAX_SIZE: 64,      // largest boulder width
-            },
+            FRONT_COLS: 7,         // fingers across that edge — each on its own
+                                   // phase, so the front never repeats a shape
+            FOAM:       4,         // white cap on the tip of each finger
+                                   // (px @ platformScale) — blocky, following the
+                                   // same columns as the front itself
+            FOAM_COLOR: 0xffffff,
+            FOAM_ALPHA: 0.9,
         },
-
-        // ── Colours ───────────────────────────────────────────────────────
-        ASPHALT_COLOR: 0x494c52,   // road surface — worn asphalt: mid grey, faintly
-                                   // blue so it reads as tarmac rather than shadow
-        STRIPE_COLOR:  0xdcd8cc,   // edge stripes — off-white, warm and muted so
-                                   // they read as paint rather than glowing lines
-
-        // ── Edge stripes (dashed, drawn once) ─────────────────────────────
-        STRIPE_WIDTH:  1.5,        // stripe thickness — held at a readability floor
-                                   // rather than scaled with the framing; thinner
-                                   // than this shimmers against the asphalt
-        STRIPE_DASH:   6,          // dash length
-        STRIPE_GAP:    5,          // gap between dashes
-        STRIPE_INSET:  2,          // dash centre inset from the road edge
-
-        // ── Vehicles ──────────────────────────────────────────────────────
-        // The first entry is the reference: CAR_LENGTH sets its on-screen length,
-        // and every other vehicle is drawn at that same art scale — so a bus comes
-        // out longer and wider than a car purely from its source artwork, with no
-        // per-vehicle sizes to keep in sync. WEIGHT is relative spawn frequency.
-        VEHICLES: [
-            { KEY: 'veh_car',   FILE: 'graphics/tunnel/car.png',   WEIGHT: 6 },
-            { KEY: 'veh_van',   FILE: 'graphics/tunnel/van.png',   WEIGHT: 3 },
-            { KEY: 'veh_truck', FILE: 'graphics/tunnel/truck.png', WEIGHT: 2 },
-            { KEY: 'veh_bus',   FILE: 'graphics/tunnel/bus.png',   WEIGHT: 1 },
-        ],
-        CAR_LENGTH:    17,         // reference car display height (px @ platformScale)
-        CAR_POOL:      180,        // max live vehicle sprites — the pool never grows past
-                                   // this. The detour makes each lane's path longer than
-                                   // the road is tall, so this sits well above what a
-                                   // straight road would need. Run dry and lanes just thin
-                                   // out at the entry — no error
-        SPEED_MIN:     13,         // slowest desired cruising speed (px/sec @ platformScale)
-        SPEED_MAX:     28,         // fastest desired cruising speed — well above the
-                                   // curve's ZONE_SPEED, so traffic arrives at the
-                                   // merge faster than it can get through
-        MIN_GAP:       6,          // bumper-to-bumper gap a car refuses to close on the one ahead
-        FOLLOW_GAIN:   1.8,        // how hard a car brakes as the gap shrinks (higher = twitchier)
-        SPAWN_MS:      220,        // spawn attempt interval per lane (skipped if the
-                                   // entry is blocked) — quick enough to keep the
-                                   // road fed while the curve chokes the flow
     },
 };
 

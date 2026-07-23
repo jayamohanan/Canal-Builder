@@ -92,22 +92,11 @@ class GameScene extends Phaser.Scene {
         this.chargingSlots    = [null, null, null];
         this.chargingInterval = null;
 
-        // ── Car / incline (right-half pivot) ─────────────────────────────
-        this.car               = null;   // { chassis, rearWheel, frontWheel + sprites }
-        this.carDriving        = false;   // true only while actively climbing; else frozen (static)
-        this.carParkedPose     = null;    // snapshot of body transforms held while idle
-        this.carEarnedDistPx   = 0;       // total distance (px) the car is allowed to climb
-        this.carForward        = { x: 1, y: 0 }; // up-slope unit vector
-        this.carStartPos       = { x: 0, y: 0 }; // reference for measuring travel
+        // ── Land / canal (right-half pivot) ──────────────────────────────
+        this.road              = null;   // band geometry: where the channel runs
 
-        // ── Road / traffic (right-half pivot) ────────────────────────────
-        this.road              = null;   // shared geometry + vehicle table for all roads
-        this.roadLanes         = [];     // flat list across all roads: { x, dir, cars }
-        this.roadCarPool       = [];     // idle car sprites available for reuse
-        this._roadLastTime     = 0;      // update() timestamp for dt-based motion
-
-        // ── Tunnel boring machine (battery-powered) ──────────────────────
-        this.tunnel            = null;   // { x, entryY, exitY, len, progressPx, ... }
+        // ── Boring machine (battery-powered) ─────────────────────────────
+        this.tunnel            = null;   // { entryY, exitY, len, progressPx, ... }
 
         // Layout state for responsive design
         this.isPortrait         = true;  // Detected in create()
@@ -307,19 +296,10 @@ class GameScene extends Phaser.Scene {
         // Shared white glow texture used by charge effects (additive blend)
         this.load.image('glow', 'graphics/gadgets/glow.png');
 
-        // Car (right-half pivot) — chassis body + single tire reused for both wheels
+        // The boring machine's art (sliced into tip/spiral/cap at create).
         if (CONFIG.ROAD && CONFIG.ROAD.ENABLED) {
-            for (const v of CONFIG.ROAD.VEHICLES) this.load.image(v.KEY, v.FILE);
             this.load.image('auger_src', 'graphics/auger.png');
-            for (let i = 1; i <= 4; i++) {
-                this.load.image(`tree_top${i}`, `graphics/tree_tops/tree_top${i}.png`);
-            }
-            for (let i = 1; i <= 6; i++) {
-                this.load.image(`rock${i}`, `graphics/rocks/rock${i}.png`);
-            }
         }
-        this.load.image('car_chassis', 'graphics/car/chassis.png');
-        this.load.image('car_wheel',   'graphics/car/tire.png');
 
         // Load gadget sprites from gadgetData.js
         if (typeof GADGET_SPRITES !== 'undefined' && GADGET_SPRITES) {
@@ -459,16 +439,11 @@ console.log(
             this.gadgetsData = [];
         }
 
-        // partB (top half portrait / right half landscape) — 3 slots + (car | gadget)
+        // partB (top half portrait / right half landscape) — 3 slots + (land | gadget)
         this.createSlots();
         if (CONFIG.ROAD && CONFIG.ROAD.ENABLED) {
-            // Right-half pivot: a congested road runs above the battery slots.
+            // Right-half pivot: the land and the canal being dug through it.
             this.createRoad();
-            this.gadgetAnimationsComplete = true;   // no gadget intro to wait on
-        } else if (CONFIG.CAR && CONFIG.CAR.ENABLED) {
-            // Right-half pivot: batteries charge a car that climbs an incline.
-            this.createIncline();
-            this.createCar();
             this.gadgetAnimationsComplete = true;   // no gadget intro to wait on
         } else if (this.gadgetsData.length > 0) {
             this.loadGadgets(this.gadgetsData[0]);
@@ -490,7 +465,7 @@ console.log(
 
         this.startCharging();
 
-        // Endless-road mode: the landscape camera must ignore every UI/fixed
+        // Endless mode: the landscape camera must ignore every UI/fixed
         // object created above — one-time snapshot now that create() is done.
         this._snapshotCamBIgnores();
     }
@@ -651,179 +626,12 @@ console.log(
     }
 
     // ================================================================
-    // CAR + INCLINE (right-half pivot)
+    // LAND / CANAL (right-half pivot)
     // ================================================================
-    // A straight 15° incline (rising to the right) built from one long static
-    // Matter body. Only the top surface matters — the wheels ride on it. The
-    // slab is thick so the car can't fall through. "Endless" for now; the
-    // plateau/checkpoint system is layered on later.
-    createIncline() {
-        const C = CONFIG.CAR;
-        const B = this.layoutConfig.partB;
-
-        const theta = -C.INCLINE_ANGLE_DEG * Math.PI / 180;  // negative = rises to the right (+Y is down)
-        const forward = { x: Math.cos(theta), y: Math.sin(theta) };      // up-slope unit vector
-        const downNormal = { x: -forward.y, y: forward.x };              // into the ground (points down)
-        this.carForward = forward;
-
-        // Bottom of the ramp: left side of partB, just above the junction plug.
-        const bottomX = B.x + B.width * 0.15;
-        const bottomY = (this.junctionY || (B.y + B.height * 0.7)) - 30;
-        this.carRampBottom = { x: bottomX, y: bottomY };
-
-        const len = C.INCLINE_LENGTH;
-        const T   = C.INCLINE_THICKNESS;
-        // Slab centre: half a length up-slope from the bottom, then half its
-        // thickness down-normal so the TOP face lies on the ramp line.
-        const cx = bottomX + forward.x * (len / 2) + downNormal.x * (T / 2);
-        const cy = bottomY + forward.y * (len / 2) + downNormal.y * (T / 2);
-
-        this.inclineBody = this.matter.add.rectangle(cx, cy, len, T, {
-            isStatic: true,
-            angle: theta,
-            friction: C.GROUND_FRICTION,
-            restitution: 0,
-        });
-
-        // Simple visual for the ramp surface (a filled, rotated rectangle).
-        const gfx = this.add.graphics().setDepth(2);
-        gfx.fillStyle(0x6b7a52, 1);
-        gfx.fillRect(-len / 2, -T / 2, len, T);
-        gfx.lineStyle(Math.max(2, 3), 0x3f4a2e, 1);
-        gfx.strokeRect(-len / 2, -T / 2, len, T);
-        gfx.setPosition(cx, cy);
-        gfx.setRotation(theta);
-        this.inclineGfx = gfx;
-    }
-
-    // Build the physics-driven car: 3 Matter bodies (chassis + 2 wheels) joined
-    // by rigid-ish axles, sharing one collision group so they never collide with
-    // each other. Three separate display sprites are synced to the bodies every
-    // frame in update() (physics bodies and sprites kept strictly separate).
-    createCar() {
-        const C = CONFIG.CAR;
-        const forward = this.carForward;
-        const theta   = Math.atan2(forward.y, forward.x);   // incline angle
-        const upNormal = { x: forward.y, y: -forward.x };   // away from the ground (points up)
-
-        // Spawn the chassis centre so the wheels rest exactly on the ramp surface:
-        // chassis→wheel-centre (offsetY) + wheel-centre→ground (radius) above the line.
-        const lift = C.WHEEL_OFFSET_Y + C.WHEEL_RADIUS;
-        const b = this.carRampBottom;
-        const x = b.x + forward.x * (C.CHASSIS_WIDTH * 0.6) + upNormal.x * lift;
-        const y = b.y + forward.y * (C.CHASSIS_WIDTH * 0.6) + upNormal.y * lift;
-
-        const group = this.matter.world.nextGroup(true);   // negative group: parts ignore each other
-
-        const chassis = this.matter.add.rectangle(x, y, C.CHASSIS_WIDTH, C.CHASSIS_HEIGHT, {
-            density: C.CHASSIS_DENSITY, friction: C.WHEEL_FRICTION,
-            chamfer: { radius: C.CHASSIS_CHAMFER },
-            collisionFilter: { group },
-            angle: theta,
-        });
-        const rearWheel = this.matter.add.circle(
-            x + C.REAR_WHEEL_OFFSET_X, y + C.WHEEL_OFFSET_Y, C.WHEEL_RADIUS, {
-            density: C.WHEEL_DENSITY, friction: C.WHEEL_FRICTION, restitution: 0,
-            collisionFilter: { group },
-        });
-        const frontWheel = this.matter.add.circle(
-            x + C.FRONT_WHEEL_OFFSET_X, y + C.WHEEL_OFFSET_Y, C.WHEEL_RADIUS, {
-            density: C.WHEEL_DENSITY, friction: C.WHEEL_FRICTION, restitution: 0,
-            collisionFilter: { group },
-        });
-
-        // Rigid axles (length-0, low stiffness): wheel stays free to spin.
-        this.matter.add.constraint(chassis, rearWheel, 0, C.AXLE_STIFFNESS, {
-            pointA: { x: C.REAR_WHEEL_OFFSET_X, y: C.WHEEL_OFFSET_Y }, pointB: { x: 0, y: 0 },
-        });
-        this.matter.add.constraint(chassis, frontWheel, 0, C.AXLE_STIFFNESS, {
-            pointA: { x: C.FRONT_WHEEL_OFFSET_X, y: C.WHEEL_OFFSET_Y }, pointB: { x: 0, y: 0 },
-        });
-
-        // Display sprites (visual layer only) — wheels behind, chassis in front.
-        const rearWheelSprite  = this.add.image(0, 0, 'car_wheel').setDepth(5).setDisplaySize(C.WHEEL_RADIUS * 2, C.WHEEL_RADIUS * 2);
-        const frontWheelSprite = this.add.image(0, 0, 'car_wheel').setDepth(5).setDisplaySize(C.WHEEL_RADIUS * 2, C.WHEEL_RADIUS * 2);
-        const chassisSprite    = this.add.image(0, 0, 'car_chassis').setDepth(10).setDisplaySize(C.CHASSIS_WIDTH, C.CHASSIS_HEIGHT);
-
-        this.car = { chassis, rearWheel, frontWheel, chassisSprite, rearWheelSprite, frontWheelSprite };
-        this.carStartPos = { x: chassis.position.x, y: chassis.position.y };
-        this.carEarnedDistPx = 0;
-
-        // Park it: freeze all three bodies so it sits still on the slope (no
-        // gravity roll-back, no idle wheel spin) until charge starts a run.
-        this.carDriving = true;            // force the toggle to actually apply
-        this._setCarDriving(false);
-
-        this._syncCarSprites();
-    }
-
-    // Freeze (static) or release (dynamic) the whole car. Freezing acts like an
-    // invisible support: the car holds its exact pose on the incline instead of
-    // rolling back or spinning its wheels under gravity while idle.
-    _setCarDriving(on) {
-        if (!this.car || this.carDriving === on) return;
-        this.carDriving = on;
-        const bodies = [this.car.chassis, this.car.rearWheel, this.car.frontWheel];
-        if (!on) {
-            // Park: zero motion, freeze the bodies, and snapshot the exact pose so
-            // the sprites can be pinned to it (physics effectively off while idle).
-            bodies.forEach((body) => {
-                this.matter.body.setVelocity(body, { x: 0, y: 0 });
-                this.matter.body.setAngularVelocity(body, 0);
-                this.matter.body.setStatic(body, true);
-            });
-            this.carParkedPose = bodies.map((b) => ({ x: b.position.x, y: b.position.y, angle: b.angle }));
-        } else {
-            // Release: hand control back to physics from the parked pose.
-            bodies.forEach((body) => this.matter.body.setStatic(body, false));
-        }
-    }
-
-    _syncCarSprites() {
-        const car = this.car;
-        if (!car) return;
-        // While parked, pin the sprites to the frozen pose — no rolling / drift.
-        if (!this.carDriving && this.carParkedPose) {
-            const [c, r, f] = this.carParkedPose;
-            car.chassisSprite.setPosition(c.x, c.y).setRotation(c.angle);
-            car.rearWheelSprite.setPosition(r.x, r.y).setRotation(r.angle);
-            car.frontWheelSprite.setPosition(f.x, f.y).setRotation(f.angle);
-            return;
-        }
-        car.chassisSprite.setPosition(car.chassis.position.x, car.chassis.position.y);
-        car.chassisSprite.setRotation(car.chassis.angle);
-        car.rearWheelSprite.setPosition(car.rearWheel.position.x, car.rearWheel.position.y);
-        car.rearWheelSprite.setRotation(car.rearWheel.angle);
-        car.frontWheelSprite.setPosition(car.frontWheel.position.x, car.frontWheel.position.y);
-        car.frontWheelSprite.setRotation(car.frontWheel.angle);
-    }
-
-    // Distance (px) the chassis has climbed along the incline from its start.
-    _carTravelledPx() {
-        const car = this.car;
-        if (!car) return 0;
-        const dx = car.chassis.position.x - this.carStartPos.x;
-        const dy = car.chassis.position.y - this.carStartPos.y;
-        return dx * this.carForward.x + dy * this.carForward.y;   // projection onto up-slope
-    }
-
-    // ================================================================
-    // ROAD / TRAFFIC (right-half pivot)
-    // ================================================================
-    // Vertical roads above the battery slots, running off the top of the screen,
-    // detouring around a broad oblong hill at their midpoint. Each lane carries
-    // traffic one way (CONFIG.ROAD.ROADS sets the directions); every car paces
-    // itself off the one ahead in its lane, so they bunch into stop-and-go
-    // traffic without ever overlapping. Sprites come from one shared fixed-size
-    // pool and are recycled once they leave the road — nothing is created or
-    // destroyed after create().
-    //
-    // Geometry is a PATH, not a function of y: each carriageway's centre line is
-    // a polyline that runs straight, turns, hugs the hill's face at a constant
-    // standoff, wraps its end cap and comes back. Lanes are that spine offset
-    // sideways; the asphalt and stripes are the same spine offset further. Cars
-    // travel by arc length along their lane's polyline, so they hold their speed
-    // through the detour no matter which way the road happens to be pointing.
+    // The land in partB, and the canal cut up the middle of it. The geometry
+    // is just two things: where the channel runs (a centred vertical strip,
+    // CANAL.WIDTH wide) and how tall a band one level covers — from the top of
+    // the half down to just above the battery slots.
     createRoad() {
         const RC    = CONFIG.ROAD;
         const L     = this.layoutConfig;
@@ -831,102 +639,28 @@ console.log(
         const scale = L.platformScale;
         const s     = (v) => v * scale;
 
-        // One art scale for the whole fleet, pinned so the reference vehicle
-        // (VEHICLES[0], the car) comes out CAR_LENGTH tall. Every other sprite is
-        // measured at that same scale, so the vans/trucks/buses keep their real
-        // proportions relative to the car straight from the artwork.
-        const refImg   = this.textures.get(RC.VEHICLES[0].KEY).getSourceImage();
-        const artScale = s(RC.CAR_LENGTH) / refImg.height;
-
-        const types = RC.VEHICLES.map((v) => {
-            const img = this.textures.get(v.KEY).getSourceImage();
-            return {
-                key:    v.KEY,
-                w:      img.width  * artScale,
-                len:    img.height * artScale,
-                weight: v.WEIGHT,
-            };
-        });
-        const totalWeight = types.reduce((sum, t) => sum + t.weight, 0);
-
-        // Lanes hug the widest vehicle so even a bus clears the edge stripes;
-        // road widths follow from that rather than being set independently.
-        const laneW   = Math.max(...types.map((t) => t.w)) * RC.LANE_FACTOR;
-        const roadGap = s(RC.ROAD_GAP);
-        const widths  = RC.ROADS.map((r) => laneW * r.LANE_DIRS.length);
-        const total   = widths.reduce((sum, w) => sum + w, 0) + roadGap * (RC.ROADS.length - 1);
-
-        // Roads start just above the batteries/junction and run past the top of
-        // the screen, so cars simply drive out of view. The whole set is centred
-        // in partB as one block, left to right in ROADS order.
         const bottom = (this.junctionY || (B.y + B.height * 0.62)) - s(RC.BOTTOM_GAP);
         const top    = B.y;
-
-        // The hill: an oblong on the centre line, halfway up the road. Its ends
-        // are semicircles of radius `r`, joined by a flat section `w - 2r` long.
-        const IS        = RC.ISLAND;
-        const blockLeft = B.x + (B.width - total) / 2;
-        const island    = (IS && IS.ENABLED) ? {
-            cx:    blockLeft + total / 2,
-            cy:    (top + bottom) / 2,
-            w:     s(IS.WIDTH),
-            h:     s(IS.HEIGHT),
-            r:     Math.min(s(IS.WIDTH), s(IS.HEIGHT)) / 2,
-            // Half-length of the ridge segment. In tunnel (severed-road) mode
-            // the mountain is a continuous range spanning the whole half, so
-            // the ridge runs wall to wall; otherwise it's the oblong from WIDTH.
-            fl:    (RC.TUNNEL && RC.TUNNEL.ENABLED)
-                       ? B.width
-                       : s(IS.WIDTH) / 2 - Math.min(s(IS.WIDTH), s(IS.HEIGHT)) / 2,
-            clear: s(IS.CLEARANCE),
-            turn:  s(IS.TURN_RADIUS),
-        } : null;
+        const canalW = s(RC.CANAL.WIDTH);
 
         this.road = {
-            top, bottom, laneW, island,
-            types, totalWeight,
-            spines:   [],                     // centre lines of each carriageway —
-                                              // the terrain flattens along these
-            sample:   Math.max(2, s(3)),      // polyline resolution along curves
-            minGap:   s(RC.MIN_GAP),
-            speedMin: s(RC.SPEED_MIN),
-            speedMax: s(RC.SPEED_MAX),
+            top, bottom, canalW,
+            canalCx: B.x + B.width / 2,       // the channel is centred in the half
+            band:    null,                    // the live segment's band record
         };
-        this.roadLanes     = [];
-        this._roadLastTime = 0;
-
-        const gfx   = this.add.graphics().setDepth(2);
-        const dash  = s(RC.STRIPE_DASH);
-        const gap   = s(RC.STRIPE_GAP);
-        const inset = s(RC.STRIPE_INSET);
-        const sw    = Math.max(1, s(RC.STRIPE_WIDTH));
-
-        // One master centre line for the whole highway when both carriageways
-        // pass the same end of the mountain. Each road is a parallel offset of
-        // it, so through the detour they run concentric — outer and inner track
-        // — and can never cross. (Independent same-side spines would intersect
-        // each other's straights, with cars driving through each other there.)
-        // Tunnel (severed) mode: there is NO way past the mountain. Both roads
-        // run dead straight and simply STOP at its faces — up traffic halts at
-        // the bottom face, down traffic at the top face — until the tunnels are
-        // drilled and the missing middle is paved by _openTunnelLanes().
-        const severed = !!(island && RC.TUNNEL && RC.TUNNEL.ENABLED);
-        const gapTop  = island ? island.cy - island.r : 0;
-        const gapBot  = island ? island.cy + island.r : 0;
 
         // ── Endless mode: a second camera owns the landscape ──────────────
-        // The world extends upward one segment (mountain band) at a time; camB
-        // pans up it while the main camera keeps the merge grid and platform
-        // UI fixed. camB's viewport covers ONLY the road band, so the fixed
-        // bottom strip (slots/junction) is never overdrawn by panning world.
-        // With ENDLESS off, camB is never created and _addB degrades to a
-        // plain registry push — behaviour is identical to before.
+        // The world extends upward one band at a time; camB pans up it while
+        // the main camera keeps the merge grid and platform UI fixed. camB's
+        // viewport covers ONLY the land band, so the fixed bottom strip
+        // (slots/junction) is never overdrawn by panning world. With ENDLESS
+        // off, camB is never created and _addB degrades to a plain registry
+        // push — behaviour is identical to before.
         this.segments  = [];
         this._worldBSet = new Set();
         this._camBSnapDone = false;   // fresh build (incl. scene.restart on resize) → the set must refill
         this.camB = null;
-        const endless = severed && RC.ENDLESS && RC.ENDLESS.ENABLED;
-        if (endless) {
+        if (RC.ENDLESS && RC.ENDLESS.ENABLED) {
             this.endless = {
                 segH: bottom - top, segIndex: 0,
                 panning: false, nextReady: false,
@@ -938,180 +672,13 @@ console.log(
             this.endless = null;
         }
 
-        const passSide = (IS && IS.PASS_SIDE) || 0;
-        const blockCx  = blockLeft + total / 2;
-        let master = null, masterMerge = null, sepStraight = 0, sepCurve = 0;
-        if (island && passSide && !severed) {
-            // Road-centre separation from the master: full width + gap on the
-            // straights, but through the curve the roads are only one lane wide,
-            // so the tracks pull together to laneW + gap — keeping the same
-            // edge-to-edge gap around the bend as on the straights, instead of
-            // the tracks drifting apart while the asphalt narrows.
-            sepStraight = (widths[0] + roadGap) / 2;
-            sepCurve    = (laneW + roadGap) / 2;
-            // Standoff sized for the NARROWED curve width (laneW), not the full
-            // road: through the hug the asphalt is single-lane, so this presses
-            // it kerb-tight against the mountain foot instead of leaving the
-            // full-width margin.
-            master      = this._buildRoadSpine(blockCx, passSide, laneW / 2, sepCurve);
-            masterMerge = this._mergeProfile(master, blockCx);
-        }
-
-        let x = blockLeft;
-        RC.ROADS.forEach((road, ri) => {
-            const width  = widths[ri];
-            const halfW  = width / 2;
-            const roadCx = x + width / 2;
-
-            // This carriageway's centre line: an offset of the master when both
-            // roads pass the same end, otherwise its own spine around the
-            // nearest end (PASS_SIDE: 0, the old both-sides behaviour).
-            const sgnRoad = Math.sign(roadCx - blockCx) || 1;
-            const spine = severed
-                ? [{ x: roadCx, y: bottom }, { x: roadCx, y: top }]
-                : master
-                    ? this._offsetPath(master, masterMerge
-                        ? (i) => sgnRoad * (sepCurve + (sepStraight - sepCurve) * masterMerge[i])
-                        : sgnRoad * sepStraight)
-                    : this._buildRoadSpine(roadCx, (!island || roadCx < island.cx) ? -1 : 1, halfW);
-
-            // Curve bottleneck profile: 1 on the straights, 0 through the hug.
-            // Lanes, asphalt and stripes all taper by it, so the road narrows to
-            // a single lane exactly where it bends.
-            const merge = this._mergeProfile(spine, roadCx);
-            const halfSingle = laneW / 2;
-            const edgeHalf = (i) => merge
-                ? halfSingle + (halfW - halfSingle) * merge[i]
-                : halfW;
-
-            // The terrain flattens along this spine using the road's LOCAL width
-            // (halfAt), so the flat corridor hugs the narrowed curve instead of
-            // being carved for the full two-lane width everywhere.
-            this.road.spines.push({
-                pts: spine, halfW,
-                halfAt: merge ? spine.map((_, i) => edgeHalf(i)) : null,
-            });
-
-            // Asphalt: the spine offset to both edges, down one side and back up
-            // the other. Offsets run along the spine's normal, so the road keeps
-            // its intended width — full on the straights, one lane through the
-            // curve — without being pinched wherever it leans.
-            if (severed) {
-                // Severed asphalt (two torn halves per band) is drawn by
-                // _buildSegment — per segment, so endless mode can stamp a
-                // fresh band above the current one for every new mountain.
-            } else {
-                gfx.fillStyle(RC.ASPHALT_COLOR, 1);
-                const edgeL = this._offsetPath(spine, (i) => -edgeHalf(i));
-                const edgeR = this._offsetPath(spine, (i) =>  edgeHalf(i));
-                gfx.fillPoints(edgeL.concat(edgeR.reverse()), true);
-
-                // Edge stripes: walk each edge by arc length, so dashes stay
-                // evenly spaced and lean with the road through every turn.
-                gfx.lineStyle(sw, RC.STRIPE_COLOR, 1);
-                for (const sgn of [-1, 1]) {
-                    const meta = this._pathMeta(
-                        this._offsetPath(spine, (i) => sgn * (edgeHalf(i) - inset)));
-                    for (let d = 0; d < meta.total; d += dash + gap) {
-                        const a = this._pathPoint(meta, d);
-                        const b = this._pathPoint(meta, Math.min(d + dash, meta.total));
-                        gfx.beginPath();
-                        gfx.moveTo(a.x, a.y);
-                        gfx.lineTo(b.x, b.y);
-                        gfx.strokePath();
-                    }
-                }
-            }
-
-            // Lanes: the spine offset sideways, pulled in by LANE_SQUEEZE so
-            // vehicles don't crowd the edge stripes, and multiplied by the merge
-            // profile so both lanes collapse onto the centre line through the
-            // curve. The spine runs bottom→top; a down lane walks it in reverse.
-            const laneRefs = [];
-            road.LANE_DIRS.forEach((dir, li) => {
-                const laneCx = x + laneW * (li + 0.5);
-                const lane = this._makeLane(spine, merge, (laneCx - roadCx) * RC.LANE_SQUEEZE, dir);
-                // Severed mode: cars halt a machine-length short of a mouth
-                // ONLY where a rig is actually parked (its tail sticks out of
-                // the mouth; the queue forms behind it, not under it). At a
-                // mouth with no machine — the top face unless OPPOSED_DRILL —
-                // vehicles pull all the way up to the road's broken edge.
-                if (severed) {
-                    const rigLen = s(RC.TUNNEL.BLADE_LEN);
-                    const topRig = RC.TUNNEL.OPPOSED_DRILL ? rigLen : 0;
-                    lane.blockAt = dir === 1
-                        ? bottom - (gapBot + rigLen)
-                        : (gapTop - topRig) - top;
-                }
-                laneRefs.push(lane);
-                this.roadLanes.push(lane);
-            });
-            // Two lanes sharing a carriageway yield to each other at the merge,
-            // and share a zipper turn: whoever enters the zone hands the next
-            // slot to the other lane, so the file alternates instead of one
-            // lane's platoon streaming through while the other starves.
-            if (laneRefs.length === 2) {
-                laneRefs[0].sib = laneRefs[1];
-                laneRefs[1].sib = laneRefs[0];
-                // next: whose turn to ENTER the merge; exitNext: which lane the
-                // next car LEAVING the single file gets assigned to.
-                const pairState = { next: laneRefs[0], exitNext: laneRefs[0] };
-                laneRefs[0].pairState = pairState;
-                laneRefs[1].pairState = pairState;
-            }
-
-            x += width + roadGap;
-        });
-
-        // The landscape. Severed/tunnel mode builds it as a SEGMENT (asphalt
-        // band + mountain + scenery + machines + toll) so endless mode can
-        // stack more segments above; the legacy curve layout keeps the old
-        // single bake.
-        if (island && severed) {
-            this._buildSegment(top, bottom, IS.SEED);
-        } else if (island) {
-            this._createMountain(island);
-        }
-
-        // Traffic off: the road (and its lanes) exist, but nothing drives on
-        // them — no pool, no seeding, no spawn timer.
-        if (RC.TRAFFIC_ENABLED === false) return;
-
-        // Pre-build the whole vehicle pool up front; it never grows past CAR_POOL.
-        // Pooled sprites are type-agnostic — the texture and size are stamped on
-        // at spawn, so one pool serves cars, vans, trucks and buses alike.
-        this.roadCarPool = [];
-        for (let i = 0; i < RC.CAR_POOL; i++) {
-            // Cars are world objects (they pan with the landscape) but belong
-            // to no segment — their positions are recomputed from lane paths
-            // every frame, so rebasing the paths carries them along for free.
-            const car = this._addB(this.add.image(0, 0, types[0].key)
-                .setDepth(3)
-                .setActive(false)
-                .setVisible(false), null);
-            car.speed = 0;
-            car.desiredSpeed = 0;
-            car.len = 0;                     // display length of its current type
-            car.prog = 0;                    // distance travelled along its lane
-            car.seg = 0;                     // cached path segment — see _pathPoint
-            this.roadCarPool.push(car);
-        }
-
-        // Fill the roads with traffic immediately so they open already congested.
-        this._seedRoadTraffic();
-
-        this.time.addEvent({
-            delay: RC.SPAWN_MS,
-            loop: true,
-            callback: this._trySpawnRoadCars,
-            callbackScope: this,
-        });
+        this._buildSegment(top, bottom);
     }
 
     // Register a display object as pannable WORLD content: hidden from the
     // main (UI) camera, tracked in `seg`'s registry for rebase/teardown.
-    // Pass seg=null for persistent world objects (the car pool). With endless
-    // off there is no camB and this is just the registry push.
+    // Pass seg=null for a world object that belongs to no segment. With
+    // endless off there is no camB and this is just the registry push.
     _addB(obj, seg) {
         if (this.camB) {
             this.cameras.main.ignore(obj);
@@ -1139,1235 +706,131 @@ console.log(
         this._worldBSet.clear();
     }
 
-    // One landscape SEGMENT: the band [bandTop, bandBot] gets torn asphalt
-    // halves, a seeded mountain with trees and rocks, parked boring machines
-    // and a toll gantry. Returns the segment record ({objects, island,
-    // tunnel, toll}) used for panning, rebasing and teardown.
-    _buildSegment(bandTop, bandBot, seed) {
-        const RC = CONFIG.ROAD, IS = RC.ISLAND;
+    // One landscape SEGMENT: the band [bandTop, bandBot] gets its green land
+    // and the stretch of canal already built at its foot, plus the machine
+    // parked at the head ready to dig the rest. Returns the segment record
+    // ({objects, band, tunnel}) used for panning, rebasing and teardown.
+    _buildSegment(bandTop, bandBot) {
+        const RC = CONFIG.ROAD;
         const s  = (v) => v * this.layoutConfig.platformScale;
         const B  = this.layoutConfig.partB;
         const r  = this.road;
 
-        const seg = { objects: [], island: null, tunnel: null, toll: null,
-                      texKeys: [] };
+        const seg = { objects: [], band: null, tunnel: null };
         this.segments.push(seg);
 
-        const base = r.island;   // geometry template from createRoad
-        const island = {
-            cx: base.cx, cy: (bandTop + bandBot) / 2,
-            w: base.w, h: base.h, r: base.r, fl: base.fl,
-            clear: base.clear, turn: base.turn,
+        // The band this segment spans, and the head of the canal already built
+        // at its foot. The dig runs from that head all the way to bandTop, so a
+        // finished segment hands a continuous channel to the next one.
+        const band = {
+            cx: r.canalCx,
+            headY: (bandTop + bandBot) / 2 + s(RC.CANAL.HEAD_OFFSET),
+            bandTop, bandBot,
         };
-        seg.island = island;
-        const gapTop = island.cy - island.r;
-        const gapBot = island.cy + island.r;
+        seg.band = band;
+        r.band   = band;
 
-        // Torn asphalt halves for this band (see createRoad for the stub
-        // trick: raggedness protrudes INTO the mountain, never into the road,
-        // so the tunnel road later meets the slab with no gap).
-        const dash  = s(RC.STRIPE_DASH);
-        const gap   = s(RC.STRIPE_GAP);
-        const inset = s(RC.STRIPE_INSET);
-        const sw    = Math.max(1, s(RC.STRIPE_WIDTH));
+        // The land: flat green, the full width of the half. It is what the
+        // auger cuts through — the channel and its soil are drawn over it.
+        this._addB(this.add.rectangle(B.x + B.width / 2, (bandTop + bandBot) / 2,
+                B.width, bandBot - bandTop, RC.LAND_COLOR)
+            .setDepth(1.5), seg);
+
+        // The canal ALREADY built: one stretch, at the BOTTOM of the band,
+        // ending in a torn head where the digging takes over. Nothing is
+        // pre-built above it — everything from here to the top of the band is
+        // untouched ground the machine has to cut. (The raggedness protrudes
+        // INTO that ground, never back into the channel, so the newly cut
+        // stretch meets this one with no gap.)
+        const WA    = RC.WATER;
+        const rimW  = Math.max(1, s(WA.EDGE_WIDTH));
         const ragD  = Math.max(2, s(3.5));
         const colW  = Math.max(1, s(1.2));
+        const halfW = r.canalW / 2;
+        const headY = band.headY;
         const gfx = this._addB(this.add.graphics().setDepth(2), seg);
-        for (const sp of r.spines) {
-            const roadCx = sp.pts[0].x, halfW = sp.halfW;
-            gfx.fillStyle(RC.ASPHALT_COLOR, 1);
-            gfx.fillRect(roadCx - halfW, bandTop, halfW * 2, gapTop - bandTop);
-            gfx.fillRect(roadCx - halfW, gapBot, halfW * 2, bandBot - gapBot);
-            for (let cx2 = roadCx - halfW; cx2 < roadCx + halfW; cx2 += colW) {
-                const w2 = Math.min(colW, roadCx + halfW - cx2);
-                gfx.fillRect(cx2, gapTop, w2, Math.random() * ragD);
-                const dB = Math.random() * ragD;
-                gfx.fillRect(cx2, gapBot - dB, w2, dB);
-            }
-            gfx.fillStyle(RC.STRIPE_COLOR, 1);
-            for (const edgeX of [roadCx - halfW + inset, roadCx + halfW - inset]) {
-                for (const span of [[bandTop, gapTop], [gapBot, bandBot]]) {
-                    for (let sy2 = span[0]; sy2 < span[1]; sy2 += dash + gap) {
-                        gfx.fillRect(edgeX - sw / 2, sy2, sw, Math.min(dash, span[1] - sy2));
-                    }
-                }
-            }
+        gfx.fillStyle(WA.COLOR, 1);
+        gfx.fillRect(band.cx - halfW, headY, r.canalW, bandBot - headY);
+        for (let cx2 = band.cx - halfW; cx2 < band.cx + halfW; cx2 += colW) {
+            const w2 = Math.min(colW, band.cx + halfW - cx2);
+            const dB = Math.random() * ragD;
+            gfx.fillRect(cx2, headY - dB, w2, dB);
+        }
+        // Lit shallows hugging both banks — continuous: this is a waterline.
+        gfx.fillStyle(WA.EDGE_COLOR, 1);
+        for (const edgeX of [band.cx - halfW, band.cx + halfW - rimW]) {
+            gfx.fillRect(edgeX, headY, rimW, bandBot - headY);
         }
 
-        this._createMountain(island, bandTop, bandBot, seed, seg);
-        this.createTunnel(island, seg);
-        this._createTollCounter(seg.tunnel, seg);
+        this.createTunnel(band, seg);
         return seg;
     }
 
-    // ── Procedural terrain (Perlin) ──────────────────────────────────────────
-    // Baked once at create() into a texture, then it's one static image drawn
-    // UNDER the roads. The bake is the only cost: ~100ms, once.
-    //
-    // The terrain covers the WHOLE road area, not just the oblong. Heights come
-    // from Perlin fBm: a tall dome-shaped peak inside the oblong, and lower
-    // rolling hills everywhere else. The roads then carve flat corridors through
-    // it — every pixel's height is scaled by its distance to the nearest road
-    // centre line, reaching zero at the verge. So the road sits at zero
-    // elevation by construction (that's WHY the road runs there), terrain rises
-    // on BOTH sides of it, and the mountain reads as part of the landscape the
-    // road crosses instead of an exhibit inside the curve.
-    //
-    // The paint stays cartoon: flat terraces on a bright ramp, two-tone slope
-    // shade, terrace lips, bold outline. Snow only ever reaches the main peak —
-    // the surrounding hills top out in the grass/rock bands.
-    _createMountain(isl, bandTop, bandBot, seed, seg) {
-        const IS = CONFIG.ROAD.ISLAND;
-        const L  = this.layoutConfig;
-        const B  = L.partB;
-        const s  = (v) => v * L.platformScale;
-        const r  = this.road;
-        if (bandTop === undefined) bandTop = r.top;
-        if (bandBot === undefined) bandBot = r.bottom;
-        if (seed === undefined) seed = IS.SEED;
-
-        // Bake region: full partB width over this segment's band. k maps
-        // screen px → texture px.
-        const bx = B.x, by = bandTop;
-        const bw = B.width, bh = bandBot - bandTop;
-        const tw = Math.max(16, Math.min(Math.round(bw), IS.MAX_RES));
-        const k  = tw / bw;
-        const th = Math.max(16, Math.round(bh * k));
-
-        // The main peak's dome, in texture coords.
-        const radT = isl.r * k;
-        const x0T  = (isl.cx - isl.fl - bx) * k;
-        const x1T  = (isl.cx + isl.fl - bx) * k;
-        const cyT  = (isl.cy - by) * k;
-        const freq = IS.DETAIL / radT;
-
-        // Corridor factor per pixel: 0 on the asphalt and its verge, rising to 1
-        // where full terrain may stand. Stamped per sample using the road's
-        // LOCAL width (halfAt) and a curve-tightened shoulder/falloff, so the
-        // flat band hugs the narrowed single-lane stretch instead of being
-        // carved at full two-lane width with spare green on both sides.
-        // Severed-road mode: the roads dead-end into the mountain, so no flat
-        // corridor may be carved through the band it occupies — the massif
-        // stays continuous until the tunnels physically open.
-        const severedM = !!(CONFIG.ROAD.TUNNEL && CONFIG.ROAD.TUNNEL.ENABLED);
-
-        // Flat-land mode: leave the height field at zero. Every "if (!flat)"
-        // below skips a pass that only shapes elevation — the paint loop then
-        // sees h === 0 everywhere and fills the whole band with GROUND_COLOR,
-        // borders fading out exactly as the flat land around the mountain did.
-        const flat = !!IS.FLAT;
-
-        const shoulderS = s(IS.SHOULDER);
-        const shoulderC = s(IS.CURVE_SHOULDER);
-        const falloffS  = Math.max(1, s(IS.MERGE_FALLOFF) * k);
-        const falloffC  = Math.max(1, s(IS.CURVE_FALLOFF) * k);
-        const maxHalf   = Math.max(...r.spines.map((sp) => sp.halfW));
-        const win       = Math.ceil((maxHalf + shoulderS) * k + falloffS + 2);
-        const F = new Float32Array(tw * th).fill(1);
-        if (!flat) for (const sp of r.spines) {
-            const span = Math.max(1e-6, sp.halfW - r.laneW / 2);
-            for (let si = 0; si < sp.pts.length - 1; si++) {
-                const a = sp.pts[si], b = sp.pts[si + 1];
-                const segLen = Math.hypot(b.x - a.x, b.y - a.y);
-                const steps  = Math.max(1, Math.ceil(segLen * k / 2));
-                for (let t = 0; t <= steps; t++) {
-                    const f = t / steps;
-                    const scrY = a.y + (b.y - a.y) * f;
-                    if (severedM && scrY > isl.cy - isl.r && scrY < isl.cy + isl.r) continue;
-                    // Local half-width → how "curved" the road is here (0 =
-                    // straight, 1 = single lane), which tightens the verge.
-                    const hLoc = sp.halfAt
-                        ? sp.halfAt[si] + (sp.halfAt[Math.min(si + 1, sp.halfAt.length - 1)] - sp.halfAt[si]) * f
-                        : sp.halfW;
-                    const curv   = sp.halfAt ? Math.min(1, Math.max(0, (sp.halfW - hLoc) / span)) : 0;
-                    const clearL = (hLoc + shoulderS + (shoulderC - shoulderS) * curv) * k;
-                    const fallL  = falloffS + (falloffC - falloffS) * curv;
-                    const sx = (a.x + (b.x - a.x) * f - bx) * k;
-                    const sy = (a.y + (b.y - a.y) * f - by) * k;
-                    const yA = Math.max(0, Math.floor(sy - win)), yB = Math.min(th - 1, Math.ceil(sy + win));
-                    const xA = Math.max(0, Math.floor(sx - win)), xB = Math.min(tw - 1, Math.ceil(sx + win));
-                    for (let yy = yA; yy <= yB; yy++) {
-                        for (let xx = xA; xx <= xB; xx++) {
-                            const cf  = (Math.hypot(xx - sx, yy - sy) - clearL) / fallL;
-                            const idx = yy * tw + xx;
-                            if (cf < F[idx]) F[idx] = cf > 0 ? cf : 0;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Gorge fields: distance to the OUTER road's spine, plus a weight that is
-        // >0 only where a pixel sits on the far side of that road from the
-        // mountain, within the curved span. The gorge depth ramps off these.
-        const GO = IS.GORGE;
-        let G = null, GW = null, GE = null, rampT = 0;
-        const gorgeOn = !flat && GO && GO.ENABLED && isl && IS.PASS_SIDE;
-        if (gorgeOn) {
-            // Outer road of the pass: left road when wrapping the left end,
-            // right road when wrapping the right.
-            const outer = IS.PASS_SIDE === -1 ? r.spines[0] : r.spines[r.spines.length - 1];
-            rampT = Math.max(1, s(GO.WIDTH) * k);
-            const winG = Math.ceil((outer.halfW + s(GO.LEDGE)) * k + rampT + 2);
-
-            // Curve span of the outer spine (screen-space arc), for the fade at
-            // both ends of the hug.
-            const pts0 = outer.pts;
-            const cum0 = [0];
-            for (let i2 = 1; i2 < pts0.length; i2++) {
-                cum0.push(cum0[i2 - 1] + Math.hypot(pts0[i2].x - pts0[i2 - 1].x,
-                                                    pts0[i2].y - pts0[i2 - 1].y));
-            }
-            let g0 = -1, g1 = -1;
-            for (let i2 = 0; i2 < pts0.length; i2++) {
-                if (Math.abs(pts0[i2].x - pts0[0].x) > 0.5) {
-                    if (g0 < 0) g0 = cum0[i2];
-                    g1 = cum0[i2];
-                }
-            }
-            const taperG = Math.max(1, s(GO.TAPER));
-
-            G  = new Float32Array(tw * th).fill(1e9);
-            GW = new Float32Array(tw * th);
-            GE = new Float32Array(tw * th);
-            if (g0 >= 0) {
-                for (let si = 0; si < pts0.length - 1; si++) {
-                    const a = pts0[si], b2 = pts0[si + 1];
-                    const segLen = Math.hypot(b2.x - a.x, b2.y - a.y);
-                    const steps  = Math.max(1, Math.ceil(segLen * k / 2));
-                    const txv = (b2.x - a.x) / (segLen || 1), tyv = (b2.y - a.y) / (segLen || 1);
-                    for (let t2 = 0; t2 <= steps; t2++) {
-                        const fSeg = t2 / steps;
-                        const scrX = a.x + (b2.x - a.x) * fSeg;
-                        const scrY = a.y + (b2.y - a.y) * fSeg;
-                        const sArc = cum0[si] + segLen * fSeg;
-                        // Weight: full inside the span, fading at its two ends.
-                        const w = Math.max(0, Math.min(1,
-                            Math.min(sArc - g0, g1 - sArc) / taperG));
-                        // The drop starts LEDGE beyond the road's LOCAL edge, so
-                        // through the narrowed curve the cliff sits at the kerb
-                        // of the single lane, not at two-lane distance.
-                        const hLoc = outer.halfAt
-                            ? outer.halfAt[si] + (outer.halfAt[Math.min(si + 1, outer.halfAt.length - 1)] - outer.halfAt[si]) * fSeg
-                            : outer.halfW;
-                        const ledgeL = (hLoc + s(GO.LEDGE)) * k;
-                        // Which side of the road the mountain is on, here.
-                        const sideIsl = txv * (isl.cy - scrY) - tyv * (isl.cx - scrX);
-                        const sx = (scrX - bx) * k, sy = (scrY - by) * k;
-                        const yA = Math.max(0, Math.floor(sy - winG)), yB = Math.min(th - 1, Math.ceil(sy + winG));
-                        const xA = Math.max(0, Math.floor(sx - winG)), xB = Math.min(tw - 1, Math.ceil(sx + winG));
-                        for (let yy = yA; yy <= yB; yy++) {
-                            for (let xx = xA; xx <= xB; xx++) {
-                                const d = Math.hypot(xx - sx, yy - sy);
-                                const idx = yy * tw + xx;
-                                if (d < G[idx]) {
-                                    G[idx] = d;
-                                    GE[idx] = d - ledgeL;
-                                    // Outer side = opposite side from the mountain.
-                                    const sidePx = txv * (yy - sy) - tyv * (xx - sx);
-                                    GW[idx] = (sidePx * sideIsl < 0) ? w : 0;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        const noise = this._perlin2(seed >>> 0);
-        const fbm = (x, y) => {
-            let sum = 0, amp = 0.5, f = 1, norm = 0;
-            for (let o = 0; o < IS.OCTAVES; o++) {
-                sum  += amp * noise(x * f, y * f);
-                norm += amp;
-                amp  *= 0.5;
-                f    *= 2;
-            }
-            return sum / norm;                       // 0..1
-        };
-
-        // Pass 1: heights. Peak dome and rolling hills compete (max), then the
-        // road corridor flattens whatever won, the gorge pulls the outer side of
-        // the curve below zero, and the bake borders fade out so the terrain
-        // meets the background without a hard seam.
-        const fadeT    = Math.max(1, s(IS.EDGE_FADE) * k);
-        const hfreq    = freq * 0.7;
-        const GO_DEPTH = gorgeOn ? GO.DEPTH : 0;
-        const H = new Float32Array(tw * th);
-        if (!flat) for (let y = 0; y < th; y++) {
-            for (let x = 0; x < tw; x++) {
-                const i = y * tw + x;
-                const border = Math.min(x, tw - 1 - x, y, th - 1 - y) / fadeT;
-                if (border <= 0) continue;
-
-                // Gorge: on the outer side of the curve the ground falls away
-                // instead of rising — g blends from normal terrain (0) to full
-                // drop (1) across the cliff edge. GE already measures past the
-                // road's LOCAL edge + LEDGE, so the drop starts at the kerb.
-                let g = 0;
-                if (gorgeOn && GW[i] > 0 && GE[i] > 0) {
-                    g = GW[i] * Math.min(1, GE[i] / rampT);
-                }
-
-                const corridor = F[i];
-                if (corridor <= 0 && g <= 0) continue;
-
-                // Main peak: the steep dome over the oblong. The noise floor is
-                // high (0.5) so no dip inside the massif can fall below the
-                // threshold — the mountain stays ONE piece; ground colour only
-                // ever appears where the corridor or the fades force it to.
-                // The WALL term lifts the rim steeply, so the visible silhouette
-                // starts at the mountain's edge — beside the road — instead of
-                // a long, slowly-rising green skirt.
-                const px = Math.min(Math.max(x, x0T), x1T);
-                const dn = Math.hypot(x - px, y - cyT) / radT;
-                const dome = dn < 1
-                    ? (0.5 + 0.5 * fbm(x * freq, y * freq)) * Math.max(
-                          Math.pow(1 - dn, IS.STEEPNESS),
-                          IS.WALL_H * Math.min(1, (1 - dn) / IS.WALL_W))
-                    : 0;
-
-                // Surrounding hills: same noise field, sampled elsewhere so it
-                // doesn't correlate with the peak, capped at HILLS height. Same
-                // idea — floored so the hill country is contiguous, and the flat
-                // land lives along the roads (corridor) rather than as random
-                // holes punched through the terrain.
-                const hills = IS.HILLS * (0.3 + 0.7 * fbm((x + 523) * hfreq, (y + 911) * hfreq));
-                const pos   = Math.max(dome, hills) * corridor;
-
-                H[i] = (pos * (1 - g) - GO_DEPTH * g) * Math.min(1, border);
-            }
-        }
-
-        // Smooth the field before painting: rounds every contour at once —
-        // silhouette, terraces and shading all soften together.
-        if (IS.SMOOTHING > 0 && !flat) this._blurField(H, tw, th, Math.round(IS.SMOOTHING));
-
-        // Pass 2: paint.
-        // Key includes the band so two live segments never share a texture.
-        const key = 'mountain_' + seed + '_' + Math.round(bandTop);
-        if (seg) seg.texKeys.push(key);
-        if (this.textures.exists(key)) this.textures.remove(key);
-        const canvas = this.textures.createCanvas(key, tw, th);
-        const image  = canvas.getContext().createImageData(tw, th);
-        const data   = image.data;
-
-        const thr   = IS.THRESHOLD;
-        // Terrace colours: STEPS flat bands, interpolated along the COLORS ramp.
-        // The palette stays a handful of stops; the gradation comes from here.
-        const steps = Math.max(2, IS.STEPS);
-        const bandColors = [];
-        for (let b = 0; b < steps; b++) {
-            const f = (b / (steps - 1)) * (IS.COLORS.length - 1);
-            const i0 = Math.min(Math.floor(f), IS.COLORS.length - 2);
-            const kk = f - i0;
-            const a = IS.COLORS[i0], c = IS.COLORS[i0 + 1];
-            bandColors.push(
-                (Math.round(((a >> 16) & 255) + (((c >> 16) & 255) - ((a >> 16) & 255)) * kk) << 16) |
-                (Math.round(((a >> 8)  & 255) + (((c >> 8)  & 255) - ((a >> 8)  & 255)) * kk) << 8)  |
-                 Math.round((a & 255)         + ((c & 255)         - (a & 255))         * kk));
-        }
-        const tier  = (v) => Math.min(steps - 1, Math.floor(((v - thr) / (1 - thr)) * steps));
-        const gr = (IS.GROUND_COLOR >> 16) & 255,
-              gg = (IS.GROUND_COLOR >> 8)  & 255,
-              gb =  IS.GROUND_COLOR        & 255;
-
-        for (let y = 0; y < th; y++) {
-            for (let x = 0; x < tw; x++) {
-                const i = y * tw + x;
-                const h = H[i];
-                const p = i * 4;
-
-                // Ground is distinct from the backdrop, so the bake's rectangle
-                // would show — instead its borders fade to transparent and the
-                // flat land melts into the game background. In severed/endless
-                // mode the TOP and BOTTOM edges stay opaque: the heights still
-                // flatten there, so each segment ends in flat green that butts
-                // seamlessly against the next segment's flat green — a y-fade
-                // would open a see-through band at every seam.
-                const edge = (severedM
-                    ? Math.min(x, tw - 1 - x)
-                    : Math.min(x, tw - 1 - x, y, th - 1 - y)) / fadeT;
-                const alpha = Math.round(255 * Math.min(1, Math.max(0, edge)));
-
-                // Within ±threshold is ELEVATION ZERO, not "outside the art":
-                // flat ground, painted opaque. This is the same ground the roads
-                // sit on (they're drawn above it), so terrain, verge and road are
-                // one continuous surface with no silhouette and no boundary.
-                if (h <= thr && h >= -thr) {
-                    data[p] = gr; data[p + 1] = gg; data[p + 2] = gb; data[p + 3] = alpha;
-                    continue;
-                }
-
-                // Two-tone slope shade from the continuous field: does the
-                // ground rise toward the light (up-left) or away from it?
-                const hUL = H[(y > 0 ? y - 1 : y) * tw + (x > 0 ? x - 1 : x)];
-                const hDR = H[(y < th - 1 ? y + 1 : y) * tw + (x < tw - 1 ? x + 1 : x)];
-                let shade = (hUL - hDR) < -0.005 ? 1 : IS.SHADE;
-
-                // Below zero: the gorge wall, banded shallow → deep down its own
-                // ramp. The same slope shade applies, so the canyon walls get
-                // lit and shadow faces just like the mountain does.
-                if (h < -thr) {
-                    const GC = GO.COLORS;
-                    const gt = Math.min(1, (-h - thr) / Math.max(0.01, GO.DEPTH - thr));
-                    const gi = Math.min(GC.length - 1, Math.floor(gt * GC.length));
-                    const c2 = GC[gi];
-                    data[p]     = Math.min(255, ((c2 >> 16) & 255) * shade);
-                    data[p + 1] = Math.min(255, ((c2 >> 8)  & 255) * shade);
-                    data[p + 2] = Math.min(255, ( c2        & 255) * shade);
-                    data[p + 3] = alpha;
-                    continue;
-                }
-
-                // Darken the lip where a terrace drops, so the steps read.
-                const t = tier(h);
-                if ((x < tw - 1 && tier(H[i + 1])  < t) ||
-                    (y < th - 1 && tier(H[i + tw]) < t)) shade *= IS.TERRACE_EDGE;
-
-                const c = bandColors[t];
-                data[p]     = Math.min(255, ((c >> 16) & 255) * shade);
-                data[p + 1] = Math.min(255, ((c >> 8)  & 255) * shade);
-                data[p + 2] = Math.min(255, ( c        & 255) * shade);
-                data[p + 3] = alpha;
-            }
-        }
-
-        canvas.getContext().putImageData(image, 0, 0);
-        canvas.refresh();
-
-        // The terrain goes UNDER the roads: it's the ground, and the asphalt
-        // (depth 2) sits on top of it exactly where the corridor is flat. No
-        // drop shadow — a continuous landscape has no silhouette to cast one.
-        this._addB(this.add.image(bx + bw / 2, by + bh / 2, key)
-            .setDisplaySize(bw, bh)
-            .setDepth(1.5), seg);
-
-        // Scenery belongs to the mountain landscape — flat mode is bare ground.
-        if (!flat) {
-            this._spawnTreeTops(H, tw, th, bx, by, k, seed, seg);
-            this._spawnRocks(H, tw, th, bx, by, k, seed, seg);
-        }
-    }
-
-    // Screen-space distance from a point to the nearest road EDGE (negative
-    // when on the asphalt) — shared by the scenery spawners.
-    _treeRoadDist(px, py) {
-        let best = 1e9;
-        for (const sp of this.road.spines) {
-            for (let i = 0; i < sp.pts.length - 1; i++) {
-                const a = sp.pts[i], b = sp.pts[i + 1];
-                const dx = b.x - a.x, dy = b.y - a.y;
-                const L2 = dx * dx + dy * dy || 1;
-                const t  = Math.max(0, Math.min(1,
-                    ((px - a.x) * dx + (py - a.y) * dy) / L2));
-                const d  = Math.hypot(px - (a.x + dx * t), py - (a.y + dy * t))
-                         - sp.halfW;
-                if (d < best) best = d;
-            }
-        }
-        return best;
-    }
-
-    // A handful of boulders dotted anywhere on the landscape — any elevation,
-    // wildly varied sizes — unlike the trees' grid woods, these are just a few
-    // seeded random throws. Static images, placed once.
-    _spawnRocks(H, tw, th, bx, by, k, seed, seg) {
-        const IS = CONFIG.ROAD.ISLAND;
-        const R  = IS.ROCKS;
-        if (!R || !R.ENABLED) return;
-        const s     = (v) => v * this.layoutConfig.platformScale;
-        const rnd   = this._seededRandom(((seed === undefined ? IS.SEED : seed) ^ 0x40c5) >>> 0);
-        const thr   = IS.THRESHOLD;
-        const fadeT = Math.ceil(Math.max(1, s(IS.EDGE_FADE) * k)) + 1;
-        const bw = tw / k, bh = th / k;
-
-        let placed = 0;
-        for (let tries = 0; tries < R.COUNT * 20 && placed < R.COUNT; tries++) {
-            const px = bx + rnd() * bw;
-            const py = by + rnd() * bh;
-            const xT = Math.round((px - bx) * k), yT = Math.round((py - by) * k);
-            if (xT < fadeT || yT < fadeT ||
-                xT > tw - 1 - fadeT || yT > th - 1 - fadeT) continue;
-            if (H[yT * tw + xT] < -thr) continue;   // not in the gorge
-
-            const size = s(R.MIN_SIZE + rnd() * (R.MAX_SIZE - R.MIN_SIZE));
-            if (this._treeRoadDist(px, py) < size * 0.7) continue;
-
-            // Below the tree layer (1.8): a boulder under a crown stays
-            // hidden beneath the foliage, never sitting on top of it.
-            const img = this._addB(this.add.image(px, py, 'rock' + (1 + Math.floor(rnd() * 6)))
-                .setDepth(1.7), seg);
-            img.setScale(size / img.width)
-               .setAngle(rnd() * 360)
-               .setFlipX(rnd() < 0.5);
-            placed++;
-        }
-    }
-
-    // Scatter tree-top sprites over the flat green ground. Jittered grid +
-    // seeded random: at most one tree per cell, deterministic per level seed.
-    // A cell plants a tree only if the terrain there is flat ground (|h| ≤
-    // THRESHOLD — the green the roads sit on) and it keeps clear of every
-    // road. Static images, placed once — zero per-frame cost.
-    _spawnTreeTops(H, tw, th, bx, by, k, seed, seg) {
-        const IS = CONFIG.ROAD.ISLAND;
-        const T  = IS.TREES;
-        if (!T || !T.ENABLED) return;
-        const s    = (v) => v * this.layoutConfig.platformScale;
-        const rnd  = this._seededRandom(((seed === undefined ? IS.SEED : seed) ^ 0x7ee5) >>> 0);
-        const size = s(T.SIZE);
-        const cell = s(T.SPACING);
-        const thr  = IS.THRESHOLD;
-        const keep = size * 0.6;   // clearance beyond a road's edge
-        // Stay inside the OPAQUE part of the bake: within EDGE_FADE of the
-        // border the terrain fades to transparent (H is 0 there too, which
-        // would read as "flat ground") — no trees on invisible ground.
-        const fadeT = Math.ceil(Math.max(1, s(IS.EDGE_FADE) * k)) + 1;
-
-        const bw = tw / k, bh = th / k;
-        for (let gy = by + cell / 2; gy < by + bh - cell / 2; gy += cell) {
-            for (let gx = bx + cell / 2; gx < bx + bw - cell / 2; gx += cell) {
-                if (rnd() > T.DENSITY) continue;
-                const px = gx + (rnd() - 0.5) * cell * 0.8;
-                const py = gy + (rnd() - 0.5) * cell * 0.8;
-
-                // Anywhere green: flat ground AND the mountain's grassy slopes,
-                // up to the treeline (where rock takes over). Not the gorge,
-                // not the faded bake border.
-                const xT = Math.round((px - bx) * k), yT = Math.round((py - by) * k);
-                if (xT < fadeT || yT < fadeT ||
-                    xT > tw - 1 - fadeT || yT > th - 1 - fadeT) continue;
-                const h = H[yT * tw + xT];
-                if (h < -thr || h > T.TREELINE) continue;
-                // Woods thin out with altitude: full density on the flats,
-                // sparse stragglers just under the treeline.
-                const alt = Math.max(0, (h - thr) / Math.max(0.01, T.TREELINE - thr));
-                if (rnd() < alt * 0.6) continue;
-
-                if (this._treeRoadDist(px, py) < keep) continue;
-
-                const tex = 'tree_top' + (1 + Math.floor(rnd() * 4));
-                const img = this._addB(this.add.image(px, py, tex).setDepth(1.8), seg);
-                const sc  = (size * (0.85 + rnd() * 0.3)) / img.width;
-                img.setScale(sc)
-                   .setAngle(rnd() * 360)
-                   .setFlipX(rnd() < 0.5);
-            }
-        }
-    }
-
-    // Separable box blur over a Float32 field, in place. Two passes ≈ a gaussian,
-    // which is plenty for rounding contours.
-    _blurField(H, w, h, r) {
-        const tmp = new Float32Array(H.length);
-        for (let pass = 0; pass < 2; pass++) {
-            // Horizontal.
-            for (let y = 0; y < h; y++) {
-                for (let x = 0; x < w; x++) {
-                    let sum = 0, n = 0;
-                    for (let k = -r; k <= r; k++) {
-                        const xx = x + k;
-                        if (xx >= 0 && xx < w) { sum += H[y * w + xx]; n++; }
-                    }
-                    tmp[y * w + x] = sum / n;
-                }
-            }
-            // Vertical, back into H.
-            for (let y = 0; y < h; y++) {
-                for (let x = 0; x < w; x++) {
-                    let sum = 0, n = 0;
-                    for (let k = -r; k <= r; k++) {
-                        const yy = y + k;
-                        if (yy >= 0 && yy < h) { sum += tmp[yy * w + x]; n++; }
-                    }
-                    H[y * w + x] = sum / n;
-                }
-            }
-        }
-    }
-
-    // Classic 2-D Perlin gradient noise, seeded, returning ~0..1. Gradients live
-    // on the integer lattice; the value is the interpolated dot product of each
-    // corner's gradient with the offset from that corner — which is what makes
-    // Perlin smooth and direction-rich where value noise looks blocky.
-    _perlin2(seed) {
-        const rand = this._seededRandom(seed);
-        const p = Array.from({ length: 256 }, (_, i) => i);
-        for (let i = 255; i > 0; i--) {
-            const j = Math.floor(rand() * (i + 1));
-            [p[i], p[j]] = [p[j], p[i]];
-        }
-        const perm = new Uint8Array(512);
-        for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
-
-        const grad = (h, x, y) => {
-            switch (h & 7) {
-                case 0: return  x + y;  case 1: return  x - y;
-                case 2: return -x + y;  case 3: return -x - y;
-                case 4: return  x;      case 5: return -x;
-                case 6: return  y;      default: return -y;
-            }
-        };
-        const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
-
-        return (x, y) => {
-            const X = Math.floor(x), Y = Math.floor(y);
-            const xf = x - X, yf = y - Y;
-            const xi = X & 255, yi = Y & 255;
-            const u = fade(xf), v = fade(yf);
-            const aa = perm[perm[xi] + yi],     ba = perm[perm[xi + 1] + yi];
-            const ab = perm[perm[xi] + yi + 1], bb = perm[perm[xi + 1] + yi + 1];
-            const top = grad(aa, xf, yf)     + u * (grad(ba, xf - 1, yf)     - grad(aa, xf, yf));
-            const bot = grad(ab, xf, yf - 1) + u * (grad(bb, xf - 1, yf - 1) - grad(ab, xf, yf - 1));
-            const n = top + v * (bot - top);         // ≈ -1..1
-            return Math.min(1, Math.max(0, n * 0.7071 + 0.5));
-        };
-    }
-
-    // Small deterministic PRNG (mulberry32). Same seed → same mountain, every
-    // run, on every device — a level's terrain is a number, not an asset.
-    _seededRandom(seed) {
-        let a = seed;
-        return function () {
-            a = (a + 0x6D2B79F5) | 0;
-            let t = Math.imul(a ^ (a >>> 15), 1 | a);
-            t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-        };
-    }
-
-    // Centre line of one carriageway, bottom → top, as a polyline.
-    //
-    // Straight up, a turn onto the hill, a hug around its near end, then the
-    // mirror image back to straight. Every join is tangent-continuous, so the
-    // road never kinks. The whole thing is built against the hill's LEFT end and
-    // mirrored for a right-hand road.
-    //
-    // The turn arc is tangent to the straight road at one end and to the hill's
-    // outline at the other. WHERE it lands on that outline depends on the hill's
-    // proportions, and both cases have to work:
-    //   · long, flat hill  → it lands on the flat face, then a straight run to
-    //                        the cap.
-    //   · stubby, round hill → the face is too short to reach, so it lands
-    //                        directly on the cap and there's no run at all.
-    // Assumes the oblong is wider than it is tall (a taller one would need this
-    // rotated: its faces would be vertical, not horizontal).
-    _buildRoadSpine(roadCx, side, halfW, extra = 0) {
-        const r   = this.road;
-        const isl = r.island;
-        if (!isl) return [{ x: roadCx, y: r.bottom }, { x: roadCx, y: r.top }];
-
-        // Standoff from the hill's surface to the road's centre line: enough for
-        // the asphalt's half-width plus the clearance gap (plus any extra —
-        // used when this spine is a master line that other roads offset from,
-        // so the innermost offset still clears the hill). Tracing the hill's
-        // outline at this distance = holding CLEARANCE along the whole hug.
-        const D  = halfW + isl.clear + extra;
-        const R  = isl.r + D;                 // radius of the wrap around the cap
-        const FL = isl.fl;                    // half-length of the hill's flat part
-
-        // Work on the left; mirror at the end if this road wraps the right end.
-        const cxRoad = isl.cx - Math.abs(roadCx - isl.cx);
-        const xEnd   = isl.cx - FL;           // where the flat face meets the cap
-        const k      = cxRoad - xEnd;         // how far the straight sits along the face
-
-        // Biggest turn that still leaves the straight road room to exist. The
-        // turn's centre sits at height fy above the hill's centre, and fy grows
-        // with the radius; solving fy(turn) <= bottom gives the cap-tangent case,
-        // and the flat-tangent case is the simpler fy = cy + R + turn. The two
-        // agree at turn == k, so picking by that keeps the clamp continuous.
-        const room = r.bottom - isl.cy;
-        const flat = room - R;                                   // if it lands on the face
-        const turn = Math.max(1, Math.min(isl.turn, flat <= k
-            ? flat
-            : (room * room - R * R + k * k) / (2 * (R + k))));   // if it lands on the cap
-
-        const fx    = cxRoad - turn;          // turn centre
-        const onCap = turn > k;
-        // Height of the turn's centre, and where its arc hands off to the hill.
-        const fy    = onCap
-            ? isl.cy + Math.sqrt(Math.max(0, R * R - k * k + 2 * turn * (R + k)))
-            : isl.cy + R + turn;
-        // Direction from the turn's centre to its tangency point: straight up onto
-        // the flat face, or toward the cap's centre when it meets the cap.
-        const handoff = onCap ? Math.atan2(isl.cy - fy, xEnd - fx) : -Math.PI / 2;
-        // Where that lands on the cap, as an angle. The wrap runs from there,
-        // around the far side, to the mirror of the same angle.
-        const capA = onCap ? Math.atan2(fy - isl.cy, fx - xEnd) : Math.PI / 2;
-
-        const pts = [{ x: cxRoad, y: r.bottom }, { x: cxRoad, y: fy }];
-        // Turn off the straight onto the hill.
-        this._arcTo(pts, fx, fy, turn, 0, handoff);
-        // Run along the near face, if the turn didn't already reach the cap.
-        if (!onCap) pts.push({ x: xEnd, y: isl.cy + R });
-        // Around the end: enters heading away from the road, leaves heading back.
-        this._arcTo(pts, xEnd, isl.cy, R, capA, 2 * Math.PI - capA);
-        // Back along the far face, then back onto the straight.
-        if (!onCap) pts.push({ x: fx, y: isl.cy - R });
-        this._arcTo(pts, fx, 2 * isl.cy - fy, turn, -handoff, 0);
-        pts.push({ x: cxRoad, y: r.top });
-
-        if (side === 1) for (const p of pts) p.x = isl.cx + (isl.cx - p.x);
-        return pts;
-    }
-
-    // Append an arc to a polyline. The caller's last point must already be the
-    // arc's start, so only the points after it are added.
-    _arcTo(pts, cx, cy, radius, a0, a1) {
-        const n = Math.max(2, Math.ceil(Math.abs(a1 - a0) * radius / this.road.sample));
-        for (let i = 1; i <= n; i++) {
-            const a = a0 + (a1 - a0) * (i / n);
-            pts.push({ x: cx + radius * Math.cos(a), y: cy + radius * Math.sin(a) });
-        }
-    }
-
-    // A polyline shifted sideways by `lat` — positive is to the right of travel.
-    // `lat` may be a number or a per-index function (used to taper offsets, e.g.
-    // lanes converging to the centre through the curve). Used for lanes, asphalt
-    // edges and stripes alike, so they can't disagree about where the road goes.
-    _offsetPath(pts, lat) {
-        const latAt = typeof lat === 'function' ? lat : () => lat;
-        const out = [];
-        for (let i = 0; i < pts.length; i++) {
-            // Central difference, so a point where two pieces join picks up the
-            // shared tangent instead of favouring either side.
-            const a = pts[Math.max(0, i - 1)];
-            const b = pts[Math.min(pts.length - 1, i + 1)];
-            const dx = b.x - a.x, dy = b.y - a.y;
-            const m  = Math.hypot(dx, dy) || 1;
-            const l  = latAt(i);
-            out.push({ x: pts[i].x - (dy / m) * l, y: pts[i].y + (dx / m) * l });
-        }
-        return out;
-    }
-
-    // Merge profile along a spine: 1 where the road is straight, easing to 0
-    // through the curved hug, with a TAPER-long ramp at each end. Multiplying a
-    // lane's lateral offset by this collapses both lanes onto the centre line
-    // exactly where the road bends — the 2-lanes-into-1 bottleneck. Returns
-    // null when the spine never curves (no island) or merging is disabled.
-    _mergeProfile(spine, roadCx) {
-        const CM = CONFIG.ROAD.CURVE_MERGE;
-        if (!CM || !CM.ENABLED) return null;
-        const taper = Math.max(1, CM.TAPER * this.layoutConfig.platformScale);
-
-        // Arc length at each point, and the span where the spine leaves the
-        // straight (deviates from the carriageway's home x).
-        const cum = [0];
-        for (let i = 1; i < spine.length; i++) {
-            cum.push(cum[i - 1] + Math.hypot(spine[i].x - spine[i - 1].x,
-                                             spine[i].y - spine[i - 1].y));
-        }
-        let s0 = -1, s1 = -1;
-        for (let i = 0; i < spine.length; i++) {
-            if (Math.abs(spine[i].x - roadCx) > 0.5) {
-                if (s0 < 0) s0 = cum[i];
-                s1 = cum[i];
-            }
-        }
-        if (s0 < 0) return null;                       // dead-straight road
-
-        // The ramps live INSIDE the curved span, not ahead of it: the lanes run
-        // parallel and vertical right up to where the road starts to bend, then
-        // collapse quickly over TAPER. (Ramping before s0 made the convergence
-        // start far up the straight, which read as the lanes drifting together.)
-        const t = Math.min(taper, (s1 - s0) / 2);
-        return spine.map((_, i) => {
-            const s = cum[i];
-            if (s <= s0 || s >= s1) return 1;
-            if (s >= s0 + t && s <= s1 - t) return 0;
-            return s < s0 + t ? 1 - (s - s0) / t : 1 - (s1 - s) / t;
-        });
-    }
-
-    // Measure a polyline: distance-from-start and unit heading at every point, so
-    // a position can be looked up by distance travelled. Zero-length segments are
-    // dropped — they'd give a heading of NaN.
-    _pathMeta(pts) {
-        const out = [];
-        let cum = 0;
-        for (let i = 0; i < pts.length - 1; i++) {
-            const dx = pts[i + 1].x - pts[i].x, dy = pts[i + 1].y - pts[i].y;
-            const m  = Math.hypot(dx, dy);
-            if (m < 1e-6) continue;
-            out.push({ x: pts[i].x, y: pts[i].y, cum, tx: dx / m, ty: dy / m });
-            cum += m;
-        }
-        const last = out[out.length - 1];
-        out.push({ x: last.x + last.tx * (cum - last.cum), y: last.y + last.ty * (cum - last.cum),
-                   cum, tx: last.tx, ty: last.ty });
-        return { pts: out, total: cum };
-    }
-
-    // Position and heading at a distance along a measured path. `hint` is the
-    // caller's last segment index — cars only ever move forward, so this walks
-    // one or two steps instead of searching. Distances outside the path
-    // extrapolate along the end segments, which is what lets cars drive in from
-    // off-road and out the far end.
-    _pathPoint(meta, d, hint) {
-        const pts = meta.pts;
-        let i = Math.min(Math.max(hint | 0, 0), pts.length - 2);
-        while (i < pts.length - 2 && d > pts[i + 1].cum) i++;
-        while (i > 0 && d < pts[i].cum) i--;
-        const p = pts[i];
-        const k = d - p.cum;
-        return { x: p.x + p.tx * k, y: p.y + p.ty * k, tx: p.tx, ty: p.ty, seg: i };
-    }
-
-    // Random desired cruising speed for a car (px/sec, already scaled).
-    _roadDesiredSpeed() {
-        const r = this.road;
-        return Phaser.Math.FloatBetween(r.speedMin, r.speedMax);
-    }
-
-    // Weighted pick from the fleet — cars are common, buses rare.
-    _pickRoadVehicle() {
-        const r = this.road;
-        let roll = Math.random() * r.totalWeight;
-        for (const t of r.types) {
-            roll -= t.weight;
-            if (roll <= 0) return t;
-        }
-        return r.types[0];
-    }
-
-    // Put a car at a given distance along its lane. That distance is the source
-    // of truth; the screen position and heading are derived from it.
-    _placeRoadCar(lane, car, prog) {
-        car.prog = prog;
-        const p = this._pathPoint(lane.path, prog, car.seg);
-        car.seg = p.seg;
-        car.setPosition(p.x, p.y);
-        car.rotation = Math.atan2(p.tx, -p.ty);   // sprites are drawn facing up
-    }
-
-    // Take a sprite from the pool, stamp a randomly-picked vehicle type onto it
-    // and place it in a lane. Returns null when the pool is exhausted — the roads
-    // just stay as full as the budget allows.
-    _spawnRoadCar(lane, prog) {
-        const car = this.roadCarPool.pop();
-        if (!car) return null;
-        const t = this._pickRoadVehicle();
-        car.setTexture(t.key)
-           .setDisplaySize(t.w, t.len)
-           .setActive(true)
-           .setVisible(true);
-        car.len          = t.len;
-        car.desiredSpeed = this._roadDesiredSpeed();
-        car.speed        = car.desiredSpeed;
-        car.seg          = 0;
-        car.inMergeZone  = false;   // zipper bookkeeping — set when it enters
-        car.exitAssigned = false;   // set once it's been dealt an exit lane
-        car.tolled       = false;   // set when it pays at the mid-tunnel gantry
-        this._placeRoadCar(lane, car, prog);
-        return car;
-    }
-
-    // Stagger vehicles along each lane at create() so no road starts empty. Each
-    // one is placed against the length of whatever type it turned out to be.
-    // Through the merge zone the carriageway is single file, so only the FIRST
-    // lane of a pair seeds cars there — its sibling skips the zone, or the two
-    // lanes would open the level overlapped on the shared centre line.
-    _seedRoadTraffic() {
-        const r = this.road;
-        const zoneSeeded = new Set();
-        for (const lane of this.roadLanes) {
-            const skipZone = lane.sib && lane.mergeEnd > 0 && zoneSeeded.has(lane.sib);
-            zoneSeeded.add(lane);
-
-            let edge = 0;                        // back edge of the last car placed
-            while (edge < lane.path.total) {
-                const car = this._spawnRoadCar(lane, 0);
-                if (!car) return;
-                let prog = edge + car.len / 2;   // now its length is known, place it
-                // Blocked lane (severed road): seed only up to the mountain
-                // face — the far half of the path is unreachable until the
-                // tunnel opens.
-                if (lane.blockAt !== undefined &&
-                    prog + car.len / 2 > lane.blockAt - r.minGap) {
-                    car.setActive(false).setVisible(false);
-                    this.roadCarPool.push(car);
-                    break;
-                }
-                if (skipZone && prog + car.len / 2 > lane.mergeStart - r.minGap
-                             && prog - car.len / 2 < lane.mergeEnd + r.minGap) {
-                    prog = lane.mergeEnd + r.minGap + car.len / 2;
-                    if (prog + car.len / 2 > lane.path.total) {
-                        // No room past the zone — return the car, lane is done.
-                        car.setActive(false).setVisible(false);
-                        this.roadCarPool.push(car);
-                        break;
-                    }
-                }
-                this._placeRoadCar(lane, car, prog);
-                // Cars seeded past the single-file core are already "dealt" —
-                // otherwise the whole downstream population would try to swap
-                // lanes on the first frame.
-                if (lane.exitSwitch > 0 && prog >= lane.exitSwitch) car.exitAssigned = true;
-                lane.cars.unshift(car);          // lanes stay ordered front-first
-                edge = prog + car.len / 2 + r.minGap + Phaser.Math.Between(0, Math.round(car.len));
-            }
-        }
-    }
-
-    // Timer tick: add a vehicle at the start of each lane whose entry is clear.
-    _trySpawnRoadCars() {
-        const r = this.road;
-        if (!r) return;
-        for (const lane of this.roadLanes) {
-            // Draining lanes (replaced by a tunnel reroute) get no new cars.
-            if (lane.spawnable === false) continue;
-            const back = lane.cars[lane.cars.length - 1];
-            // Only spawn once the previous vehicle's rear has cleared the entry.
-            if (back && back.prog - back.len / 2 < r.minGap) continue;
-            const car = this._spawnRoadCar(lane, 0);
-            if (!car) continue;
-            // Sit just off the end of the path, nose at the entry, driving in.
-            this._placeRoadCar(lane, car, -car.len / 2);
-            lane.cars.push(car);
-        }
-    }
-
-    // Advance every car one frame. Each car wants its own cruising speed but is
-    // capped by the gap to the car ahead, which produces the bunching/stop-and-go
-    // look for free. Cars are ordered front-first per lane, so the "car ahead" is
-    // always the previous entry.
-    _updateRoad(time) {
-        const r = this.road;
-        if (!r) return;
-        const dt = this._roadLastTime ? Math.min((time - this._roadLastTime) / 1000, 0.05) : 0;
-        this._roadLastTime = time;
-        if (dt <= 0) return;
-
-        const gain = CONFIG.ROAD.FOLLOW_GAIN;
-        const CM = CONFIG.ROAD.CURVE_MERGE;
-        const mergeWin  = (CM && CM.ENABLED ? CM.WINDOW : 0) * this.layoutConfig.platformScale;
-        const zoneSpeed = (CM && CM.ENABLED ? CM.ZONE_SPEED : Infinity) * this.layoutConfig.platformScale;
-        const transfers = [];   // exit-lane handoffs, applied after the loop
-
-        for (const lane of this.roadLanes) {
-            const cars = lane.cars;
-
-            for (let i = 0; i < cars.length; i++) {
-                const car   = cars[i];
-                const ahead = cars[i - 1];
-
-                let v = car.desiredSpeed;
-                if (ahead) {
-                    // Bumper-to-bumper gap along the lane. Both lengths are
-                    // per-vehicle — a bus takes up more road than a car.
-                    const gap = (ahead.prog - ahead.len / 2) - (car.prog + car.len / 2);
-                    // Close the gap no faster than it can safely be closed: at
-                    // MIN_GAP the car matches the one ahead, below it, it brakes.
-                    v = Math.min(v, Math.max(0, ahead.speed + (gap - r.minGap) * gain));
-                }
-
-                // Curve bottleneck: near the merge, the other lane's traffic
-                // counts as traffic ahead too. Positions are compared in
-                // zone-relative distance (the shared centre-line stretch is
-                // geometrically identical in both lanes), so whichever car
-                // reaches the merge first goes first and the other waits —
-                // that alternating file IS the bottleneck.
-                if (lane.sib && lane.mergeEnd > 0) {
-                    // Crawl through the single-lane stretch itself. Discharging
-                    // slower than the straights deliver is what backs the queue
-                    // up at the mouth — without this cap the merge clears too
-                    // fast to ever feel congested. Tunnel lanes carry their own
-                    // (faster) zone speed — that difference is the time saved.
-                    if (car.prog + car.len / 2 > lane.mergeStart &&
-                        car.prog - car.len / 2 < lane.mergeEnd) {
-                        v = Math.min(v, lane.zoneSpeed !== undefined ? lane.zoneSpeed : zoneSpeed);
-                    }
-
-                    const zp = car.prog - lane.mergeStart;
-                    if (zp > -mergeWin && car.prog - car.len / 2 < lane.mergeEnd) {
-                        const sib = lane.sib;
-                        let best = null, bestZp = Infinity;
-                        for (const c2 of sib.cars) {
-                            const zp2 = c2.prog - sib.mergeStart;
-                            // Ahead of us, still relevant to the zone (its tail
-                            // hasn't cleared the far end), and the nearest such.
-                            if (zp2 > zp && zp2 < bestZp &&
-                                c2.prog - c2.len / 2 < sib.mergeEnd) {
-                                best = c2; bestZp = zp2;
-                            }
-                        }
-                        if (best) {
-                            const gap2 = (bestZp - best.len / 2) - (zp + car.len / 2);
-                            v = Math.min(v, Math.max(0, best.speed + (gap2 - r.minGap) * gain));
-                        }
-
-                        // Zipper gate at the mouth: if it isn't this lane's turn
-                        // and the other lane has a car waiting to merge, hold at
-                        // the mouth. Without this, a nose-to-tail platoon never
-                        // leaves a gap and the other lane starves — one line of
-                        // cars downstream, the other lane empty.
-                        const front = zp + car.len / 2;
-                        if (front < 0 && lane.pairState.next !== lane) {
-                            const sibWaiting = sib.cars.some((c2) => {
-                                const f2 = c2.prog - sib.mergeStart + c2.len / 2;
-                                return f2 <= 0 && f2 > -mergeWin;
-                            });
-                            if (sibWaiting) {
-                                v = Math.min(v, Math.max(0, (-front - r.minGap * 0.5) * gain));
-                            }
-                        }
-                    }
-                }
-
-                // Severed road: brake to a stop at the mountain face. Lifted
-                // (blockAt cleared) the moment the tunnels open. Only cars
-                // still APPROACHING the wall obey it — in endless mode a new
-                // mountain's wall is set while cars are already past that
-                // point (below it), and they must ignore it.
-                if (lane.blockAt !== undefined &&
-                    car.prog + car.len / 2 < lane.blockAt) {
-                    const wall = lane.blockAt - (car.prog + car.len / 2) - r.minGap * 0.5;
-                    v = Math.min(v, Math.max(0, wall * gain));
-                }
-
-                car.speed = v;
-                const prevY = car.y;
-                this._placeRoadCar(lane, car, car.prog + v * dt);
-
-                // Toll gantry at mid-tunnel: any vehicle crossing the LIVE
-                // gantry's line (either direction) pays one coin. The live
-                // gantry is the most recently opened cut's — a drilling
-                // segment's gantry isn't collecting yet, a panned-away one
-                // never collects again.
-                const tg = this.toll;
-                if (tg && tg.live && !car.tolled && prevY !== car.y &&
-                    (prevY - tg.tollY) * (car.y - tg.tollY) <= 0) {
-                    car.tolled = true;
-                    this._collectToll(car);
-                }
-
-                // Crossing the merge mouth hands the next slot to the other lane.
-                if (lane.sib && lane.mergeEnd > 0 && !car.inMergeZone &&
-                    car.prog - lane.mergeStart + car.len / 2 >= 0) {
-                    car.inMergeZone = true;
-                    lane.pairState.next = lane.sib;
-                }
-
-                // Exit dealing: as a car clears the single-file core — where the
-                // two lanes' paths are still one line, so its position carries
-                // over unchanged — assign it the pair's next exit lane, A-B-A-B.
-                // Entry lane and exit lane are decoupled on purpose: exits fill
-                // BOTH downstream lanes evenly no matter which lane fed the car
-                // in (or which lane it was seeded into).
-                if (lane.sib && lane.exitSwitch > 0 && !car.exitAssigned &&
-                    car.prog >= lane.exitSwitch) {
-                    car.exitAssigned = true;
-                    const target = lane.pairState.exitNext;
-                    lane.pairState.exitNext = target === lane ? lane.sib : lane;
-                    if (target !== lane) transfers.push({ car, from: lane, to: target });
-                }
-            }
-
-            // Retire cars that have left the far end (front of the lane first).
-            while (cars.length && cars[0].prog - cars[0].len / 2 > lane.path.total) {
-                const done = cars.shift();
-                done.setActive(false).setVisible(false);
-                this.roadCarPool.push(done);
-            }
-        }
-
-        // Apply the exit handoffs, after the loop so a moved car can't be
-        // updated twice in one frame. Position carries over as-is (the paths
-        // coincide at the switch point); the seg hint restarts from 0 and
-        // re-catches on the next placement.
-        for (const tr of transfers) {
-            const idx = tr.from.cars.indexOf(tr.car);
-            if (idx < 0) continue;
-            tr.from.cars.splice(idx, 1);
-            let ins = 0;
-            while (ins < tr.to.cars.length && tr.to.cars[ins].prog > tr.car.prog) ins++;
-            tr.to.cars.splice(ins, 0, tr.car);
-            tr.car.seg = 0;
-        }
-
-        // Drop drained legacy lanes (left behind by a tunnel reroute) once
-        // their last car has finished its trip.
-        if (this.roadLanes.some((l) => l.spawnable === false && l.cars.length === 0)) {
-            this.roadLanes = this.roadLanes.filter(
-                (l) => l.spawnable !== false || l.cars.length > 0);
-        }
-    }
-
-    // Build one traffic lane from a carriageway spine: offset sideways by `lat`
-    // (scaled by the merge profile so lanes collapse to single file where the
-    // spine deviates from straight), reversed for downward lanes, with the merge
-    // zone measured out in the lane's own arc length. Used by the surface roads
-    // at create() and by the tunnel routes at breakthrough — same machinery.
-    //
-    // mergeStart/mergeEnd span taper-to-taper (cross-lane yielding + seeding key
-    // off these); exitSwitch is the end of the single-file CORE — the last point
-    // where both lanes' paths still coincide, so a car can be handed to either
-    // lane there with its position unchanged.
-    _makeLane(spine, merge, lat, dir) {
-        const pts   = this._offsetPath(spine, merge ? (i) => lat * merge[i] : lat);
-        const flags = merge ? spine.map((_, i) => merge[i] < 0.999) : null;
-        const core  = merge ? spine.map((_, i) => merge[i] <= 0.001) : null;
-        if (dir === -1) {
-            pts.reverse();
-            if (flags) { flags.reverse(); core.reverse(); }
-        }
-
-        let mergeStart = -1, mergeEnd = -1, exitSwitch = -1;
-        if (flags) {
-            let cum = 0;
-            for (let i = 0; i < pts.length; i++) {
-                if (i) cum += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-                if (flags[i]) {
-                    if (mergeStart < 0) mergeStart = cum;
-                    mergeEnd = cum;
-                }
-                if (core[i]) exitSwitch = cum;
-            }
-        }
-
-        return {
-            dir, path: this._pathMeta(pts), cars: [],
-            mergeStart, mergeEnd, exitSwitch, sib: null,
-        };
-    }
-
     // ================================================================
-    // TUNNEL BORING MACHINE (battery-powered)
+    // THE BORING MACHINE (battery-powered)
     // ================================================================
-    // Merged batteries bank drilling distance; two augers (one per carriageway)
-    // pierce the mountain bottom → top in lockstep. The apparent rotation is
-    // the barber-pole illusion: a helix spinning about its long axis reads,
-    // from above, as its flights sliding ALONG the axis — so each shaft is a
-    // TileSprite whose helix texture scrolls, with the cylinder shading baked
-    // in per-column (x-only, so scrolling never disturbs it). No cut is ever
-    // drawn: while drilling only the machines show, and at breakthrough the
-    // roads are painted straight through and traffic reroutes onto them.
-    createTunnel(isl, seg) {
+    // Merged batteries bank digging distance; the auger cuts the channel
+    // bottom → top. The apparent rotation is the barber-pole illusion: a helix
+    // spinning about its long axis reads, from above, as its flights sliding
+    // ALONG the axis — so the shaft is a TileSprite whose helix texture
+    // scrolls, with the cylinder shading baked in per-column (x-only, so
+    // scrolling never disturbs it).
+    createTunnel(band, seg) {
         const TN = CONFIG.ROAD.TUNNEL;
         const s  = (v) => v * this.layoutConfig.platformScale;
         const r  = this.road;
 
-        const entryY = isl.cy + isl.r;
-        const exitY  = isl.cy - isl.r;
+        // Entry = the head of the canal already built at the bottom of the
+        // band. Exit = the TOP of the band, not the far side of some obstacle:
+        // this level's dig is everything still dry, so finishing it leaves a
+        // continuous channel for the next segment to carry on from.
+        const entryY = band.headY;
+        const exitY  = band.bandTop;
         const len    = entryY - exitY;
 
-        // One bore PER CARRIAGEWAY: upstream and downstream each get their own
-        // tunnel, cut by their own machine, with mountain left standing between
-        // them. Each bore is its road's full 2-lane width plus a visible cut
-        // wall each side, so the road runs straight through afterwards.
+        // The bore is the channel plus a margin of loose ground each side.
         const margin = s(TN.MARGIN);
-        const boreW  = r.spines[0].halfW * 2 + margin * 2;
+        const boreW  = r.canalW + margin * 2;
         // The machine is the auger.png art, sliced into tip / spiral / cap by
         // _makeTunnelTextures. Its flight is the widest part, scaled to nearly
         // fill the bore.
         const mw = Math.max(8, Math.round(boreW * (TN.BLADE_DIAM || 0.82)));
-        // The sand strip is ROAD-sized (not bore-sized): each carriageway gets
-        // its own strip, and the divider gap between the two roads stays
-        // standing — the strips must never touch.
-        const cutW = Math.round(r.spines[0].halfW * 2);
+        // The soil strip is CHANNEL-sized, not bore-sized: what the blade
+        // leaves behind is exactly as wide as the finished canal.
+        const cutW = Math.round(r.canalW);
         this._makeTunnelTextures(cutW);
 
         const bladeLen = s(TN.BLADE_LEN);
         // One uniform scale maps the art onto the machine width; tip and cap
         // keep the art's proportions, the spiral section fills the rest of
-        // BLADE_LEN (measured behind the face, so queue offsets still match).
+        // BLADE_LEN (measured behind the face).
         const sc    = mw / this.textures.get('auger_mid').getSourceImage().width;
         const capH  = this.textures.get('auger_tail').getSourceImage().height * sc;
         const bodyH = Math.max(4, bladeLen - capH);
 
-        // The tunnel ROAD is drawn complete at create — the missing middle of
-        // each carriageway — and hidden behind one shared mask that grows
-        // upward just behind the machines. So the road appears progressively
-        // in the augers' wake, but cars stay held at the barrier until the
-        // whole tunnel is through.
-        const RC    = CONFIG.ROAD;
-        const dash  = s(RC.STRIPE_DASH);
-        const gap   = s(RC.STRIPE_GAP);
-        const inset = s(RC.STRIPE_INSET);
-        const sw    = Math.max(1, s(RC.STRIPE_WIDTH));
-        const roadGfx = this._addB(this.add.graphics().setDepth(2), seg);
-        for (const sp of r.spines) {
-            const roadCx = sp.pts[0].x;
-            const halfW  = sp.halfW;
-            roadGfx.fillStyle(RC.ASPHALT_COLOR, 1);
-            roadGfx.fillRect(roadCx - halfW, exitY, halfW * 2, len);
-            roadGfx.fillStyle(RC.STRIPE_COLOR, 1);
-            for (const edgeX of [roadCx - halfW + inset, roadCx + halfW - inset]) {
-                for (let y = exitY; y < entryY; y += dash + gap) {
-                    roadGfx.fillRect(edgeX - sw / 2, y, sw, Math.min(dash, entryY - y));
-                }
-            }
+        // The water for the whole stretch is drawn complete at create and
+        // hidden behind a mask that follows the blade, so it appears
+        // progressively in the machine's wake (see _paintWater).
+        const WA    = CONFIG.ROAD.WATER;
+        const rimW  = Math.max(1, s(WA.EDGE_WIDTH));
+        const halfW = r.canalW / 2;
+        // Depth 2.1 puts the water ABOVE the raw soil strip (2.05) and below
+        // the machine (2.2): wherever the mask has let it through, the water
+        // covers the cut; everywhere else the bare soil shows.
+        const roadGfx = this._addB(this.add.graphics().setDepth(2.1), seg);
+        roadGfx.fillStyle(WA.COLOR, 1);
+        roadGfx.fillRect(band.cx - halfW, exitY, r.canalW, len);
+        roadGfx.fillStyle(WA.EDGE_COLOR, 1);
+        for (const edgeX of [band.cx - halfW, band.cx + halfW - rimW]) {
+            roadGfx.fillRect(edgeX, exitY, rimW, len);
         }
-        // CUT WALLS — this is not a covered tunnel but an open cutting: the
-        // mountain is carved down to road level, so each road edge meets a
-        // steep wall of freshly exposed EARTH (CUT_COLOR, same soil as the
-        // bore floor). Baked ONCE as a canvas texture with true linear
-        // gradients — no bands, no pixel steps: brightness eases from the
-        // shadowed foot at the road edge to full sand, then alpha runs out so
-        // the crest melts into the mountain; and a vertical alpha fade at
-        // both ends melts the wall into the green flats at the mouths. The
-        // median ridge is walled from both sides at a clamped width.
-        const wallW   = s(TN.WALL_W);
-        const gapHalf = Math.max(1, s(RC.ROAD_GAP) / 2);
-        const fadeL   = Math.min(s(TN.WALL_FADE), len / 3);
-        const centerX = (r.spines[0].pts[0].x +
-                         r.spines[r.spines.length - 1].pts[0].x) / 2;
-        const cutR = (TN.CUT_COLOR >> 16) & 255,
-              cutG = (TN.CUT_COLOR >> 8)  & 255,
-              cutB =  TN.CUT_COLOR        & 255;
-        const mkWall = (wkey, wpx) => {
-            // Segments share these (identical dimensions every time); never
-            // remove a texture the previous segment's images still use.
-            if (this.textures.exists(wkey)) return;
-            const c   = this.textures.createCanvas(
-                wkey, Math.max(1, Math.ceil(wpx)), Math.max(1, Math.ceil(len)));
-            const ctx = c.getContext();
-            const stop = (t, a2) => {
-                const f = 1 - TN.WALL_ALPHA * (1 - t);
-                return `rgba(${Math.round(cutR * f)},${Math.round(cutG * f)},` +
-                       `${Math.round(cutB * f)},${a2})`;
-            };
-            const g = ctx.createLinearGradient(0, 0, c.width, 0);
-            g.addColorStop(0, stop(0, 1));
-            g.addColorStop(0.55, stop(0.55, 1));
-            g.addColorStop(1, stop(1, 0));
-            ctx.fillStyle = g;
-            ctx.fillRect(0, 0, c.width, c.height);
-            // Erase smoothly toward each end (mouths → green).
-            ctx.globalCompositeOperation = 'destination-out';
-            let e = ctx.createLinearGradient(0, 0, 0, fadeL);
-            e.addColorStop(0, 'rgba(0,0,0,1)');
-            e.addColorStop(1, 'rgba(0,0,0,0)');
-            ctx.fillStyle = e;
-            ctx.fillRect(0, 0, c.width, fadeL);
-            e = ctx.createLinearGradient(0, c.height - fadeL, 0, c.height);
-            e.addColorStop(0, 'rgba(0,0,0,0)');
-            e.addColorStop(1, 'rgba(0,0,0,1)');
-            ctx.fillStyle = e;
-            ctx.fillRect(0, c.height - fadeL, c.width, fadeL);
-            ctx.globalCompositeOperation = 'source-over';
-            c.refresh();
-        };
-        mkWall('tunnel_wall_outer', wallW);
-        mkWall('tunnel_wall_inner', Math.min(wallW, gapHalf));
 
-        const wallImgs = [];
-        for (const sp of r.spines) {
-            const roadCx = sp.pts[0].x, halfW = sp.halfW;
-            for (const side of [-1, 1]) {
-                const inner = r.spines.length > 1 &&
-                    ((roadCx < centerX && side === 1) ||
-                     (roadCx > centerX && side === -1));
-                const img = this._addB(this.add.image(roadCx + side * halfW, exitY,
-                        inner ? 'tunnel_wall_inner' : 'tunnel_wall_outer')
-                    .setOrigin(side === 1 ? 0 : 1, 0)
-                    .setFlipX(side === -1)
-                    .setDepth(2), seg);
-                wallImgs.push(img);
-            }
-        }
+        // Foam at the very tip of the flow. Drawn above the water and NOT
+        // masked — it's only ever painted where the water already reached.
+        // Like the mask it's redrawn from scratch in absolute world coords
+        // every frame, so it must never be shifted by a rebase.
+        const foamGfx = this._addB(this.add.graphics().setDepth(2.15), seg);
+        foamGfx._noRebase = true;
 
         const maskShape = this._addB(this.add.graphics().setVisible(false), seg);
         // Future mask draws use post-rebase coordinates, so the graphics
@@ -2375,194 +838,44 @@ console.log(
         maskShape._noRebase = true;
         const revealMask = maskShape.createGeometryMask();
         roadGfx.setMask(revealMask);
-        for (const img of wallImgs) img.setMask(revealMask);
 
-        // The machines: FIXED-length rigs that climb with the face — head at
-        // the front, a machine-length of auger behind it. They work TOWARD
-        // their own traffic's queue: the upstream road's rig parks at the
-        // bottom mouth and drills up, the downstream road's rig parks at the
-        // TOP mouth and drills down — each jam watches its machine approach.
-        // Drawn ABOVE the road (they ride on it) and below the cars.
-        const bores = r.spines.map((sp, idx) => {
-            const x = sp.pts[0].x;   // spines start on the straight = road centre
-            // Drill direction: normally BOTH rigs cut bottom→top, so players
-            // see the machines advancing in the traffic's direction of
-            // progression. With OPPOSED_DRILL on, each road's rig instead
-            // works from its own queue's mouth (down road cuts top→bottom).
-            const drill = TN.OPPOSED_DRILL
-                ? ((RC.ROADS[idx] && RC.ROADS[idx].LANE_DIRS[0]) || 1)
-                : 1;
-            const mouthY = drill === 1 ? entryY : exitY;
-            const flip   = drill === -1;
+        // The machine: a FIXED-length rig that climbs with the face — head at
+        // the front, a machine-length of auger behind it. It parks at the head
+        // of the built canal and digs upward. Drawn above the water it leaves.
+        const x = band.cx;
+        // The raw cut: a strip of churned soil over the dug wake, face back
+        // to the mouth it started from.
+        const cut = this._addB(this.add.tileSprite(x, entryY, cutW, 1, 'cut_sand')
+            .setOrigin(0.5, 0).setDepth(2.05).setVisible(false), seg);
+        // Three stacked slices of the art: pointed tip biting into the face,
+        // the spiral section behind it (a TileSprite — scrolling its UVs is
+        // the rotation), and the drive cap at the rear. The slice edges all
+        // sit at bare-shaft rows, so they join cleanly.
+        const head = this._addB(this.add.image(x, entryY, 'auger_tip')
+            .setOrigin(0.5, 1).setScale(sc).setDepth(2.25), seg);
+        const shaft = this._addB(this.add.tileSprite(x, entryY, mw, bodyH, 'auger_mid')
+            .setOrigin(0.5, 0).setTileScale(sc).setDepth(2.2), seg);
+        const tail = this._addB(this.add.image(x, entryY + bodyH, 'auger_tail')
+            .setOrigin(0.5, 0).setScale(sc).setDepth(2.2), seg);
+        const wobble = this.tweens.add({ targets: head, x: x + Math.max(1, s(0.8)),
+                          duration: 55, yoyo: true, repeat: -1, paused: true });
+        const bore = { x, cut, shaft, tail, head, wobble };
 
-            // The raw cut: a strip of churned sand over the bored wake, face
-            // back to this rig's own mouth. For the down-driller the strip is
-            // pinned at the top mouth and only its height grows.
-            const cut = this._addB(this.add.tileSprite(x, mouthY, cutW, 1, 'cut_sand')
-                .setOrigin(0.5, 0).setDepth(2.05).setVisible(false), seg);
-            // Three stacked slices of the art: pointed tip biting into the
-            // face, the spiral section behind it (a TileSprite — scrolling
-            // its UVs is the rotation), and the drive cap at the rear. The
-            // slice edges all sit at bare-shaft rows, so they join cleanly.
-            // The down-driller is the same rig mirrored vertically.
-            const head = this._addB(this.add.image(x, mouthY, 'auger_tip')
-                .setOrigin(0.5, flip ? 0 : 1).setScale(sc)
-                .setFlipY(flip).setDepth(2.25), seg);
-            const shaft = this._addB(this.add.tileSprite(x, mouthY, mw, bodyH, 'auger_mid')
-                .setOrigin(0.5, flip ? 1 : 0).setTileScale(sc)
-                .setFlipY(flip).setDepth(2.2), seg);
-            const tail = this._addB(this.add.image(x, mouthY + drill * bodyH, 'auger_tail')
-                .setOrigin(0.5, flip ? 1 : 0).setScale(sc)
-                .setFlipY(flip).setDepth(2.2), seg);
-            const wobble = this.tweens.add({ targets: head, x: x + Math.max(1, s(0.8)),
-                              duration: 55, yoyo: true, repeat: -1, paused: true });
-
-            return { x, bore: boreW, drill, cut, shaft, tail, head, wobble };
-        });
-
-        // Both machines advance in lockstep off one banked-charge account, so
-        // a single progress value drives every shaft, mask and head.
+        // The machine advances off a banked-charge account: one progress
+        // value drives the shaft, the mask and the head.
         this.tunnel = {
             entryY, exitY, len, bladeLen, bodyH, texScale: sc,
             progressPx: 0, earnedPx: 0, open: false, lastTime: 0, pulseT: 0,
-            bores, maskShape, chips: [], debrisAcc: 0,
-            tollY: (entryY + exitY) / 2,
+            wet: 0,                          // how far the water has actually come
+            bore, maskShape, foam: foamGfx, chips: [], debrisAcc: 0,
             seg: seg || null,
-            // A tunnel built ahead (endless: the NEXT mountain, while the
+            // A dig site built ahead (endless: the NEXT band, while the
             // camera is still down at the current one) stays dormant — no
-            // charge banks, no drilling — until the camera has arrived and
+            // charge banks, no digging — until the camera has arrived and
             // settled (_rebaseWorld arms it). The first segment starts armed.
             ready: this.segments.length <= 1,
-            // ...and even then the dig waits for the jam: the lead upstream
-            // vehicle must be standing at the barrier for QUEUE_WAIT_MS
-            // (letting a few more pile in) before the first grind burst.
-            digOk: false, haltT: 0,
         };
         if (seg) seg.tunnel = this.tunnel;
-    }
-
-    // Toll gantry for one segment: a "TOLL ROAD" signboard on the left verge
-    // at that segment's mid-tunnel, with the pending-coins counter perched on
-    // top. The gantry goes `live` when its road opens; `this.toll` always
-    // points at the live (collecting) gantry, while later segments' gantries
-    // wait on their own segment records.
-    _createTollCounter(tn, seg) {
-        const TO = CONFIG.ROAD.TUNNEL.TOLL;
-        if (!TO || !TO.ENABLED || !tn) return;
-        const sc   = this.layoutConfig.platformScale;
-
-        const TN     = CONFIG.ROAD.TUNNEL;
-        const sp0    = this.road.spines[0];
-        const signX  = sp0.pts[0].x - sp0.halfW - TN.WALL_W * sc
-                     - Math.round(13 * sc);
-        const signY  = tn.tollY;
-        const boardH = Math.round(22 * sc);
-        const board = this._addB(this.add.rectangle(signX, signY,
-                Math.round(30 * sc), boardH, 0xf7d94c)
-            .setStrokeStyle(Math.max(1, Math.round(2 * sc)), 0x3a2f14)
-            .setDepth(2.6).setVisible(false), seg);
-        const label = this._addB(this.add.text(signX, signY, 'TOLL\nROAD', {
-            fontSize: Math.max(7, Math.round(8 * sc)) + 'px',
-            fontStyle: 'bold',
-            color: '#3a2f14',
-            align: 'center',
-        }).setOrigin(0.5).setDepth(2.61).setVisible(false), seg);
-
-        // The counter perches right on top of the board — coins hop straight
-        // from the gantry to the sign instead of flying across the screen.
-        const size = Math.max(12, Math.round(16 * sc));
-        const ix   = signX - size * 0.35;
-        const iy   = signY - boardH / 2 - Math.round(9 * sc);
-        const icon = this._addB(this.add.image(ix, iy, 'coin')
-            .setDisplaySize(size, size).setDepth(9).setVisible(false), seg);
-        const text = this._addB(this.add.text(ix + size * 0.75, iy, '0', {
-            fontSize: Math.max(11, Math.round(15 * sc)) + 'px',
-            fontStyle: 'bold',
-            color: '#ffe9a8',
-            stroke: '#5a4310', strokeThickness: 2,
-        }).setOrigin(0, 0.5).setDepth(9).setVisible(false), seg);
-
-        const toll = { pending: 0, icon, text, ix, iy, sign: [board, label],
-                       counterUi: [icon, text], iconBase: icon.scaleX,
-                       tollY: tn.tollY, live: false, seg: seg || null };
-        if (seg) seg.toll = toll;
-        if (!this.toll) this.toll = toll;
-
-        if (!this._tollTimer) {
-            this._tollTimer = this.time.addEvent({
-                delay: TO.FLUSH_MS || 5000, loop: true,
-                callback: this._flushTolls, callbackScope: this,
-            });
-        }
-    }
-
-    // One vehicle paid: fly a coin from its roof to the toll counter; the
-    // count ticks up when the coin lands.
-    _collectToll(car) {
-        const t = this.toll;
-        if (!t || !t.live) return;
-        const TO   = CONFIG.ROAD.TUNNEL.TOLL;
-        const size = Math.max(10, Math.round(13 * this.layoutConfig.platformScale));
-        const coin = this._addB(this.add.image(car.x, car.y, 'coin')
-            .setDisplaySize(size, size).setDepth(9.5), t.seg);
-        this.tweens.add({
-            targets: coin,
-            x: t.ix, y: t.iy,
-            duration: 300,
-            ease: 'Cubic.easeIn',
-            onComplete: () => {
-                coin.destroy();
-                t.pending += TO.PER_VEHICLE || 1;
-                t.text.setText(`${t.pending}`);
-                // Chime pulse — always from the icon's TRUE base scale, so
-                // overlapping pulses can never compound and grow the icon.
-                this.tweens.killTweensOf(t.icon);
-                t.icon.setScale(t.iconBase);
-                this.tweens.add({
-                    targets: t.icon, scale: t.iconBase * 1.35,
-                    duration: 90, yoyo: true,
-                    onComplete: () => t.icon.setScale(t.iconBase),
-                });
-            },
-        });
-    }
-
-    // Bank the pile: everything the gantry collected since the last flush
-    // flies over to the main account (the coins that buy merge spawns).
-    _flushTolls() {
-        const t = this.toll;
-        if (!t || t.pending <= 0) {
-            // Nothing collected this cycle — but the flow window may still be
-            // over: in endless mode the camera moves on regardless.
-            this._maybePan();
-            return;
-        }
-        const amount = t.pending;
-        t.pending = 0;
-        t.text.setText('0');
-
-        // The bank-transfer coin crosses into partA, so it lives on the MAIN
-        // camera (fixed space). Flushes only happen in steady state, where
-        // world and screen coordinates coincide — spawn at the gantry as-is,
-        // and keep it out of the landscape camera.
-        const target = this.coinIcon;
-        const size   = Math.max(12, Math.round(16 * this.layoutConfig.platformScale));
-        const coin   = this.add.image(t.ix, t.iy, 'coin')
-            .setDisplaySize(size, size).setDepth(9.5);
-        if (this.camB) this.camB.ignore(coin);
-        this.tweens.add({
-            targets: coin,
-            x: target ? target.x : t.ix,
-            y: target ? target.y : t.iy,
-            duration: 650,
-            ease: 'Cubic.easeIn',
-            onComplete: () => {
-                coin.destroy();
-                this.coins += amount;
-                this.updateCoinDisplay();
-                this._maybePan();
-            },
-        });
     }
 
     // Slice the auger.png art into the machine's three stacked parts.
@@ -2657,28 +970,13 @@ console.log(
         puff.refresh();
     }
 
-    // One charge tick in road mode: slotted batteries bank drilling distance.
+    // One charge tick: slotted batteries bank digging distance.
     // update() spends it — the blade only advances while it's owed distance, so
     // pulling the batteries out visibly stalls the machine.
     _tunnelChargeCycle() {
         const tn = this.tunnel;
         if (!tn || tn.open || !tn.ready) return;
 
-        // The dig starts only once the upstream queue has visibly formed:
-        // front vehicle stopped at the barrier, held for QUEUE_WAIT_MS so a
-        // few more come to a rest behind it.
-        if (!tn.digOk) {
-            // With traffic off there is no queue to wait on: dig on first charge.
-            if (CONFIG.ROAD.TRAFFIC_ENABLED === false) {
-                tn.digOk = true;
-            } else {
-                if (!this._upQueueHalted()) { tn.haltT = 0; return; }
-                if (!tn.haltT) { tn.haltT = this.time.now; return; }
-                if (this.time.now - tn.haltT <
-                    (CONFIG.ROAD.TUNNEL.QUEUE_WAIT_MS || 1500)) return;
-                tn.digOk = true;
-            }
-        }
         let total = 0;
         for (let i = 0; i < 3; i++) {
             const slot = this.chargingSlots[i];
@@ -2701,10 +999,30 @@ console.log(
     // moment the banked distance is spent — an idle drill doesn't spin.
     _updateTunnel(time) {
         const tn = this.tunnel;
-        if (!tn || tn.open) return;
+        if (!tn || (tn.open && !tn.flooding)) return;
         const dt = tn.lastTime ? Math.min((time - tn.lastTime) / 1000, 0.05) : 0;
         tn.lastTime = time;
         if (dt <= 0) return;
+
+        // Drilling is done: the machine no longer holds the water back, so it
+        // runs on to the far mouth — same flow, just a longer way to go.
+        if (tn.flooding) {
+            this._advanceWater(tn, dt, time, tn.len);
+            if (tn.wet >= tn.len - 0.5) {
+                tn.flooding = false;
+                // Settled: a still, straight-edged canal — no rippling front,
+                // and the foam that rode on it is spent.
+                if (tn.foam) tn.foam.clear();
+                tn.maskShape.clear().fillStyle(0xffffff)
+                    .fillRect(0, tn.exitY - 2, this.scale.width, tn.len + 4);
+                this._finishStretch(tn);
+            }
+            return;
+        }
+
+        // The water has its own life: it runs BEFORE the drilling branch below,
+        // so it keeps creeping up the cut and rippling while the blade rests.
+        this._advanceWater(tn, dt, time);
 
         const remaining = Math.min(tn.earnedPx, tn.len) - tn.progressPx;
 
@@ -2712,9 +1030,8 @@ console.log(
         // arms a short burst (pulseT). Outside a burst — or with nothing owed —
         // it sits completely dead: no spin, no wobble, no advance.
         if (remaining <= 0.01 || tn.pulseT <= 0) {
-            for (const b of tn.bores) {
-                if (!b.wobble.isPaused()) { b.wobble.pause(); b.head.x = b.x; }
-            }
+            const b = tn.bore;
+            if (!b.wobble.isPaused()) { b.wobble.pause(); b.head.x = b.x; }
             return;
         }
 
@@ -2727,57 +1044,112 @@ console.log(
         const wind = tn.pulseT / pulseDur;   // 1 → 0 over the burst
         tn.progressPx += step;
 
-        // Each machine advances from its OWN mouth toward the opposite one —
-        // the up bore's face climbs, the down bore's face descends — both off
-        // the same shared progress.
-        const cutH = tn.progressPx;
-        for (const b of tn.bores) {
-            const faceY = b.drill === 1 ? tn.entryY - tn.progressPx
-                                        : tn.exitY  + tn.progressPx;
-            if (b.wobble.isPaused()) b.wobble.resume();
-            // UV scroll = rotation: the spiral marches along the shaft (spoil
-            // being augered back out of the bore). tilePositionY is in SOURCE
-            // texture pixels, so divide by the display scale to get SCROLL
-            // px/s on screen. The flipped down-rig scrolls the opposite way so
-            // spoil still visually feeds toward its rear. Winds down over the
-            // burst: jolt, then coast.
-            b.shaft.tilePositionY -= b.drill * TN.SCROLL * (0.35 + 0.65 * wind)
-                                   * dt / tn.texScale;
-            b.shaft.y = faceY;
-            b.tail.y = faceY + b.drill * tn.bodyH;
-            b.head.y = faceY;
-            // Raw sand over this rig's bored wake, face back to its own
-            // mouth. The up bore's strip hangs from the moving face (tile
-            // offset pins the grain pattern to the WORLD); the down bore's is
-            // pinned at the top mouth and just grows taller.
-            b.cut.y = b.drill === 1 ? faceY : tn.exitY;
-            b.cut.setSize(b.cut.width, Math.max(1, cutH)).setVisible(cutH > 0.5);
-            b.cut.tilePositionY = b.drill === 1 ? faceY : 0;
-        }
-        // NO paving while drilling: the whole bored wake stays raw sand. The
-        // road is laid in discrete tile sections after breakthrough — see
-        // _breakthrough.
+        // The face climbs from the mouth the machine started at.
+        const cutH  = tn.progressPx;
+        const faceY = tn.entryY - tn.progressPx;
+        const b     = tn.bore;
+        if (b.wobble.isPaused()) b.wobble.resume();
+        // UV scroll = rotation: the spiral marches along the shaft (spoil
+        // being augered back out of the cut). tilePositionY is in SOURCE
+        // texture pixels, so divide by the display scale to get SCROLL px/s
+        // on screen. Winds down over the burst: jolt, then coast.
+        b.shaft.tilePositionY -= TN.SCROLL * (0.35 + 0.65 * wind) * dt / tn.texScale;
+        b.shaft.y = faceY;
+        b.tail.y  = faceY + tn.bodyH;
+        b.head.y  = faceY;
+        // Raw soil over the dug wake, face back to the mouth. The strip hangs
+        // from the moving face (the tile offset pins the grain to the WORLD).
+        b.cut.y = faceY;
+        b.cut.setSize(b.cut.width, Math.max(1, cutH)).setVisible(cutH > 0.5);
+        b.cut.tilePositionY = faceY;
 
-        // Rock chips off both faces while cutting.
+        // Soil chips off the face while cutting.
         tn.debrisAcc += dt;
         if (tn.debrisAcc > 0.04) {
             tn.debrisAcc = 0;
-            for (const b of tn.bores) {
-                const faceY = b.drill === 1 ? tn.entryY - tn.progressPx
-                                            : tn.exitY  + tn.progressPx;
-                this._spawnTunnelChip(b, faceY);
-            }
+            this._spawnTunnelChip(b, faceY);
         }
 
         if (tn.progressPx >= tn.len - 0.5) this._breakthrough();
     }
 
-    // Spoil at one bore's blade: sand augered off the face falls BEHIND the
-    // machine, against its own drilling direction (down-screen for the up
-    // bore, up-screen for the down bore) — it can't spread sideways, the cut
-    // walls are right there. Chips rain from the blade onto the raw cut
-    // behind it, plus soft dust puffs sinking the same way. Everything is
-    // pooled — chips and puffs share one pool and just swap texture/tint.
+    // ── The waterline ────────────────────────────────────────────────────────
+    // The canal fills from its own mouth, and the water is NOT bolted to the
+    // machine: the blade opening `LAG` of dry cut ahead of it only sets where
+    // the water is ALLOWED to reach. The level itself chases that limit with a
+    // damped lag (FLOW_TAU), so it lingers when the blade lurches forward and
+    // is still creeping up the cut long after the machine has gone quiet.
+    // `limit` overrides where the water is allowed to reach (the final flood
+    // passes the full length); by default it's the blade's position less LAG.
+    _advanceWater(tn, dt, time, limit) {
+        const WA  = CONFIG.ROAD.WATER;
+        const lag = tn.bladeLen * (WA.LAG !== undefined ? WA.LAG : 1);
+        const target = limit !== undefined
+            ? limit
+            : Math.max(0, tn.progressPx - lag);
+        const gap = target - tn.wet;
+        if (gap > 0) {
+            const tau = Math.max(0.05, WA.FLOW_TAU || 0.9);
+            // Exponential approach — frame-rate independent, and it can never
+            // overtake the target however long the frame was. On its own it
+            // would crawl to a halt as the gap closes, so a steady minimum
+            // creep carries the last stretch home at a believable pace.
+            const eased = gap * (1 - Math.exp(-dt / tau));
+            const floor = (WA.MIN_SPEED || 0) * this.layoutConfig.platformScale * dt;
+            tn.wet = Math.min(target, tn.wet + Math.max(eased, floor));
+        }
+        this._paintWater(tn, time);
+    }
+
+    // Redraw the reveal mask for the current level. The body is one rect; the
+    // leading edge is a row of fingers of differing length, each on
+    // its own slow phase — a wavering tongue of water instead of a ruled line
+    // being towed along. Drawn from scratch every frame: the mask object is
+    // never rebased, so these are always current world coordinates.
+    _paintWater(tn, time) {
+        const WA = CONFIG.ROAD.WATER;
+        const g  = tn.maskShape;
+        const fm = tn.foam;
+        g.clear();
+        if (fm) fm.clear();
+        if (tn.wet <= 0.5) return;
+        g.fillStyle(0xffffff);
+        if (fm) fm.fillStyle(WA.FOAM_COLOR !== undefined ? WA.FOAM_COLOR : 0xffffff,
+                             WA.FOAM_ALPHA !== undefined ? WA.FOAM_ALPHA : 0.9);
+
+        const W     = this.scale.width;
+        const sc    = this.layoutConfig.platformScale;
+        const front = Math.min(tn.wet, (WA.FRONT || 12) * sc);
+        const foamL = (WA.FOAM || 4) * sc;
+        const bulk  = tn.wet - front;
+        const cols  = Math.max(3, WA.FRONT_COLS || 7);
+        const b     = tn.bore;
+        const edge  = tn.entryY - bulk;          // the water fills upward
+        if (bulk > 0) g.fillRect(0, edge, W, bulk);
+
+        const cw = b.cut.width / cols;
+        const x0 = b.x - b.cut.width / 2;
+        for (let i = 0; i < cols; i++) {
+            // Two incommensurate waves per finger, so the front never repeats
+            // a shape and never pulses in unison.
+            const ph = i * 1.7;
+            const w  = 0.5 + 0.25 * Math.sin(time / 260 + ph)
+                           + 0.25 * Math.sin(time / 430 + ph * 2.3);
+            const len = front * (0.15 + 0.85 * w);
+            const fx  = x0 + i * cw - 0.5;
+            g.fillRect(fx, edge - len, cw + 1, Math.max(0, len));
+            // White cap on this finger's tip — same blocky column, so the
+            // foam breaks up along the front exactly as the water does.
+            const fl = Math.min(len, foamL);
+            if (fm && fl > 0.5) fm.fillRect(fx, edge - len, cw + 1, fl);
+        }
+    }
+
+    // Spoil at the blade: soil augered off the face falls BEHIND the machine,
+    // down-screen against the direction of the dig — it can't spread sideways,
+    // the sides of the cut are right there. Chips rain from the blade onto the
+    // raw cut behind it, plus soft dust puffs sinking the same way. Everything
+    // is pooled — chips and puffs share one pool and just swap texture/tint.
     _spawnTunnelChip(b, faceY) {
         const tn   = this.tunnel;
         const TN   = CONFIG.ROAD.TUNNEL;
@@ -2795,13 +1167,13 @@ console.log(
             const chip = grab('debris_chip', 2.3)
                 .setTint(cols[Math.floor(Math.random() * cols.length)])
                 .setPosition(b.x + (Math.random() - 0.5) * b.shaft.width * 0.9,
-                             faceY + b.drill * Math.random() * tn.bodyH * 0.5)
+                             faceY + Math.random() * tn.bodyH * 0.5)
                 .setScale(1.0 + Math.random() * 1.2)
                 .setAlpha(1);
             this.tweens.add({
                 targets:  chip,
                 x:        chip.x + (Math.random() - 0.5) * 4,
-                y:        chip.y + b.drill * (14 + Math.random() * 26),
+                y:        chip.y + (14 + Math.random() * 26),
                 scale:    chip.scale * 0.5,
                 alpha:    0,
                 duration: 450 + Math.random() * 350,
@@ -2814,13 +1186,13 @@ console.log(
             const puff = grab('dust_puff', 2.35)
                 .setTint(TN.DUST_COLOR)
                 .setPosition(b.x + (Math.random() - 0.5) * b.shaft.width * 0.7,
-                             faceY + b.drill * Math.random() * tn.bodyH * 0.4)
+                             faceY + Math.random() * tn.bodyH * 0.4)
                 .setScale(0.6 + Math.random() * 0.4)
                 .setAlpha(0.55);
             this.tweens.add({
                 targets:  puff,
                 x:        puff.x + (Math.random() - 0.5) * 5,
-                y:        puff.y + b.drill * (10 + Math.random() * 12),
+                y:        puff.y + (10 + Math.random() * 12),
                 scale:    puff.scale * (2.2 + Math.random()),
                 alpha:    0,
                 duration: 450 + Math.random() * 300,
@@ -2830,183 +1202,71 @@ console.log(
         }
     }
 
-    // The blade exits the mountain's top edge: retire the machines, then lay
-    // the road as TILE_COUNT discrete sections, entry → exit, one per tick —
-    // each section replaces its stretch of raw sand. Traffic is released only
-    // once the last section has landed.
+    // The blade exits the far edge: retire the machines, then flood the last
+    // dry stretch — the one the rig was standing on — as TILE_COUNT discrete
+    // sections, entry → exit, one per tick. Each section's water replaces its
+    // stretch of raw sand, and the canal is only declared through once the
+    // last section has filled.
     _breakthrough() {
         const tn = this.tunnel;
         if (tn.open) return;
         tn.open = true;
 
-        const parts = [];
-        for (const b of tn.bores) {
-            this.tweens.killTweensOf(b.head);
-            parts.push(b.shaft, b.tail, b.head);
-        }
+        this.tweens.killTweensOf(tn.bore.head);
+        const parts = [tn.bore.shaft, tn.bore.tail, tn.bore.head];
         this.tweens.add({
             targets: parts,
             alpha: 0, duration: 700,
             onComplete: () => parts.forEach((o) => o.setVisible(false)),
         });
 
-        const TN    = CONFIG.ROAD.TUNNEL;
-        const count = Math.max(1, TN.TILE_COUNT || 5);
-        const segH  = tn.len / count;
-        let laid = 0;
-        this.time.addEvent({
-            delay: TN.TILE_MS || 300,
-            repeat: count - 1,
-            callback: () => {
-                laid++;
-                const yTop = tn.entryY - laid * segH;
-                // Reveal this section of the pre-drawn road (+ its cut walls).
-                tn.maskShape.fillStyle(0xffffff)
-                    .fillRect(0, yTop - 0.5, this.scale.width, segH + 1);
-                // The sand recedes to just above the freshly paved section.
-                const hLeft = Math.max(0, yTop - tn.exitY);
-                for (const b of tn.bores) {
-                    b.cut.setSize(b.cut.width, Math.max(1, hLeft))
-                         .setVisible(hLeft > 0.5);
-                    // A quick flash so each tile visibly "lands".
-                    const flash = this._addB(this.add
-                        .rectangle(b.x, yTop + segH / 2, b.cut.width, segH, 0xffffff, 0.35)
-                        .setDepth(2.1), tn.seg);
-                    this.tweens.add({
-                        targets: flash, alpha: 0, duration: 220,
-                        onComplete: () => flash.destroy(),
-                    });
-                }
-                if (laid === count) this._openTunnelLanes(tn);
-            },
-        });
+        // The waterline just carries on: it runs from where it was holding
+        // (LAG behind the blade) up to the far mouth in one smooth flood —
+        // same mask, same soil-recedes-ahead-of-it behaviour as while digging,
+        // so the finish reads as the last of the water flowing in rather than
+        // as anything being built.
+        // No timed flood: the water just keeps flowing at the speed it was
+        // already flowing at. The blade is simply no longer holding it back,
+        // so its target becomes the far mouth and it runs the last stretch on
+        // its own — _updateTunnel keeps stepping it while `flooding` is set.
+        tn.flooding = true;
     }
 
-    // The tunnels are through: lift the barriers — the queued vehicles at
-    // both faces accelerate through on the same lanes they were always in —
-    // and put this cut's toll gantry in business. In endless mode this is
-    // also the moment the NEXT mountain appears above: lanes extend up to it
-    // and the machines start over there, while this cut enjoys its 5 seconds
-    // of flowing (and paying) traffic before the camera moves on.
-    _openTunnelLanes(tn) {
-        for (const lane of this.roadLanes) lane.blockAt = undefined;
-
-        // This segment's gantry becomes the live collector.
-        const toll = (tn && tn.seg && tn.seg.toll) || this.toll;
-        if (toll && toll.sign) {
-            this.toll = toll;
-            toll.live = true;
-            for (const o of toll.sign) {
-                o.setVisible(true).setScale(0.2);
-                this.tweens.add({
-                    targets: o, scale: 1,
-                    duration: 260, ease: 'Back.easeOut',
-                });
-            }
-            for (const o of toll.counterUi) o.setVisible(true);
-        }
-        // Restart the flush cycle so this cut gets a full 5s collection
-        // window before the bank transfer (and, in endless mode, the pan).
-        if (this._tollTimer) {
-            const TO = CONFIG.ROAD.TUNNEL.TOLL;
-            this._tollTimer.remove();
-            this._tollTimer = this.time.addEvent({
-                delay: (TO && TO.FLUSH_MS) || 5000, loop: true,
-                callback: this._flushTolls, callbackScope: this,
-            });
-        }
-
+    // This stretch of canal is finished. In endless mode this is also the
+    // moment the NEXT band appears above — the machine starts over there —
+    // while the finished stretch is held on screen for SETTLE_MS before the
+    // camera rides up to the new site.
+    _finishStretch(tn) {
         if (this.endless) {
             // A breakthrough during a pan (extreme charge rates) must wait
             // for the rebase — the band above is still occupied until then.
             if (this.endless.panning) this.endless.deferBuild = true;
             else this._buildNextSegment();
-            // With tolls disabled there is no flush timer to trigger the
-            // pan — give the flow window a plain timer instead.
-            if (!this._tollTimer) {
-                this.time.delayedCall(5000, () => this._maybePan());
-            }
+            this.time.delayedCall(CONFIG.ROAD.ENDLESS.SETTLE_MS || 5000,
+                                  () => this._maybePan());
         }
     }
 
     // ── Endless progression ──────────────────────────────────────────────────
-    // Stack the next segment above the world, stretch the (dead-straight)
-    // lanes up through it, and aim the queues at the new mountain. Cars keep
-    // their arc-length positions: up lanes' origin (the bottom) is untouched;
-    // down lanes' origin moved up one segment, so their cars all advance by
-    // segH. From here the batteries bank charge toward the NEW machines.
+    // Stack the next band above the world: fresh land, a fresh stretch of
+    // built canal at its foot and a machine parked at that head. From here the
+    // batteries bank charge toward the NEW machine.
     _buildNextSegment() {
-        const E  = this.endless;
-        const RC = CONFIG.ROAD;
-        const r  = this.road;
-        const s  = (v) => v * this.layoutConfig.platformScale;
+        const E = this.endless;
+        const r = this.road;
 
         E.segIndex++;
-        const seed = RC.ISLAND.SEED + E.segIndex * (RC.ENDLESS.SEED_STEP || 1);
-
-        // 1. Stretch the spines one segment up (2-point verticals — the top
-        //    point IS the whole extension), then rebuild every lane path.
-        for (const sp of r.spines) sp.pts[sp.pts.length - 1].y -= E.segH;
-        for (const lane of this.roadLanes) {
-            const pts = lane.path.pts.map((p) => ({ x: p.x, y: p.y }));
-            if (lane.dir === 1) pts[pts.length - 1].y -= E.segH;
-            else                pts[0].y             -= E.segH;
-            lane.path = this._pathMeta(pts);
-            if (lane.dir === -1) {
-                for (const car of lane.cars) { car.prog += E.segH; car.seg = 0; }
-            }
-        }
-
-        // 2. The new landscape band, with parked machines and a waiting
-        //    gantry. this.tunnel switches here: charge now digs mountain k+1.
-        const seg = this._buildSegment(r.top - E.segH, r.top, seed);
-
-        // 3. Queues re-aim at the new mountain's faces.
-        this._setLaneBlocks(seg.island);
-
+        this._buildSegment(r.top - E.segH, r.top);
         E.nextReady = true;
     }
 
-    // True once the lead vehicle of an upstream (dir 1) lane is standing at
-    // its barrier: close to the stop-line and essentially not moving.
-    _upQueueHalted() {
-        const r = this.road;
-        for (const lane of this.roadLanes) {
-            if (lane.dir !== 1 || lane.blockAt === undefined) continue;
-            const front = lane.cars[0];
-            if (front && front.speed < 0.8 &&
-                lane.blockAt - (front.prog + front.len / 2) < r.minGap * 3) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Aim every lane's stop-line at the given mountain's faces, measured in
-    // the lane's CURRENT arc length (origins move as the world extends and
-    // rebases, so this must be recomputed whenever either side changes).
-    _setLaneBlocks(isl) {
-        const RC = CONFIG.ROAD;
-        const s  = (v) => v * this.layoutConfig.platformScale;
-        const gapTop = isl.cy - isl.r;
-        const gapBot = isl.cy + isl.r;
-        const rigLen = s(RC.TUNNEL.BLADE_LEN);
-        const topRig = RC.TUNNEL.OPPOSED_DRILL ? rigLen : 0;
-        for (const lane of this.roadLanes) {
-            const originY = lane.path.pts[0].y;
-            lane.blockAt = lane.dir === 1
-                ? originY - (gapBot + rigLen)
-                : (gapTop - topRig) - originY;
-        }
-    }
-
-    // Called after each toll flush: if the next mountain is waiting, ride up.
+    // Once the finished stretch has been admired: if the next band is
+    // waiting, ride up to it.
     _maybePan() {
         const E = this.endless;
         if (!E || !E.nextReady || E.panning) return;
         E.panning  = true;
         E.nextReady = false;
-        if (this.toll) this.toll.live = false;   // the old gantry retires
         this.tweens.add({
             targets:  this.camB,
             scrollY:  E.baseScrollY - E.segH,
@@ -3021,9 +1281,9 @@ console.log(
     }
 
     // The pan is over: teleport the world back into the home band so state
-    // never drifts. Everything shifts down by segH — display objects, spine
-    // points, tunnel/toll anchors — the old segment is destroyed, the camera
-    // snaps back, and on screen NOTHING moves: world+camera shift cancel out.
+    // never drifts. Everything shifts down by segH — display objects, band
+    // and dig anchors — the old segment is destroyed, the camera snaps back,
+    // and on screen NOTHING moves: world+camera shift cancel out.
     _rebaseWorld() {
         const E = this.endless, r = this.road;
         const segH = E.segH;
@@ -3036,10 +1296,6 @@ console.log(
                 this.tweens.killTweensOf(o);
                 o.destroy();
             }
-            // Per-segment baked textures (the mountain) go with it.
-            for (const key of seg.texKeys || []) {
-                if (this.textures.exists(key)) this.textures.remove(key);
-            }
         }
         this.segments = [survivor];
 
@@ -3047,60 +1303,23 @@ console.log(
         for (const o of survivor.objects) {
             if (!o._noRebase) o.y += segH;
         }
-        survivor.island.cy += segH;
-        r.island = survivor.island;
+        survivor.band.headY   += segH;
+        survivor.band.bandTop += segH;
+        survivor.band.bandBot += segH;
+        r.band = survivor.band;
         const tn = survivor.tunnel;
         if (tn) {
-            tn.entryY += segH; tn.exitY += segH; tn.tollY += segH;
+            tn.entryY += segH; tn.exitY += segH;
             // The reveal mask stays at y=0 (future draws use new coords); if
-            // this tunnel somehow opened before the rebase, refill the whole
-            // span in the new coordinate frame.
+            // this stretch somehow finished before the rebase, refill the
+            // whole span in the new coordinate frame.
             if (tn.open) {
                 tn.maskShape.clear().fillStyle(0xffffff)
                     .fillRect(0, tn.exitY - 2, this.scale.width, tn.len + 4);
             }
         }
-        if (survivor.toll) {
-            survivor.toll.iy    += segH;
-            survivor.toll.tollY += segH;
-            this.toll = survivor.toll;
-        }
-
-        // 3. Spines and lane paths come home; up-lane cars re-anchor to the
-        //    new origin (bottom moved up one segment), stragglers below the
-        //    world's bottom edge are recycled. A fresh toll cycle also means
-        //    every car owes again at the next gantry.
-        for (const sp of r.spines) for (const p of sp.pts) p.y += segH;
-        for (const sp of r.spines) sp.pts[0].y = r.bottom;   // trim old tail
-        for (const lane of this.roadLanes) {
-            const pts = lane.path.pts.map((p) => ({ x: p.x, y: p.y + segH }));
-            if (lane.dir === 1) pts[0].y = r.bottom;
-            else                pts[pts.length - 1].y = r.bottom;
-            lane.path = this._pathMeta(pts);
-            if (lane.dir === 1) {
-                for (const car of lane.cars) { car.prog -= segH; car.seg = 0; }
-                while (lane.cars.length &&
-                       lane.cars[lane.cars.length - 1].prog <
-                       -lane.cars[lane.cars.length - 1].len) {
-                    const gone = lane.cars.pop();
-                    gone.setActive(false).setVisible(false);
-                    this.roadCarPool.push(gone);
-                }
-            } else {
-                for (const car of lane.cars) car.seg = 0;
-            }
-            for (const car of lane.cars) car.tolled = false;
-        }
-
-        // 3b. blockAt is an arc length from each lane's ORIGIN — the up
-        // lanes' origin just moved a segment, so the stop-lines must be
-        // re-measured against the (shifted) mountain, or upstream traffic
-        // sails straight past the face onto the raw sand.
-        const tnB = survivor.tunnel;
-        if (tnB && !tnB.open) this._setLaneBlocks(survivor.island);
-
-        // 4. Camera home and stationary — NOW the new site opens for work:
-        // the parked machines accept charge from the next battery tick.
+        // 3. Camera home and stationary — NOW the new site opens for work:
+        // the parked machine accepts charge from the next battery tick.
         this.camB.scrollY = E.baseScrollY;
         E.panning = false;
         if (E.deferBuild) {
@@ -4531,37 +2750,10 @@ console.log(
         checkAnimationsComplete();
     }
 
-    // One charge tick in car mode: sum the charge from every slotted battery and
-    // convert it to earned climbing distance (1 charge → DISTANCE_PER_CHARGE units,
-    // 1 unit → PX_PER_UNIT px). update() drives the car until it has climbed that far.
-    _carChargeCycle() {
-        if (!this.car) return;
-        let total = 0;
-        for (let i = 0; i < 3; i++) {
-            const slot = this.chargingSlots[i];
-            if (slot) total += slot.chargePerMinute;
-        }
-        if (total <= 0) return;   // no batteries powering the car this tick
-
-        const C = CONFIG.CAR;
-        this.carEarnedDistPx += total * C.DISTANCE_PER_CHARGE * C.PX_PER_UNIT;
-
-        // Pulse every battery that's feeding the car (reuse existing feedback).
-        for (let i = 0; i < 3; i++) {
-            if (this.chargingSlots[i]) this._pulseBatteryIcon(this.platforms[i]);
-        }
-    }
-
     chargeCycle() {
-        // Road pivot: charge powers the tunnel boring machine.
+        // Canal pivot: charge powers the boring machine.
         if (CONFIG.ROAD && CONFIG.ROAD.ENABLED) {
             this._tunnelChargeCycle();
-            return;
-        }
-
-        // Car pivot: charge no longer fills a gadget — it buys climbing distance.
-        if (CONFIG.CAR && CONFIG.CAR.ENABLED) {
-            this._carChargeCycle();
             return;
         }
 
@@ -6667,31 +4859,8 @@ console.log(
     // UPDATE
     // ================================================================
     update(time) {
-        // Road pivot: drive the traffic, and the boring machine if charged.
-        if (this.road) {
-            if (this.tunnel) this._updateTunnel(time);
-            this._updateRoad(time);
-            return;
-        }
-
-        // Car pivot: sync display sprites to bodies and run the motor.
-        if (this.car) {
-            const C = CONFIG.CAR;
-            const rearWheel = this.car.rearWheel;
-
-            // Drive only while the car still owes climbing distance from the charge
-            // it has banked; otherwise it stays frozen (parked) on the slope so it
-            // neither rolls back nor spins its wheels while idle.
-            const shouldDrive = this._carTravelledPx() < this.carEarnedDistPx;
-            this._setCarDriving(shouldDrive);
-
-            if (shouldDrive) {
-                const angularAccel = C.MOTOR_TORQUE / rearWheel.inertia;   // α = τ / I
-                this.matter.body.setAngularVelocity(rearWheel, rearWheel.angularSpeed + angularAccel);
-            }
-
-            this._syncCarSprites();
-        }
+        // Drive the boring machine — and the water it leaves behind.
+        if (this.tunnel) this._updateTunnel(time);
     }
 }
 
@@ -6742,16 +4911,6 @@ const config = {
     parent: 'game-container',
     backgroundColor: '#7B68EE',
     scene: [GameScene],
-    physics: {
-        default: 'matter',
-        matter: {
-            gravity: { y: 1 },
-            enableSleeping: false,
-            positionIterations: 10,
-            velocityIterations: 10,
-            constraintIterations: 10,
-        },
-    },
     scale: {
         mode: Phaser.Scale.NONE,            // we own sizing via resizeToHiDPI()
         autoCenter: Phaser.Scale.NO_CENTER, // canvas fills the viewport; centering would offset it by ~half (device-px margins)
