@@ -301,6 +301,14 @@ class GameScene extends Phaser.Scene {
             this.load.image('auger_src', 'graphics/auger.png');
         }
 
+        // Tile map: the level layout (.tmj) plus one image per tile type.
+        // The .tmj only carries the grid + tile names; the PNGs live here.
+        const TM = CONFIG.ROAD && CONFIG.ROAD.TILEMAP;
+        if (TM && TM.ENABLED) {
+            this.load.json('level_map', TM.FILE);
+            for (const k of TM.KEYS) this.load.image('tile_' + k, `graphics/tiles/${k}.png`);
+        }
+
         // Load gadget sprites from gadgetData.js
         if (typeof GADGET_SPRITES !== 'undefined' && GADGET_SPRITES) {
             GADGET_SPRITES.forEach(g => {
@@ -649,6 +657,33 @@ console.log(
             band:    null,                    // the live segment's band record
         };
 
+        // ── Tile map: fit the authored grid into the landscape band ────────
+        // Rows are fixed by the level; the tile SIZE is derived so the grid is
+        // square and fills the band (height-limited on this aspect, otherwise
+        // width-limited). The grid is anchored to the BOTTOM of the band (just
+        // above the battery slots) and centred horizontally.
+        this.tileGrid = null;
+        const TM = RC.TILEMAP;
+        if (TM && TM.ENABLED) {
+            const map  = this.cache.json.get('level_map');
+            const cols = map.width, rows = map.height;
+            const tile = Math.min((bottom - top) / rows, B.width / cols);
+            const gw   = cols * tile, gh = rows * tile;
+            this.tileGrid = {
+                cols, rows, tile,
+                left: B.x + (B.width - gw) / 2,   // centred horizontally
+                w: gw, h: gh,
+                data: map.layers[0].data,
+            };
+            // gid → texture key, read straight from the embedded tileset.
+            const ts = map.tilesets[0];
+            this.tileGidKey = {};
+            for (const t of ts.tiles) {
+                const key = t.image.split('/').pop().replace(/\.[^.]+$/, '');
+                this.tileGidKey[ts.firstgid + t.id] = key;
+            }
+        }
+
         // ── Endless mode: a second camera owns the landscape ──────────────
         // The world extends upward one band at a time; camB pans up it while
         // the main camera keeps the merge grid and platform UI fixed. camB's
@@ -719,6 +754,13 @@ console.log(
         const seg = { objects: [], band: null, tunnel: null };
         this.segments.push(seg);
 
+        // Tile-map mode: draw the authored grid and stop. No procedural land,
+        // no dug canal, no auger — just the level's tiles filling the band.
+        if (this.tileGrid) {
+            this._buildTileBand(bandTop, bandBot, seg);
+            return seg;
+        }
+
         // The band this segment spans, and the head of the canal already built
         // at its foot. The dig runs from that head all the way to bandTop, so a
         // finished segment hands a continuous channel to the next one.
@@ -764,6 +806,53 @@ console.log(
 
         this.createTunnel(band, seg);
         return seg;
+    }
+
+    // Render one band from the Tiled grid: a green backdrop (shows through any
+    // tile transparency) plus one sprite per non-empty cell. The grid is
+    // anchored to the BOTTOM of the band so it sits just above the slots; on a
+    // taller band any slack falls at the top. Cell (0,0) is the top-left; the
+    // data array is row-major (row * cols + col), 0 = empty.
+    _buildTileBand(bandTop, bandBot, seg) {
+        const g    = this.tileGrid;
+        const gTop = bandBot - g.h;            // anchor grid to the band's bottom
+
+        this._addB(this.add.rectangle(
+                this.layoutConfig.partB.x + this.layoutConfig.partB.width / 2,
+                (bandTop + bandBot) / 2,
+                this.layoutConfig.partB.width, bandBot - bandTop,
+                CONFIG.ROAD.LAND_COLOR).setDepth(1.4), seg);
+
+        for (let row = 0; row < g.rows; row++) {
+            for (let col = 0; col < g.cols; col++) {
+                const gid = g.data[row * g.cols + col];
+                if (!gid) continue;
+                const key = this.tileGidKey[gid];
+                if (!key || !this.textures.exists('tile_' + key)) continue;
+                this._addB(this.add.image(
+                        g.left + (col + 0.5) * g.tile,
+                        gTop   + (row + 0.5) * g.tile,
+                        'tile_' + key)
+                    .setDisplaySize(g.tile, g.tile)
+                    .setDepth(1.5), seg);
+            }
+        }
+
+        // The auger digs the CENTRE column (the main canal), bottom → top of
+        // the grid, filling it with water in its wake — drawn above the tiles.
+        const centreCol = Math.floor(g.cols / 2);
+        const band = {
+            cx:      g.left + (centreCol + 0.5) * g.tile,
+            headY:   gTop + g.h,           // dig starts at the grid's bottom edge
+            bandTop: gTop,                 // …and climbs to its top edge
+            bandBot: gTop + g.h,
+        };
+        seg.band = band;
+        this.road.band = band;
+        // The dug channel spans most of one column, so the water and machine
+        // sit inside the centre tiles' ditch.
+        this.road.canalW = g.tile * (CONFIG.ROAD.TILEMAP.CANAL_FRACTION || 0.55);
+        this.createTunnel(band, seg);
     }
 
     // ================================================================

@@ -410,6 +410,24 @@ var CONFIG = {
                                    // land band stops (px @ platformScale)
         LAND_COLOR:   0x8ed04f,    // the green ground the channel is cut through
 
+        // ── Tile map (authored in Tiled) ───────────────────────────────────
+        // When ENABLED, the landscape band is drawn from a Tiled level: a grid
+        // of tile sprites filling the band. The old procedural land + dug canal
+        // are skipped. Tile art lives in graphics/tiles/, one PNG per tile,
+        // named as the tileset image (the .tmj only stores the grid + names).
+        TILEMAP: {
+            ENABLED: true,
+            FILE:    'level_maps/level_01.tmj',
+            CANAL_FRACTION: 0.55,   // dug centre-channel width as a fraction of a
+                                    // tile — sets how wide the auger + water sit
+                                    // inside the main-canal column
+            KEYS: [                 // every tile PNG in graphics/tiles/ (no ext)
+                'ditch_es', 'ditch_esw', 'ditch_ew', 'ditch_ne', 'ditch_nes',
+                'ditch_nesw', 'ditch_new', 'ditch_ns', 'ditch_nsw', 'ditch_nw',
+                'ditch_sw', 'ground',
+            ],
+        },
+
         // ── The channel ───────────────────────────────────────────────────
         CANAL: {
             WIDTH:       40.8,     // channel width (px @ platformScale)
