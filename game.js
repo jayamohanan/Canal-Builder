@@ -950,13 +950,26 @@ console.log(
                           duration: 55, yoyo: true, repeat: -1, paused: true });
         const bore = { x, cut, shaft, tail, head, wobble };
 
+        // Tile-map mode: lay a strip of grass over the whole dug column so it
+        // starts as undug ground. It hangs from the top of the band and its
+        // bottom edge rides the blade — as the machine cuts upward the grass
+        // recedes with it, exposing the ditch (and the water) it leaves behind.
+        // So the auger reads as carving the canal out of the grass.
+        let grass = null;
+        if (this.tileGrid && this.textures.exists('tile_ground')) {
+            const colW = this.tileGrid.tile;
+            const tw   = this.textures.get('tile_ground').getSourceImage().width;
+            grass = this._addB(this.add.tileSprite(x, exitY, colW, len, 'tile_ground')
+                .setOrigin(0.5, 0).setTileScale(colW / tw).setDepth(1.6), seg);
+        }
+
         // The machine advances off a banked-charge account: one progress
         // value drives the shaft, the mask and the head.
         this.tunnel = {
             entryY, exitY, len, bladeLen, bodyH, texScale: sc,
             progressPx: 0, earnedPx: 0, open: false, lastTime: 0, pulseT: 0,
             wet: 0,                          // how far the water has actually come
-            bore, maskShape, foam: foamGfx, chips: [], debrisAcc: 0,
+            bore, maskShape, foam: foamGfx, grass, chips: [], debrisAcc: 0,
             seg: seg || null,
             // A dig site built ahead (endless: the NEXT band, while the
             // camera is still down at the current one) stays dormant — no
@@ -1137,6 +1150,9 @@ console.log(
         const cutH  = tn.progressPx;
         const faceY = tn.entryY - tn.progressPx;
         const b     = tn.bore;
+        // Grass recedes with the blade: its bottom edge sits at the face, so
+        // only the not-yet-dug stretch above stays covered.
+        if (tn.grass) tn.grass.height = Math.max(0, tn.len - tn.progressPx);
         if (b.wobble.isPaused()) b.wobble.resume();
         // UV scroll = rotation: the spiral marches along the shaft (spoil
         // being augered back out of the cut). tilePositionY is in SOURCE
