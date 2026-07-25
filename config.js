@@ -421,6 +421,10 @@ var CONFIG = {
             CANAL_FRACTION: 0.55,   // dug centre-channel width as a fraction of a
                                     // tile — sets how wide the auger + water sit
                                     // inside the main-canal column
+            FLOW_SPEED: 0,          // branch-water speed (px/s @ platformScale).
+                                    // 0 = match the main canal (WATER.MIN_SPEED),
+                                    // so side channels flow at the same pace;
+                                    // set a value to override
             KEYS: [                 // every tile PNG in graphics/tiles/ (no ext)
                 'ditch_es', 'ditch_esw', 'ditch_ew', 'ditch_ne', 'ditch_nes',
                 'ditch_nesw', 'ditch_new', 'ditch_ns', 'ditch_nsw', 'ditch_nw',
@@ -464,8 +468,12 @@ var CONFIG = {
             // (machine look comes from graphics/auger.png)
             CUT_COLOR:     0x84694a,  // raw soil exposed in the cut under the
                                       // machine, before the water reaches it
-            DEBRIS_COLORS: [0x8a7454, 0x9c8a66, 0x6b5d45, 0xa89066],
-                                      // soil spoil chip tints, picked at random
+            DEBRIS_COLORS: [0x6e4a21, 0xa97537],
+                                      // spoil chip tints across the spray: the
+                                      // first (dominant) fills the middle, the
+                                      // last shades the chips at both ends
+            CHIP_SIZE:     10,        // base size of a spoil chip (px). Chunky
+                                      // squares — bumped up to read clearly
             DUST_COLOR:    0xa89878,  // soft dust cloud drifting off the cut
         },
 

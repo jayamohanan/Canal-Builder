@@ -817,12 +817,7 @@ console.log(
         const g    = this.tileGrid;
         const gTop = bandBot - g.h;            // anchor grid to the band's bottom
 
-        this._addB(this.add.rectangle(
-                this.layoutConfig.partB.x + this.layoutConfig.partB.width / 2,
-                (bandTop + bandBot) / 2,
-                this.layoutConfig.partB.width, bandBot - bandTop,
-                CONFIG.ROAD.LAND_COLOR).setDepth(1.4), seg);
-
+        // No green backdrop — the tiles fill the band themselves.
         for (let row = 0; row < g.rows; row++) {
             for (let col = 0; col < g.cols; col++) {
                 const gid = g.data[row * g.cols + col];
@@ -853,6 +848,237 @@ console.log(
         // sit inside the centre tiles' ditch.
         this.road.canalW = g.tile * (CONFIG.ROAD.TILEMAP.CANAL_FRACTION || 0.55);
         this.createTunnel(band, seg);
+    }
+
+    // ── Branch-canal water (flood fill) ──────────────────────────────────────
+    // The pre-built side canals fill from the main canal outward. As the main
+    // waterline rises past a junction row, that junction's side branch is
+    // seeded; water then creeps cell-by-cell along the ditches, splitting at
+    // every 3-/4-way. One graphics object redraws the whole wet network each
+    // frame from a simple per-cell fill model, so nothing pops in whole.
+
+    // Parse a tile key ('ditch_nes') into its open edges.
+    _tileConn(key) {
+        const c = { n: false, e: false, s: false, w: false };
+        if (key && key.startsWith('ditch_')) {
+            for (const ch of key.slice(6)) if (ch in c) c[ch] = true;
+        }
+        return c;
+    }
+
+    // Build the flood model for a band: every non-centre ditch cell, dry.
+    // Returns null when not in tile-map mode.
+    _buildFlood(seg) {
+        if (!this.tileGrid) return null;
+        const g = this.tileGrid;
+        const centreCol = Math.floor(g.cols / 2);
+        const cells = new Map();
+        for (let r = 0; r < g.rows; r++) {
+            for (let c = 0; c < g.cols; c++) {
+                const conn = this._tileConn(this.tileGidKey[g.data[r * g.cols + c]]);
+                if (c === centreCol) {
+                    // The vertical run is the tunnel strip's job; only keep a
+                    // centre cell if it's a junction, to draw the short e/w
+                    // connector arm that bridges the strip to the branch.
+                    if (conn.e || conn.w) {
+                        cells.set(c + ',' + r,
+                            { col: c, row: r, conn, progress: 0, entryDir: null,
+                              filling: false, filled: false, isCentre: true });
+                    }
+                    continue;
+                }
+                if (conn.n || conn.e || conn.s || conn.w) {
+                    cells.set(c + ',' + r,
+                        { col: c, row: r, conn, progress: 0, entryDir: null, filling: false, filled: false });
+                }
+            }
+        }
+        const gfx = this._addB(this.add.graphics().setDepth(2.08), seg);
+        gfx._noRebase = true;                        // redrawn in world coords each frame
+        return { g, cells, active: [], triggered: new Set(), centreCol,
+                 gfx, channelW: this.road.canalW };
+    }
+
+    // Advance EVERY band's branch water — not just the active tunnel's. Once
+    // the auger finishes a level `this.tunnel` moves on to the next band, but
+    // the band it left behind must keep filling until all its ditches are full.
+    _updateFlood(time) {
+        const dt = this._floodT ? Math.min((time - this._floodT) / 1000, 0.05) : 0;
+        this._floodT = time;
+        for (const seg of this.segments) {
+            if (seg.tunnel && seg.tunnel.flood) this._updateFloodOne(seg.tunnel, dt, time);
+        }
+    }
+
+    // True once every branch the water actually reached is full (unreachable
+    // ditches, if any, don't count — they'd never fill).
+    _floodDone(tn) {
+        if (!tn || !tn.flood) return true;
+        for (const cell of tn.flood.active) if (!cell.filled) return false;
+        return true;
+    }
+
+    _updateFloodOne(tn, dt, time) {
+        const F  = tn.flood, g = F.g;
+        // Flow at the SAME px/s as the main canal (its steady creep floor),
+        // unless overridden — so a cell fills in tile/speed seconds.
+        const speed = (CONFIG.ROAD.TILEMAP.FLOW_SPEED || CONFIG.ROAD.WATER.MIN_SPEED || 30)
+                    * this.layoutConfig.platformScale;
+        // The main canal advances in beats (it waits on the auger's pulse), so
+        // branches surge-and-pause on the same beat rather than gliding
+        // linearly. Each cell is offset a little, so heads don't move in unison.
+        const PULSE = Math.max(0.1, (CONFIG.ROAD.TUNNEL.PULSE_MS || 450) / 1000);
+        const ON    = 0.55;                          // fraction of the beat spent moving
+        // [dCol, dRow, oppositeEdge] per direction.
+        const DIR  = { n: [0, -1, 's'], e: [1, 0, 'w'], s: [0, 1, 'n'], w: [-1, 0, 'e'] };
+
+        const activate = (col, row, entryDir) => {
+            const cell = F.cells.get(col + ',' + row);
+            if (!cell || cell.filling || cell.filled) return;
+            cell.entryDir = entryDir; cell.filling = true; cell.progress = 0;
+            F.active.push(cell);
+        };
+
+        // 1. Seed branches as the main waterline passes each junction row. The
+        //    waterline has risen `tn.wet` px from the bottom; row r's centre is
+        //    reached at (rows - r - 0.5) tiles up.
+        for (let r = 0; r < g.rows; r++) {
+            if (F.triggered.has(r)) continue;
+            if (tn.wet >= (g.rows - r - 0.5) * g.tile) {
+                F.triggered.add(r);
+                const conn = this._tileConn(this.tileGidKey[g.data[r * g.cols + F.centreCol]]);
+                // Light the junction's connector arm immediately, then feed the
+                // branch cell beside it.
+                const cc = F.cells.get(F.centreCol + ',' + r);
+                if (cc) { cc.filled = true; cc.progress = 1; }
+                if (conn.e) activate(F.centreCol + 1, r, 'w');
+                if (conn.w) activate(F.centreCol - 1, r, 'e');
+            }
+        }
+
+        // 2. Advance every filling cell; when one is full it feeds its onward
+        //    neighbours (all its open edges except the one it came in by).
+        if (dt > 0) {
+            for (const cell of F.active) {
+                if (cell.filled) continue;
+                // Stepped advance: only move during the "on" part of the beat,
+                // sped up so the average still equals `speed`.
+                const phase = (cell.col * 0.37 + cell.row * 0.61) % 1;
+                const beat  = ((time / 1000) / PULSE + phase) % 1;
+                if (beat < ON) {
+                    cell.progress = Math.min(1, cell.progress + (speed / ON) * dt / g.tile);
+                }
+                if (cell.progress >= 1) {
+                    cell.filled = true;
+                    for (const d of ['n', 'e', 's', 'w']) {
+                        if (!cell.conn[d] || d === cell.entryDir) continue;
+                        const [dc, dr, opp] = DIR[d];
+                        const nb = F.cells.get((cell.col + dc) + ',' + (cell.row + dr));
+                        if (nb && nb.conn[opp] && !nb.filling && !nb.filled) {
+                            activate(cell.col + dc, cell.row + dr, opp);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Redraw the whole wet network from scratch (world coords, so a
+        //    rebase that shifts tn.exitY carries the water with it).
+        const gfx = F.gfx;
+        gfx.clear();
+        for (const cell of F.cells.values()) {
+            if (cell.progress > 0) this._drawCell(gfx, tn, cell, time);
+        }
+    }
+
+    // Draw one cell: a solid body up to the fill front, then a wavering
+    // fingered head (like the main canal's) with a white foam cap on each
+    // finger. Perpendicular junction arms fill once the front passes centre.
+    _drawCell(gfx, tn, cell, time) {
+        const WA = CONFIG.ROAD.WATER;
+        const g  = tn.flood.g, cw = tn.flood.channelW;
+        const cx = g.left + (cell.col + 0.5) * g.tile;
+        const cy = tn.exitY + (cell.row + 0.5) * g.tile;
+        const half = g.tile / 2;
+        gfx.fillStyle(WA.COLOR, 1);
+
+        // Centre junction: short e/w connector arm bridging the tunnel strip.
+        if (cell.isCentre) {
+            gfx.fillRect(cx - cw / 2, cy - cw / 2, cw, cw);
+            if (cell.conn.e) gfx.fillRect(cx,        cy - cw / 2, half, cw);
+            if (cell.conn.w) gfx.fillRect(cx - half, cy - cw / 2, half, cw);
+            return;
+        }
+
+        // A full cell is just the whole channel, no head.
+        if (cell.filled || cell.progress >= 1) {
+            gfx.fillRect(cx - cw / 2, cy - cw / 2, cw, cw);
+            if (cell.conn.n) gfx.fillRect(cx - cw / 2, cy - half, cw, half);
+            if (cell.conn.s) gfx.fillRect(cx - cw / 2, cy,        cw, half);
+            if (cell.conn.w) gfx.fillRect(cx - half,   cy - cw / 2, half, cw);
+            if (cell.conn.e) gfx.fillRect(cx,          cy - cw / 2, half, cw);
+            return;
+        }
+
+        // ── Filling: draw along the flow axis, fingered head at the front ───
+        const horiz = (cell.entryDir === 'w' || cell.entryDir === 'e');
+        const sign  = (cell.entryDir === 'w' || cell.entryDir === 'n') ? 1 : -1;
+        const uEntry = horiz ? (cell.entryDir === 'w' ? cx - half : cx + half)
+                             : (cell.entryDir === 'n' ? cy - half : cy + half);
+        const vC = horiz ? cy : cx;                 // across-axis centre
+        // (u along flow, v across) → fill in (x, y).
+        const rectUV = (u1, u2, v1, v2) => {
+            const ua = Math.min(u1, u2), ub = Math.max(u1, u2);
+            const va = Math.min(v1, v2), vb = Math.max(v1, v2);
+            if (ub <= ua || vb <= va) return;
+            if (horiz) gfx.fillRect(ua, va, ub - ua, vb - va);
+            else       gfx.fillRect(va, ua, vb - va, ub - ua);
+        };
+
+        const d     = cell.progress * g.tile;
+        const fL    = Math.min(d, (WA.FRONT || 12) * this.layoutConfig.platformScale);
+        const bodyD = d - fL;
+        const uBody = uEntry + sign * bodyD;
+
+        // Solid body from the entry edge to the base of the fingers.
+        rectUV(uEntry, uBody, vC - cw / 2, vC + cw / 2);
+
+        // Perpendicular junction arms fill once the front reaches centre.
+        if (d >= half) {
+            if (horiz) {
+                if (cell.conn.n) gfx.fillRect(cx - cw / 2, cy - half, cw, half);
+                if (cell.conn.s) gfx.fillRect(cx - cw / 2, cy,        cw, half);
+            } else {
+                if (cell.conn.w) gfx.fillRect(cx - half, cy - cw / 2, half, cw);
+                if (cell.conn.e) gfx.fillRect(cx,        cy - cw / 2, half, cw);
+            }
+        }
+
+        // Wavering fingers beyond the body front — each its own phase, so the
+        // head jitters like an equaliser instead of a straight line.
+        const cols = Math.max(3, WA.FRONT_COLS || 7);
+        const sw   = cw / cols;
+        const lens = [];
+        for (let i = 0; i < cols; i++) {
+            const ph = i * 1.7 + (cell.col + cell.row) * 0.9;
+            const w  = 0.5 + 0.25 * Math.sin(time / 260 + ph)
+                           + 0.25 * Math.sin(time / 430 + ph * 2.3);
+            const len = fL * (0.15 + 0.85 * w);
+            lens.push(len);
+            const v1 = vC - cw / 2 + i * sw;
+            rectUV(uBody, uBody + sign * len, v1, v1 + sw);
+        }
+
+        // White foam cap on each finger tip.
+        const foamW = Math.max(1, (WA.FOAM || 4) * this.layoutConfig.platformScale);
+        gfx.fillStyle(WA.FOAM_COLOR !== undefined ? WA.FOAM_COLOR : 0xffffff,
+                      WA.FOAM_ALPHA !== undefined ? WA.FOAM_ALPHA : 0.9);
+        for (let i = 0; i < cols; i++) {
+            if (lens[i] <= 0.5) continue;
+            const uTip = uBody + sign * lens[i];
+            const v1 = vC - cw / 2 + i * sw;
+            rectUV(uTip - sign * foamW, uTip, v1, v1 + sw);
+        }
     }
 
     // ================================================================
@@ -901,18 +1127,14 @@ console.log(
         // hidden behind a mask that follows the blade, so it appears
         // progressively in the machine's wake (see _paintWater).
         const WA    = CONFIG.ROAD.WATER;
-        const rimW  = Math.max(1, s(WA.EDGE_WIDTH));
         const halfW = r.canalW / 2;
         // Depth 2.1 puts the water ABOVE the raw soil strip (2.05) and below
         // the machine (2.2): wherever the mask has let it through, the water
-        // covers the cut; everywhere else the bare soil shows.
+        // covers the cut; everywhere else the bare soil shows. No side rim —
+        // the lit bank line would break the seam where branches join.
         const roadGfx = this._addB(this.add.graphics().setDepth(2.1), seg);
         roadGfx.fillStyle(WA.COLOR, 1);
         roadGfx.fillRect(band.cx - halfW, exitY, r.canalW, len);
-        roadGfx.fillStyle(WA.EDGE_COLOR, 1);
-        for (const edgeX of [band.cx - halfW, band.cx + halfW - rimW]) {
-            roadGfx.fillRect(edgeX, exitY, rimW, len);
-        }
 
         // Foam at the very tip of the flow. Drawn above the water and NOT
         // masked — it's only ever painted where the water already reached.
@@ -970,6 +1192,7 @@ console.log(
             progressPx: 0, earnedPx: 0, open: false, lastTime: 0, pulseT: 0,
             wet: 0,                          // how far the water has actually come
             bore, maskShape, foam: foamGfx, grass, chips: [], debrisAcc: 0,
+            flood: this._buildFlood(seg),   // branch-canal water (tilemap only)
             seg: seg || null,
             // A dig site built ahead (endless: the NEXT band, while the
             // camera is still down at the current one) stays dormant — no
@@ -1055,10 +1278,12 @@ console.log(
         // Debris sprites are baked WHITE and tinted per spawn — one texture,
         // many sand shades. The puff is a soft radial gradient for dust.
         if (this.textures.exists('debris_chip')) this.textures.remove('debris_chip');
-        const chip = this.textures.createCanvas('debris_chip', 3, 3);
+        const chipPx = Math.max(2, Math.round((TN.CHIP_SIZE || 10)
+                        * this.layoutConfig.platformScale));
+        const chip = this.textures.createCanvas('debris_chip', chipPx, chipPx);
         const cc = chip.getContext();
         cc.fillStyle = '#ffffff';
-        cc.fillRect(0, 0, 3, 3);
+        cc.fillRect(0, 0, chipPx, chipPx);
         chip.refresh();
 
         if (this.textures.exists('dust_puff')) this.textures.remove('dust_puff');
@@ -1162,11 +1387,9 @@ console.log(
         b.shaft.y = faceY;
         b.tail.y  = faceY + tn.bodyH;
         b.head.y  = faceY;
-        // Raw soil over the dug wake, face back to the mouth. The strip hangs
-        // from the moving face (the tile offset pins the grain to the WORLD).
-        b.cut.y = faceY;
-        b.cut.setSize(b.cut.width, Math.max(1, cutH)).setVisible(cutH > 0.5);
-        b.cut.tilePositionY = faceY;
+        // The soil strip in the wake is no longer shown — the ditch sprite is
+        // what gets uncovered as the grass recedes. (The cut sprite is kept only
+        // so its width still feeds the foam-finger layout.)
 
         // Soil chips off the face while cutting.
         tn.debrisAcc += dt;
@@ -1267,13 +1490,20 @@ console.log(
         const done = (o) => () => { o.setVisible(false); tn.chips.push(o); };
 
         const cols = TN.DEBRIS_COLORS;
+        const midCol = cols[0], endCol = cols[cols.length - 1];
         const n = 10 + Math.floor(Math.random() * 7);
         for (let i = 0; i < n; i++) {
+            const off  = Math.random() - 0.5;          // -0.5..0.5 across the blade
+            const frac = Math.abs(off) * 2;            // 0 centre .. 1 at either end
+            // Squared so the middle colour dominates and the end tint only shows
+            // out at the two extremes of the spray.
+            const tint = this._lerpColor(midCol, endCol, frac * frac);
             const chip = grab('debris_chip', 2.3)
-                .setTint(cols[Math.floor(Math.random() * cols.length)])
-                .setPosition(b.x + (Math.random() - 0.5) * b.shaft.width * 0.9,
+                .setTint(tint)
+                .setAngle(Math.random() * 90)          // varied square orientation
+                .setPosition(b.x + off * b.shaft.width * 0.9,
                              faceY + Math.random() * tn.bodyH * 0.5)
-                .setScale(1.0 + Math.random() * 1.2)
+                .setScale(0.8 + Math.random() * 0.8)
                 .setAlpha(1);
             this.tweens.add({
                 targets:  chip,
@@ -1370,6 +1600,14 @@ console.log(
     _maybePan() {
         const E = this.endless;
         if (!E || !E.nextReady || E.panning) return;
+        // Don't move on until the finished band's branches have all filled —
+        // let the water reach the end of every ditch first.
+        for (const seg of this.segments) {
+            if (seg.tunnel && seg.tunnel.open && !this._floodDone(seg.tunnel)) {
+                this.time.delayedCall(300, () => this._maybePan());
+                return;
+            }
+        }
         E.panning  = true;
         E.nextReady = false;
         this.tweens.add({
@@ -4966,6 +5204,8 @@ console.log(
     update(time) {
         // Drive the boring machine — and the water it leaves behind.
         if (this.tunnel) this._updateTunnel(time);
+        // Spread water from the main canal into the pre-built side branches.
+        this._updateFlood(time);
     }
 }
 
