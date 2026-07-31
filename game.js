@@ -919,9 +919,14 @@ console.log(
         }
         const gfx = this._addB(this.add.graphics().setDepth(1.58), seg);
         gfx._noRebase = true;                        // foam, redrawn in world coords each frame
+        // Clip the foam to each head's channel width so bubbles never spill past
+        // the banks (the mask is a per-head strip, redrawn each frame).
+        const foamMask = this._addB(this.add.graphics().setVisible(false), seg);
+        foamMask._noRebase = true;
+        gfx.setMask(foamMask.createGeometryMask());
         return { g, cells, active: [], triggered: new Set(),
                  mainLeftCol: g.mainLeftCol, mainRightCol: g.mainRightCol,
-                 gfx, channelW: this.road.canalW,
+                 gfx, foamMask, channelW: this.road.canalW,
                  seg, heads: [], headFrame: CONFIG.ROAD.TILEMAP.HEAD_FRAME };
     }
 
@@ -1020,6 +1025,7 @@ console.log(
         //    water reads as a flowing front, not a sliding bar.
         const gfx = F.gfx;
         gfx.clear();
+        F.foamMask.clear().fillStyle(0xffffff, 1);   // rebuilt per head below
         for (const cell of F.cells.values()) {
             if (cell.isMain) this._revealCrop(cell.dry, cell.dryP, 's');
             this._revealCrop(cell.flow, cell.progress, cell.entryDir);
@@ -1049,6 +1055,10 @@ console.log(
             }
             spr.setVisible(true).setPosition(x, y).setDisplaySize(ew, eh);
             hi++;
+            // Mask strip: channel-wide across, long along the flow (so the
+            // forward foam bulge isn't clipped, only the sides).
+            if (horiz) F.foamMask.fillRect(x - chW, y - chW / 2, 2 * chW, chW);
+            else       F.foamMask.fillRect(x - chW / 2, y - chW, chW, 2 * chW);
             this._drawHeadFoam(gfx, x, y, mx, my, chW, time);
         };
 
@@ -1077,18 +1087,29 @@ console.log(
         for (let k = hi; k < F.heads.length; k++) F.heads[k].setVisible(false);
     }
 
-    // White foam bubbles clustered at a head's leading tip — a few small
-    // jittering circles, not a solid cap, so it reads as churn, not a ring.
+    // White foam filling a forward-bulging SEMICIRCLE: a jittered grid of
+    // overlapping circles covering the half-disc (flat base across the channel,
+    // rounded front in the flow direction) — a solid churned crest, not an arc.
     _drawHeadFoam(gfx, x, y, mx, my, chW, time) {
         const WA = CONFIG.ROAD.WATER;
         gfx.fillStyle(WA.FOAM_COLOR !== undefined ? WA.FOAM_COLOR : 0xffffff,
-                      WA.FOAM_ALPHA !== undefined ? WA.FOAM_ALPHA : 0.85);
-        const tx = x + mx * chW * 0.32, ty = y + my * chW * 0.32;   // the leading tip
-        for (let i = 0; i < 4; i++) {
-            const a  = i * 1.7 + time / 220;
-            const jx = Math.cos(a) * chW * 0.24, jy = Math.sin(a * 1.3) * chW * 0.24;
-            const r  = chW * 0.13 * (0.7 + 0.3 * Math.sin(time / 160 + i * 2));
-            gfx.fillCircle(tx + jx, ty + jy, r);
+                      WA.FOAM_ALPHA !== undefined ? WA.FOAM_ALPHA : 0.9);
+        const px = -my, py = mx;            // across-channel axis
+        const R  = chW * 0.5;               // radius — base spans the channel
+        const base = chW * 0.14;
+        const cr   = base * 3;              // circle width ×3 — fuller, blobbier foam
+        const step = base * 1.15;           // spacing kept, so they overlap heavily
+        let i = 0;
+        for (let a = -R; a <= R + 0.001; a += step) {
+            const fMax = Math.sqrt(Math.max(0, R * R - a * a));   // half-disc front
+            for (let f = 0; f <= fMax + 0.001; f += step) {
+                const seed = ++i * 12.9898 + 4.1;
+                const ja = Math.sin(seed + time / 180) * step * 0.35;
+                const jf = Math.cos(seed * 1.7 + time / 150) * step * 0.35;
+                const cx = x + px * (a + ja) + mx * (f + jf);
+                const cy = y + py * (a + ja) + my * (f + jf);
+                gfx.fillCircle(cx, cy, cr * (0.8 + 0.2 * Math.sin(time / 130 + i)));
+            }
         }
     }
 
