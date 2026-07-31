@@ -437,6 +437,13 @@ var CONFIG = {
                                     // wet, left→right, top→bottom)
             FLOW_SPEED: 0,          // branch-water speed (px/s @ platformScale).
                                     // 0 = match the main canal (WATER.MIN_SPEED)
+            END_FILL: 0.8,          // a dead-end tile's channel closes inside it,
+                                    // so water fills only this fraction of the
+                                    // tile (up to the closing), not the full edge
+            HEAD_END_STOP: 0.5,     // on a dead-end tile the head stops at this
+                                    // fraction (its foam would otherwise bulge
+                                    // over the rounded closing); the water still
+                                    // fills quietly on to END_FILL
 
             BASE_LAYER: 'base',            // grass + dry branches (always shown)
             MAIN_LAYER: 'main_canal_dry',  // main canal, revealed as it's dug

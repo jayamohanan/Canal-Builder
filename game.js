@@ -909,8 +909,12 @@ console.log(
                 const bConn   = this._connOfGid(baseGid);
                 if (bConn.n || bConn.e || bConn.s || bConn.w) {
                     // Branch cell — dry tile already static; filled twin only.
+                    // A single-connection tile is a dead end (its channel closes
+                    // inside), so its water stops short of the far edge.
+                    const nConn = (bConn.n ? 1 : 0) + (bConn.e ? 1 : 0)
+                                + (bConn.s ? 1 : 0) + (bConn.w ? 1 : 0);
                     cells.set(c + ',' + r, {
-                        col: c, row: r, conn: bConn, progress: 0,
+                        col: c, row: r, conn: bConn, progress: 0, isEnd: nConn === 1,
                         entryDir: null, filling: false, filled: false, isMain: false,
                         dry: null, flow: sprite(baseGid + off, c, r, 1.55),
                     });
@@ -928,31 +932,38 @@ console.log(
                  mainLeftCol: g.mainLeftCol, mainRightCol: g.mainRightCol,
                  foamMask, blobMask: foamMask.createGeometryMask(),
                  channelW: this.road.canalW, seg,
-                 heads: [], foamBlobs: [], headFrame: CONFIG.ROAD.TILEMAP.HEAD_FRAME };
+                 heads: [], foamBlobs: [], foamWhite: [],
+                 headFrame: CONFIG.ROAD.TILEMAP.HEAD_FRAME };
     }
 
-    // Bake the foam blob: the plain water frame lightened 30% toward white and
-    // faded to a soft ellipse at the edges, so foam sprites carry the water
-    // texture rather than a flat colour.
+    // Bake the foam textures: a water-texture soft ellipse ('foam_blob') and a
+    // matching WHITE soft ellipse ('foam_white') used as a larger backing so
+    // each blob gets a white rim.
     _ensureFoamBlobTexture() {
         if (this.textures.exists('foam_blob')) return;
         const S = 64;
+        const softEllipse = (ctx) => {              // erase to a soft ellipse
+            ctx.globalCompositeOperation = 'destination-in';
+            const grad = ctx.createRadialGradient(S / 2, S / 2, S * 0.12, S / 2, S / 2, S * 0.5);
+            grad.addColorStop(0, 'rgba(0,0,0,1)');
+            grad.addColorStop(0.72, 'rgba(0,0,0,1)');
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = grad; ctx.fillRect(0, 0, S, S);
+            ctx.globalCompositeOperation = 'source-over';
+        };
+        // Water blob.
         const tex   = this.textures.get('canal_sheet');
         const frame = tex.get(CONFIG.ROAD.TILEMAP.HEAD_FRAME);
-        const canvas = this.textures.createCanvas('foam_blob', S, S);
-        const ctx = canvas.getContext();
-        ctx.drawImage(tex.getSourceImage(), frame.cutX, frame.cutY,
-                      frame.cutWidth, frame.cutHeight, 0, 0, S, S);   // water texture
-        ctx.globalAlpha = 0.2; ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, S, S); ctx.globalAlpha = 1;                // 20% white
-        ctx.globalCompositeOperation = 'destination-in';             // soft ellipse alpha
-        const grad = ctx.createRadialGradient(S / 2, S / 2, S * 0.12, S / 2, S / 2, S * 0.5);
-        grad.addColorStop(0, 'rgba(0,0,0,1)');
-        grad.addColorStop(0.72, 'rgba(0,0,0,1)');
-        grad.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = grad; ctx.fillRect(0, 0, S, S);
-        ctx.globalCompositeOperation = 'source-over';
-        canvas.refresh();
+        const blob  = this.textures.createCanvas('foam_blob', S, S);
+        const bctx  = blob.getContext();
+        bctx.drawImage(tex.getSourceImage(), frame.cutX, frame.cutY,
+                       frame.cutWidth, frame.cutHeight, 0, 0, S, S);
+        softEllipse(bctx); blob.refresh();
+        // White backing.
+        const white = this.textures.createCanvas('foam_white', S, S);
+        const wctx  = white.getContext();
+        wctx.fillStyle = '#ffffff'; wctx.fillRect(0, 0, S, S);
+        softEllipse(wctx); white.refresh();
     }
 
     // Advance EVERY band's branch water — not just the active tunnel's. Once
@@ -1026,9 +1037,20 @@ console.log(
         //    water rounds the corner instead of waiting for the tile to fill;
         //    the straight-through continuation carries on at the far edge.
         if (dt > 0) {
+            const endFill = CONFIG.ROAD.TILEMAP.END_FILL || 0.8;
+            const endStop = CONFIG.ROAD.TILEMAP.HEAD_END_STOP || 0.5;
             for (const cell of F.active) {
                 if (cell.filled) continue;
-                cell.progress = Math.min(1, cell.progress + speed * dt / g.tile);
+                const cap = cell.isEnd ? endFill : 1;   // dead ends stop at the closing
+                cell.progress = Math.min(cap, cell.progress + speed * dt / g.tile);
+                // Dead end: once the head reaches the stop point, SNAP the rest of
+                // the tile full instantly (no slow fill behind a vanished head) and
+                // finish — so the head never overruns the rounded closing.
+                if (cell.isEnd && cell.progress >= endStop) {
+                    cell.progress = cap;
+                    cell.filled = true;
+                    continue;
+                }
                 const through = cell.entryDir ? DIR[cell.entryDir][2] : null;
                 if (!cell.split && cell.progress >= 0.5) {
                     cell.split = true;
@@ -1036,7 +1058,7 @@ console.log(
                         if (cell.conn[d] && d !== cell.entryDir && d !== through) spawn(cell, d);
                     }
                 }
-                if (cell.progress >= 1) {
+                if (cell.progress >= cap) {
                     cell.filled = true;
                     if (through && cell.conn[through]) spawn(cell, through);
                 }
@@ -1086,7 +1108,10 @@ console.log(
         };
 
         for (const cell of F.active) {
-            if (cell.filled || cell.progress <= 0.02 || cell.progress >= 0.99) continue;
+            // Shown for every still-filling cell. A dead end is snapped to
+            // `filled` the instant its head hits the stop point (see step 2),
+            // so this skip also drops its head there — no overrun, no gap.
+            if (cell.filled) continue;
             const cx = g.left + (cell.col + 0.5) * g.tile;
             const cy = tn.exitY + (cell.row + 0.5) * g.tile;
             const half = g.tile / 2, p = cell.progress;
@@ -1109,6 +1134,7 @@ console.log(
         }
         for (let k = hi; k < F.heads.length; k++) F.heads[k].setVisible(false);
         for (let k = fbi; k < F.foamBlobs.length; k++) F.foamBlobs[k].setVisible(false);
+        for (let k = fbi; k < F.foamWhite.length; k++) F.foamWhite[k].setVisible(false);
     }
 
     // Foam: a few big overlapping textured blobs (long axis along the flow)
@@ -1126,6 +1152,7 @@ console.log(
         const across   = chW * 0.5;         // blob across-diameter
         const LONG     = 1.8;               // stretched along the flow
         const WIDE     = 2;                 // across (perpendicular) side ×2
+        const RIM      = 1.18;              // white backing this much larger → rim
         for (let i = 0; i < n; i++) {
             const t   = (i / (n - 1)) * 2 - 1;                 // -1..1 across
             const fwd = baseFwd + arcDepth * (1 - t * t);      // parabolic forward bow
@@ -1133,17 +1160,22 @@ console.log(
             const cx  = x + px * (t * spread) + mx * (fwd + jit);
             const cy  = y + py * (t * spread) + my * (fwd + jit);
             const d   = across * (0.85 + 0.15 * Math.sin(time / 130 + i));
-            let spr = F.foamBlobs[fbi];
-            if (!spr) {
-                spr = this._addB(this.add.image(0, 0, 'foam_blob')
-                    .setDepth(1.53).setVisible(false), F.seg);   // below the water (1.55)
-                spr._noRebase = true;
-                spr.setMask(F.blobMask);
-                F.foamBlobs.push(spr);
-            }
             const alongD = d * LONG, acrossD = d * WIDE;   // along flow / perpendicular
-            spr.setVisible(true).setPosition(cx, cy)
-               .setDisplaySize(horiz ? alongD : acrossD, horiz ? acrossD : alongD);
+            const ew = horiz ? alongD : acrossD, eh = horiz ? acrossD : alongD;
+            const grab = (pool, tex, depth) => {
+                let s = pool[fbi];
+                if (!s) {
+                    s = this._addB(this.add.image(0, 0, tex).setDepth(depth).setVisible(false), F.seg);
+                    s._noRebase = true; s.setMask(F.blobMask); pool.push(s);
+                }
+                return s;
+            };
+            // White backing (larger, behind), then the water blob on top —
+            // both share the position/size so the rim animates with the blob.
+            grab(F.foamWhite, 'foam_white', 1.525).setVisible(true)
+                .setPosition(cx, cy).setDisplaySize(ew * RIM, eh * RIM);
+            grab(F.foamBlobs, 'foam_blob', 1.53).setVisible(true)
+                .setPosition(cx, cy).setDisplaySize(ew, eh);
             fbi++;
         }
         return fbi;
