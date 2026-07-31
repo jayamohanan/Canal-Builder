@@ -945,15 +945,9 @@ console.log(
 
     _updateFloodOne(tn, dt, time) {
         const F  = tn.flood, g = F.g;
-        // Flow at the SAME px/s as the main canal (its steady creep floor),
-        // unless overridden — so a cell fills in tile/speed seconds.
+        // Smooth continuous speed — the branches flow at the main canal's pace.
         const speed = (CONFIG.ROAD.TILEMAP.FLOW_SPEED || CONFIG.ROAD.WATER.MIN_SPEED || 30)
                     * this.layoutConfig.platformScale;
-        // The main canal advances in beats (it waits on the auger's pulse), so
-        // branches surge-and-pause on the same beat rather than gliding
-        // linearly. Each cell is offset a little, so heads don't move in unison.
-        const PULSE = Math.max(0.1, (CONFIG.ROAD.TUNNEL.PULSE_MS || 450) / 1000);
-        const ON    = 0.55;                          // fraction of the beat spent moving
         // [dCol, dRow, oppositeEdge] per direction.
         const DIR  = { n: [0, -1, 's'], e: [1, 0, 'w'], s: [0, 1, 'n'], w: [-1, 0, 'e'] };
 
@@ -962,6 +956,11 @@ console.log(
             if (!cell || cell.filling || cell.filled || cell.isMain) return;
             cell.entryDir = entryDir; cell.filling = true; cell.progress = 0;
             F.active.push(cell);
+        };
+        const spawn = (cell, d) => {          // send water into the neighbour in dir d
+            const [dc, dr, opp] = DIR[d];
+            const nb = F.cells.get((cell.col + dc) + ',' + (cell.row + dr));
+            if (nb && nb.conn[opp]) activate(cell.col + dc, cell.row + dr, opp);
         };
 
         // 0. Main canal: bottom→up, TWO reveals per cell. The DRY tile follows
@@ -991,48 +990,77 @@ console.log(
             }
         }
 
-        // 2. Advance every filling cell; when one is full it feeds its onward
-        //    neighbours (all its open edges except the one it came in by).
+        // 2. Advance every filling cell smoothly. A TURN (a branch perpendicular
+        //    to the flow) starts the moment the front passes the cell centre, so
+        //    water rounds the corner instead of waiting for the tile to fill;
+        //    the straight-through continuation carries on at the far edge.
         if (dt > 0) {
             for (const cell of F.active) {
                 if (cell.filled) continue;
-                // Stepped advance: only move during the "on" part of the beat,
-                // sped up so the average still equals `speed`.
-                const phase = (cell.col * 0.37 + cell.row * 0.61) % 1;
-                const beat  = ((time / 1000) / PULSE + phase) % 1;
-                if (beat < ON) {
-                    cell.progress = Math.min(1, cell.progress + (speed / ON) * dt / g.tile);
+                cell.progress = Math.min(1, cell.progress + speed * dt / g.tile);
+                const through = cell.entryDir ? DIR[cell.entryDir][2] : null;
+                if (!cell.split && cell.progress >= 0.5) {
+                    cell.split = true;
+                    for (const d of ['n', 'e', 's', 'w']) {
+                        if (cell.conn[d] && d !== cell.entryDir && d !== through) spawn(cell, d);
+                    }
                 }
                 if (cell.progress >= 1) {
                     cell.filled = true;
-                    for (const d of ['n', 'e', 's', 'w']) {
-                        if (!cell.conn[d] || d === cell.entryDir) continue;
-                        const [dc, dr, opp] = DIR[d];
-                        const nb = F.cells.get((cell.col + dc) + ',' + (cell.row + dr));
-                        if (nb && nb.conn[opp] && !nb.filling && !nb.filled) {
-                            activate(cell.col + dc, cell.row + dr, opp);
-                        }
-                    }
+                    if (through && cell.conn[through]) spawn(cell, through);
                 }
             }
         }
 
-        // 3. Reveal sprites, and draw a wavering white foam cap at every
-        //    still-advancing head. Main cells reveal the DRY tile (by the dig)
-        //    then the FILLED tile (by the water); branches reveal only FILLED.
-        //    Foam is in world coords (tn.exitY rebases) so it tracks the band.
-        const WA  = CONFIG.ROAD.WATER;
+        // 3. Reveal sprites (the wet TRAIL), then draw a rounded head at each
+        //    advancing front. Main cells reveal the DRY tile (by the dig) then
+        //    the FILLED tile (by the water); branches reveal only FILLED. The
+        //    head sits on the reveal edge and hides its straight line, so the
+        //    water reads as a flowing front, not a sliding bar.
         const gfx = F.gfx;
         gfx.clear();
-        gfx.fillStyle(WA.FOAM_COLOR !== undefined ? WA.FOAM_COLOR : 0xffffff,
-                      WA.FOAM_ALPHA !== undefined ? WA.FOAM_ALPHA : 0.9);
         for (const cell of F.cells.values()) {
             if (cell.isMain) this._revealCrop(cell.dry, cell.dryP, 's');
             this._revealCrop(cell.flow, cell.progress, cell.entryDir);
-            if (cell.entryDir && cell.progress > 0.001 && cell.progress < 0.999) {
-                this._drawCellFoam(gfx, tn, cell, time);
-            }
         }
+        // Branch heads: one per still-advancing branch cell, at its front.
+        for (const cell of F.active) {
+            if (cell.filled || cell.progress <= 0.02 || cell.progress >= 0.99) continue;
+            const cx = g.left + (cell.col + 0.5) * g.tile;
+            const cy = tn.exitY + (cell.row + 0.5) * g.tile;
+            const half = g.tile / 2, p = cell.progress;
+            let fx = cx, fy = cy, horiz = true;
+            switch (cell.entryDir) {
+                case 'w': fx = cx - half + p * g.tile; break;
+                case 'e': fx = cx + half - p * g.tile; break;
+                case 'n': fy = cy - half + p * g.tile; horiz = false; break;
+                case 's': fy = cy + half - p * g.tile; horiz = false; break;
+            }
+            this._drawHead(gfx, fx, fy, horiz, g.tile * 0.5, time);
+        }
+        // Main-canal head: one rounded front across the 2-wide channel, riding
+        // the waterline as it climbs.
+        if (tn.wet > 1 && tn.wet < tn.len - 1) {
+            const cx = g.left + F.mainRightCol * g.tile;      // centre of the two columns
+            const wy = tn.exitY + tn.len - tn.wet;            // waterline (world Y)
+            this._drawHead(gfx, cx, wy, false, g.mainW * g.tile * 0.55, time);
+        }
+    }
+
+    // A simple, casual water head: a bright rounded bulge with a white foam
+    // core, bobbing a little. `horiz` = channel runs left-right (head is tall);
+    // otherwise it's wide. `chW` is the channel cross-width.
+    _drawHead(gfx, x, y, horiz, chW, time) {
+        const WA  = CONFIG.ROAD.WATER;
+        const bob = 1 + 0.12 * Math.sin(time / 110 + x * 0.06 + y * 0.06);
+        const across = chW * 1.0 * bob;                // bulge across the channel
+        const along  = chW * 0.6;                      // shorter along the flow
+        const ew = horiz ? along : across, eh = horiz ? across : along;
+        gfx.fillStyle(WA.EDGE_COLOR !== undefined ? WA.EDGE_COLOR : 0x7fd4f0, 1);
+        gfx.fillEllipse(x, y, ew, eh);
+        gfx.fillStyle(WA.FOAM_COLOR !== undefined ? WA.FOAM_COLOR : 0xffffff,
+                      WA.FOAM_ALPHA !== undefined ? WA.FOAM_ALPHA : 0.9);
+        gfx.fillEllipse(x, y, ew * 0.5, eh * 0.5);
     }
 
     // Reveal a sprite up to fraction `p`, cropping from the edge `dir` faces
@@ -1049,38 +1077,6 @@ console.log(
             case 'n': spr.setCrop(0, 0, W, H * p); break;
             case 's': spr.setCrop(0, H * (1 - p), W, H * p); break;
             default:  spr.setCrop();
-        }
-    }
-
-    // A wavering white foam cap straddling a filling cell's advancing head —
-    // fingers of varying length so it jitters like the main canal's front.
-    _drawCellFoam(gfx, tn, cell, time) {
-        const WA = CONFIG.ROAD.WATER;
-        const g  = tn.flood.g;
-        // Each cell is one tile; the two main columns tile together on their own.
-        const cw = g.tile;
-        const cx = g.left + (cell.col + 0.5) * g.tile;
-        const cy = tn.exitY + (cell.row + 0.5) * g.tile;
-        const half = g.tile / 2;
-        const horiz = (cell.entryDir === 'w' || cell.entryDir === 'e');
-        const sign  = (cell.entryDir === 'w' || cell.entryDir === 'n') ? 1 : -1;
-        const uEntry = horiz ? (cell.entryDir === 'w' ? cx - half : cx + half)
-                             : (cell.entryDir === 'n' ? cy - half : cy + half);
-        const vC    = horiz ? cy : cx;
-        const uFront = uEntry + sign * cell.progress * g.tile;
-        const cols  = Math.max(3, WA.FRONT_COLS || 7);
-        const sw    = cw / cols;
-        const foamW = Math.max(1, (WA.FOAM || 4) * this.layoutConfig.platformScale);
-        for (let i = 0; i < cols; i++) {
-            const ph = i * 1.7 + (cell.col + cell.row) * 0.9;
-            const wv = 0.5 + 0.25 * Math.sin(time / 260 + ph)
-                           + 0.25 * Math.sin(time / 430 + ph * 2.3);
-            const back = foamW * (0.4 + 1.6 * wv);        // length behind the front
-            const u1 = uFront - sign * back, u2 = uFront;
-            const ua = Math.min(u1, u2), ub = Math.max(u1, u2);
-            const v1 = vC - cw / 2 + i * sw;
-            if (horiz) gfx.fillRect(ua, v1, ub - ua, sw);
-            else       gfx.fillRect(v1, ua, sw, ub - ua);
         }
     }
 
