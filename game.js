@@ -1076,13 +1076,14 @@ console.log(
             this._revealCrop(cell.flow, cell.progress, cell.entryDir);
         }
 
+        // Channel widths (the gap between banks): one tile's fraction for a
+        // branch; for the N-wide main only the two outer walls eat in.
+        const cf      = CONFIG.ROAD.TILEMAP.CHANNEL_FRAC || 0.5;
+
         // Heads: a bulge of the WATER TEXTURE at each front (a pooled sprite of
         // the plain water frame), with textured foam blobs churning at the
         // leading edge — the blobs sit below the revealed water so it swallows
         // them behind its edge.
-        // Channel widths (the gap between banks): one tile's fraction for a
-        // branch; for the N-wide main only the two outer walls eat in.
-        const cf      = CONFIG.ROAD.TILEMAP.CHANNEL_FRAC || 0.5;
         const fit     = CONFIG.ROAD.TILEMAP.HEAD_FIT || 1;
         const branchW = g.tile * cf * fit;
         const mainChW = g.tile * (g.mainW - 1 + cf) * fit;   // sits inside the banks
