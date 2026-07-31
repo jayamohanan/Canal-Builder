@@ -836,7 +836,8 @@ console.log(
                         g.left + (col + 0.5) * g.tile,
                         gTop   + (row + 0.5) * g.tile,
                         'canal_sheet', gid - this.tileFirstGid)
-                    .setDisplaySize(g.tile, g.tile)
+                    // +1px so neighbours overlap and no sub-pixel gap shows.
+                    .setDisplaySize(g.tile + 1, g.tile + 1)
                     .setDepth(1.5), seg);
             }
         }
@@ -887,7 +888,7 @@ console.log(
         const sprite = (gid, c, r, depth) => this._addB(this.add.image(
                 g.left + c * g.tile, gTop + r * g.tile,
                 'canal_sheet', gid - this.tileFirstGid)
-            .setOrigin(0, 0).setDisplaySize(g.tile, g.tile)
+            .setOrigin(0, 0).setDisplaySize(g.tile + 1, g.tile + 1)   // +1px overlap
             .setDepth(depth).setVisible(false), seg);
 
         for (let r = 0; r < g.rows; r++) {
