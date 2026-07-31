@@ -306,7 +306,10 @@ class GameScene extends Phaser.Scene {
         const TM = CONFIG.ROAD && CONFIG.ROAD.TILEMAP;
         if (TM && TM.ENABLED) {
             this.load.json('level_map', TM.FILE);
-            for (const k of TM.KEYS) this.load.image('tile_' + k, `graphics/tiles/${k}.png`);
+            // One spritesheet of 128px frames — dry AND water-filled tiles are
+            // all frames in it; TILES maps gids to meaning + filled frame.
+            this.load.spritesheet('canal_sheet', TM.SHEET,
+                { frameWidth: TM.FRAME, frameHeight: TM.FRAME });
         }
 
         // Load gadget sprites from gadgetData.js
@@ -367,9 +370,6 @@ console.log(
   `DPR=${dpr} ` +
   `physicalScreen=${Math.round(c.clientWidth*dpr)}x${Math.round(c.clientHeight*dpr)}`  // what the screen really has
 );
-
-
-
 
         this.assets = new AssetManager(this);
         const W = this.scale.width;
@@ -669,19 +669,26 @@ console.log(
             const cols = map.width, rows = map.height;
             const tile = Math.min((bottom - top) / rows, B.width / cols);
             const gw   = cols * tile, gh = rows * tile;
+            // The two centre columns are the 2-wide main canal.
+            const mainW = TM.MAIN_TILES || 2;
+            const mainRightCol = Math.floor(cols / 2);
+            const mainLeftCol  = mainRightCol - (mainW - 1);
+            const layer = (name) => {
+                const L = map.layers.find((l) => l.name === name);
+                return L ? L.data : null;
+            };
             this.tileGrid = {
                 cols, rows, tile,
                 left: B.x + (B.width - gw) / 2,   // centred horizontally
                 w: gw, h: gh,
-                data: map.layers[0].data,
+                baseData: layer(TM.BASE_LAYER) || map.layers[0].data,  // grass + branches
+                mainData: layer(TM.MAIN_LAYER) || [],                  // dug main canal
+                mainLeftCol, mainRightCol, mainW,
             };
-            // gid → texture key, read straight from the embedded tileset.
-            const ts = map.tilesets[0];
-            this.tileGidKey = {};
-            for (const t of ts.tiles) {
-                const key = t.image.split('/').pop().replace(/\.[^.]+$/, '');
-                this.tileGidKey[ts.firstgid + t.id] = key;
-            }
+            // The spritesheet frame for a gid is (gid - firstgid); TILES gives
+            // each gid its meaning. The water-filled twin is FLOW_OFFSET later.
+            this.tileFirstGid = map.tilesets[0].firstgid;
+            this.tileMeta = TM.TILES || {};
         }
 
         // ── Endless mode: a second camera owns the landscape ──────────────
@@ -817,36 +824,35 @@ console.log(
         const g    = this.tileGrid;
         const gTop = bandBot - g.h;            // anchor grid to the band's bottom
 
-        // No green backdrop — the tiles fill the band themselves.
+        // The BASE layer — grass everywhere + the pre-built dry branches — is
+        // drawn statically and always visible (each cell a spritesheet frame).
+        // The main canal (main_canal_dry layer) is NOT drawn here; the flood
+        // system reveals it as the auger digs.
         for (let row = 0; row < g.rows; row++) {
             for (let col = 0; col < g.cols; col++) {
-                const gid = g.data[row * g.cols + col];
+                const gid = g.baseData[row * g.cols + col];
                 if (!gid) continue;
-                const key = this.tileGidKey[gid];
-                if (!key || !this.textures.exists('tile_' + key)) continue;
                 this._addB(this.add.image(
                         g.left + (col + 0.5) * g.tile,
                         gTop   + (row + 0.5) * g.tile,
-                        'tile_' + key)
+                        'canal_sheet', gid - this.tileFirstGid)
                     .setDisplaySize(g.tile, g.tile)
                     .setDepth(1.5), seg);
             }
         }
 
-        // The auger digs the CENTRE column (the main canal), bottom → top of
-        // the grid, filling it with water in its wake — drawn above the tiles.
-        const centreCol = Math.floor(g.cols / 2);
+        // The auger digs the 2-wide main canal (the two centre columns),
+        // bottom → top, filling it with water in its wake.
         const band = {
-            cx:      g.left + (centreCol + 0.5) * g.tile,
+            cx:      g.left + (g.mainRightCol) * g.tile,  // boundary between the two
             headY:   gTop + g.h,           // dig starts at the grid's bottom edge
             bandTop: gTop,                 // …and climbs to its top edge
             bandBot: gTop + g.h,
         };
         seg.band = band;
         this.road.band = band;
-        // The dug channel spans most of one column, so the water and machine
-        // sit inside the centre tiles' ditch.
-        this.road.canalW = g.tile * (CONFIG.ROAD.TILEMAP.CANAL_FRACTION || 0.55);
+        // The dug channel is the full width of the main-canal columns.
+        this.road.canalW = g.mainW * g.tile;
         this.createTunnel(band, seg);
     }
 
@@ -857,45 +863,63 @@ console.log(
     // every 3-/4-way. One graphics object redraws the whole wet network each
     // frame from a simple per-cell fill model, so nothing pops in whole.
 
-    // Parse a tile key ('ditch_nes') into its open edges.
-    _tileConn(key) {
+    // Open edges of a gid, from the TILES metadata (conn string, e.g. 'nsw').
+    _connOfGid(gid) {
         const c = { n: false, e: false, s: false, w: false };
-        if (key && key.startsWith('ditch_')) {
-            for (const ch of key.slice(6)) if (ch in c) c[ch] = true;
-        }
+        const m = this.tileMeta && this.tileMeta[gid];
+        if (m && m.conn) for (const ch of m.conn) if (ch in c) c[ch] = true;
         return c;
     }
 
-    // Build the flood model for a band: every non-centre ditch cell, dry.
-    // Returns null when not in tile-map mode.
-    _buildFlood(seg) {
+    // Build the flood model for a band. Returns null when not in tile-map mode.
+    //  • MAIN cells (main_canal_dry layer, centre columns): the dug canal — a
+    //    hidden DRY sprite revealed as the auger digs, plus a hidden FILLED
+    //    sprite revealed as the waterline rises.
+    //  • BRANCH cells (base layer canal tiles): already drawn dry and visible;
+    //    only a hidden FILLED sprite, revealed by the flood cascade.
+    // Filled sprite = the tile FLOW_OFFSET frames on in the sheet.
+    _buildFlood(seg, band) {
         if (!this.tileGrid) return null;
         const g = this.tileGrid;
-        const centreCol = Math.floor(g.cols / 2);
+        const gTop = band.bandTop;
+        const off  = CONFIG.ROAD.TILEMAP.FLOW_OFFSET || 1;
         const cells = new Map();
+        const sprite = (gid, c, r, depth) => this._addB(this.add.image(
+                g.left + c * g.tile, gTop + r * g.tile,
+                'canal_sheet', gid - this.tileFirstGid)
+            .setOrigin(0, 0).setDisplaySize(g.tile, g.tile)
+            .setDepth(depth).setVisible(false), seg);
+
         for (let r = 0; r < g.rows; r++) {
             for (let c = 0; c < g.cols; c++) {
-                const conn = this._tileConn(this.tileGidKey[g.data[r * g.cols + c]]);
-                if (c === centreCol) {
-                    // The vertical run is the tunnel strip's job; only keep a
-                    // centre cell if it's a junction, to draw the short e/w
-                    // connector arm that bridges the strip to the branch.
-                    if (conn.e || conn.w) {
-                        cells.set(c + ',' + r,
-                            { col: c, row: r, conn, progress: 0, entryDir: null,
-                              filling: false, filled: false, isCentre: true });
-                    }
+                const mainGid = g.mainData[r * g.cols + c] || 0;
+                const mConn   = this._connOfGid(mainGid);
+                if (mConn.n || mConn.e || mConn.s || mConn.w) {
+                    // Main canal cell — dug then watered.
+                    cells.set(c + ',' + r, {
+                        col: c, row: r, conn: mConn, progress: 0, dryP: 0,
+                        entryDir: 's', filling: false, filled: false, isMain: true,
+                        dry:  sprite(mainGid,       c, r, 1.52),  // above base grass
+                        flow: sprite(mainGid + off, c, r, 1.55),
+                    });
                     continue;
                 }
-                if (conn.n || conn.e || conn.s || conn.w) {
-                    cells.set(c + ',' + r,
-                        { col: c, row: r, conn, progress: 0, entryDir: null, filling: false, filled: false });
+                const baseGid = g.baseData[r * g.cols + c] || 0;
+                const bConn   = this._connOfGid(baseGid);
+                if (bConn.n || bConn.e || bConn.s || bConn.w) {
+                    // Branch cell — dry tile already static; filled twin only.
+                    cells.set(c + ',' + r, {
+                        col: c, row: r, conn: bConn, progress: 0,
+                        entryDir: null, filling: false, filled: false, isMain: false,
+                        dry: null, flow: sprite(baseGid + off, c, r, 1.55),
+                    });
                 }
             }
         }
-        const gfx = this._addB(this.add.graphics().setDepth(2.08), seg);
-        gfx._noRebase = true;                        // redrawn in world coords each frame
-        return { g, cells, active: [], triggered: new Set(), centreCol,
+        const gfx = this._addB(this.add.graphics().setDepth(1.58), seg);
+        gfx._noRebase = true;                        // foam, redrawn in world coords each frame
+        return { g, cells, active: [], triggered: new Set(),
+                 mainLeftCol: g.mainLeftCol, mainRightCol: g.mainRightCol,
                  gfx, channelW: this.road.canalW };
     }
 
@@ -934,25 +958,35 @@ console.log(
 
         const activate = (col, row, entryDir) => {
             const cell = F.cells.get(col + ',' + row);
-            if (!cell || cell.filling || cell.filled) return;
+            if (!cell || cell.filling || cell.filled || cell.isMain) return;
             cell.entryDir = entryDir; cell.filling = true; cell.progress = 0;
             F.active.push(cell);
         };
 
-        // 1. Seed branches as the main waterline passes each junction row. The
-        //    waterline has risen `tn.wet` px from the bottom; row r's centre is
-        //    reached at (rows - r - 0.5) tiles up.
+        // 0. Main canal: bottom→up, TWO reveals per cell. The DRY tile follows
+        //    the auger's dig (progressPx, px dug from the bottom); the FILLED
+        //    tile follows the waterline (tn.wet), which lags the blade. Row r's
+        //    bottom edge sits (rows-r-1) tiles up from the bottom.
+        const cellUp = (row) => (g.rows - row - 1) * g.tile;
+        for (const cell of F.cells.values()) {
+            if (!cell.isMain) continue;
+            cell.entryDir = 's';
+            cell.dryP     = Math.max(0, Math.min(1, (tn.progressPx - cellUp(cell.row)) / g.tile));
+            cell.progress = Math.max(0, Math.min(1, (tn.wet        - cellUp(cell.row)) / g.tile));
+            cell.filled   = cell.progress >= 1;
+        }
+
+        // 1. Seed branches as the waterline passes each junction row (its
+        //    centre, (rows-r-0.5) tiles up). The 2-wide main canal's LEFT column
+        //    can open west (from the main_canal_dry layer), its RIGHT east.
         for (let r = 0; r < g.rows; r++) {
             if (F.triggered.has(r)) continue;
             if (tn.wet >= (g.rows - r - 0.5) * g.tile) {
                 F.triggered.add(r);
-                const conn = this._tileConn(this.tileGidKey[g.data[r * g.cols + F.centreCol]]);
-                // Light the junction's connector arm immediately, then feed the
-                // branch cell beside it.
-                const cc = F.cells.get(F.centreCol + ',' + r);
-                if (cc) { cc.filled = true; cc.progress = 1; }
-                if (conn.e) activate(F.centreCol + 1, r, 'w');
-                if (conn.w) activate(F.centreCol - 1, r, 'e');
+                const cL = this._connOfGid(g.mainData[r * g.cols + F.mainLeftCol]);
+                const cR = this._connOfGid(g.mainData[r * g.cols + F.mainRightCol]);
+                if (cL.w) activate(F.mainLeftCol  - 1, r, 'e');
+                if (cR.e) activate(F.mainRightCol + 1, r, 'w');
             }
         }
 
@@ -982,102 +1016,70 @@ console.log(
             }
         }
 
-        // 3. Redraw the whole wet network from scratch (world coords, so a
-        //    rebase that shifts tn.exitY carries the water with it).
+        // 3. Reveal sprites, and draw a wavering white foam cap at every
+        //    still-advancing head. Main cells reveal the DRY tile (by the dig)
+        //    then the FILLED tile (by the water); branches reveal only FILLED.
+        //    Foam is in world coords (tn.exitY rebases) so it tracks the band.
+        const WA  = CONFIG.ROAD.WATER;
         const gfx = F.gfx;
         gfx.clear();
+        gfx.fillStyle(WA.FOAM_COLOR !== undefined ? WA.FOAM_COLOR : 0xffffff,
+                      WA.FOAM_ALPHA !== undefined ? WA.FOAM_ALPHA : 0.9);
         for (const cell of F.cells.values()) {
-            if (cell.progress > 0) this._drawCell(gfx, tn, cell, time);
+            if (cell.isMain) this._revealCrop(cell.dry, cell.dryP, 's');
+            this._revealCrop(cell.flow, cell.progress, cell.entryDir);
+            if (cell.entryDir && cell.progress > 0.001 && cell.progress < 0.999) {
+                this._drawCellFoam(gfx, tn, cell, time);
+            }
         }
     }
 
-    // Draw one cell: a solid body up to the fill front, then a wavering
-    // fingered head (like the main canal's) with a white foam cap on each
-    // finger. Perpendicular junction arms fill once the front passes centre.
-    _drawCell(gfx, tn, cell, time) {
+    // Reveal a sprite up to fraction `p`, cropping from the edge `dir` faces
+    // (so it wipes on in the flow direction). dir 's' → bottom-up.
+    _revealCrop(spr, p, dir) {
+        if (!spr) return;
+        if (p <= 0.001) { if (spr.visible) spr.setVisible(false); return; }
+        if (!spr.visible) spr.setVisible(true);
+        if (p >= 0.999) { spr.setCrop(); return; }        // full — no crop
+        const W = spr.frame.width, H = spr.frame.height;
+        switch (dir) {
+            case 'w': spr.setCrop(0, 0, W * p, H); break;
+            case 'e': spr.setCrop(W * (1 - p), 0, W * p, H); break;
+            case 'n': spr.setCrop(0, 0, W, H * p); break;
+            case 's': spr.setCrop(0, H * (1 - p), W, H * p); break;
+            default:  spr.setCrop();
+        }
+    }
+
+    // A wavering white foam cap straddling a filling cell's advancing head —
+    // fingers of varying length so it jitters like the main canal's front.
+    _drawCellFoam(gfx, tn, cell, time) {
         const WA = CONFIG.ROAD.WATER;
-        const g  = tn.flood.g, cw = tn.flood.channelW;
+        const g  = tn.flood.g;
+        // Each cell is one tile; the two main columns tile together on their own.
+        const cw = g.tile;
         const cx = g.left + (cell.col + 0.5) * g.tile;
         const cy = tn.exitY + (cell.row + 0.5) * g.tile;
         const half = g.tile / 2;
-        gfx.fillStyle(WA.COLOR, 1);
-
-        // Centre junction: short e/w connector arm bridging the tunnel strip.
-        if (cell.isCentre) {
-            gfx.fillRect(cx - cw / 2, cy - cw / 2, cw, cw);
-            if (cell.conn.e) gfx.fillRect(cx,        cy - cw / 2, half, cw);
-            if (cell.conn.w) gfx.fillRect(cx - half, cy - cw / 2, half, cw);
-            return;
-        }
-
-        // A full cell is just the whole channel, no head.
-        if (cell.filled || cell.progress >= 1) {
-            gfx.fillRect(cx - cw / 2, cy - cw / 2, cw, cw);
-            if (cell.conn.n) gfx.fillRect(cx - cw / 2, cy - half, cw, half);
-            if (cell.conn.s) gfx.fillRect(cx - cw / 2, cy,        cw, half);
-            if (cell.conn.w) gfx.fillRect(cx - half,   cy - cw / 2, half, cw);
-            if (cell.conn.e) gfx.fillRect(cx,          cy - cw / 2, half, cw);
-            return;
-        }
-
-        // ── Filling: draw along the flow axis, fingered head at the front ───
         const horiz = (cell.entryDir === 'w' || cell.entryDir === 'e');
         const sign  = (cell.entryDir === 'w' || cell.entryDir === 'n') ? 1 : -1;
         const uEntry = horiz ? (cell.entryDir === 'w' ? cx - half : cx + half)
                              : (cell.entryDir === 'n' ? cy - half : cy + half);
-        const vC = horiz ? cy : cx;                 // across-axis centre
-        // (u along flow, v across) → fill in (x, y).
-        const rectUV = (u1, u2, v1, v2) => {
-            const ua = Math.min(u1, u2), ub = Math.max(u1, u2);
-            const va = Math.min(v1, v2), vb = Math.max(v1, v2);
-            if (ub <= ua || vb <= va) return;
-            if (horiz) gfx.fillRect(ua, va, ub - ua, vb - va);
-            else       gfx.fillRect(va, ua, vb - va, ub - ua);
-        };
-
-        const d     = cell.progress * g.tile;
-        const fL    = Math.min(d, (WA.FRONT || 12) * this.layoutConfig.platformScale);
-        const bodyD = d - fL;
-        const uBody = uEntry + sign * bodyD;
-
-        // Solid body from the entry edge to the base of the fingers.
-        rectUV(uEntry, uBody, vC - cw / 2, vC + cw / 2);
-
-        // Perpendicular junction arms fill once the front reaches centre.
-        if (d >= half) {
-            if (horiz) {
-                if (cell.conn.n) gfx.fillRect(cx - cw / 2, cy - half, cw, half);
-                if (cell.conn.s) gfx.fillRect(cx - cw / 2, cy,        cw, half);
-            } else {
-                if (cell.conn.w) gfx.fillRect(cx - half, cy - cw / 2, half, cw);
-                if (cell.conn.e) gfx.fillRect(cx,        cy - cw / 2, half, cw);
-            }
-        }
-
-        // Wavering fingers beyond the body front — each its own phase, so the
-        // head jitters like an equaliser instead of a straight line.
-        const cols = Math.max(3, WA.FRONT_COLS || 7);
-        const sw   = cw / cols;
-        const lens = [];
+        const vC    = horiz ? cy : cx;
+        const uFront = uEntry + sign * cell.progress * g.tile;
+        const cols  = Math.max(3, WA.FRONT_COLS || 7);
+        const sw    = cw / cols;
+        const foamW = Math.max(1, (WA.FOAM || 4) * this.layoutConfig.platformScale);
         for (let i = 0; i < cols; i++) {
             const ph = i * 1.7 + (cell.col + cell.row) * 0.9;
-            const w  = 0.5 + 0.25 * Math.sin(time / 260 + ph)
+            const wv = 0.5 + 0.25 * Math.sin(time / 260 + ph)
                            + 0.25 * Math.sin(time / 430 + ph * 2.3);
-            const len = fL * (0.15 + 0.85 * w);
-            lens.push(len);
+            const back = foamW * (0.4 + 1.6 * wv);        // length behind the front
+            const u1 = uFront - sign * back, u2 = uFront;
+            const ua = Math.min(u1, u2), ub = Math.max(u1, u2);
             const v1 = vC - cw / 2 + i * sw;
-            rectUV(uBody, uBody + sign * len, v1, v1 + sw);
-        }
-
-        // White foam cap on each finger tip.
-        const foamW = Math.max(1, (WA.FOAM || 4) * this.layoutConfig.platformScale);
-        gfx.fillStyle(WA.FOAM_COLOR !== undefined ? WA.FOAM_COLOR : 0xffffff,
-                      WA.FOAM_ALPHA !== undefined ? WA.FOAM_ALPHA : 0.9);
-        for (let i = 0; i < cols; i++) {
-            if (lens[i] <= 0.5) continue;
-            const uTip = uBody + sign * lens[i];
-            const v1 = vC - cw / 2 + i * sw;
-            rectUV(uTip - sign * foamW, uTip, v1, v1 + sw);
+            if (horiz) gfx.fillRect(ua, v1, ub - ua, sw);
+            else       gfx.fillRect(v1, ua, sw, ub - ua);
         }
     }
 
@@ -1132,15 +1134,15 @@ console.log(
         // the machine (2.2): wherever the mask has let it through, the water
         // covers the cut; everywhere else the bare soil shows. No side rim —
         // the lit bank line would break the seam where branches join.
-        const roadGfx = this._addB(this.add.graphics().setDepth(2.1), seg);
+        // The blue water strip and its foam are hidden: in tile-map mode the
+        // filled `flow_*` sprites are revealed instead (see the flood system).
+        // The objects are kept so the mask/paint code and foam-finger layout
+        // still have something to write to, but nothing shows.
+        const roadGfx = this._addB(this.add.graphics().setDepth(2.1).setVisible(false), seg);
         roadGfx.fillStyle(WA.COLOR, 1);
         roadGfx.fillRect(band.cx - halfW, exitY, r.canalW, len);
 
-        // Foam at the very tip of the flow. Drawn above the water and NOT
-        // masked — it's only ever painted where the water already reached.
-        // Like the mask it's redrawn from scratch in absolute world coords
-        // every frame, so it must never be shifted by a rebase.
-        const foamGfx = this._addB(this.add.graphics().setDepth(2.15), seg);
+        const foamGfx = this._addB(this.add.graphics().setDepth(2.15).setVisible(false), seg);
         foamGfx._noRebase = true;
 
         const maskShape = this._addB(this.add.graphics().setVisible(false), seg);
@@ -1172,18 +1174,9 @@ console.log(
                           duration: 55, yoyo: true, repeat: -1, paused: true });
         const bore = { x, cut, shaft, tail, head, wobble };
 
-        // Tile-map mode: lay a strip of grass over the whole dug column so it
-        // starts as undug ground. It hangs from the top of the band and its
-        // bottom edge rides the blade — as the machine cuts upward the grass
-        // recedes with it, exposing the ditch (and the water) it leaves behind.
-        // So the auger reads as carving the canal out of the grass.
-        let grass = null;
-        if (this.tileGrid && this.textures.exists('tile_ground')) {
-            const colW = this.tileGrid.tile;
-            const tw   = this.textures.get('tile_ground').getSourceImage().width;
-            grass = this._addB(this.add.tileSprite(x, exitY, colW, len, 'tile_ground')
-                .setOrigin(0.5, 0).setTileScale(colW / tw).setDepth(1.6), seg);
-        }
+        // No grass overlay in tile-map mode — the base layer already shows
+        // grass down the centre, and the flood reveals the dug main-canal tiles
+        // over it as the auger climbs.
 
         // The machine advances off a banked-charge account: one progress
         // value drives the shaft, the mask and the head.
@@ -1191,8 +1184,8 @@ console.log(
             entryY, exitY, len, bladeLen, bodyH, texScale: sc,
             progressPx: 0, earnedPx: 0, open: false, lastTime: 0, pulseT: 0,
             wet: 0,                          // how far the water has actually come
-            bore, maskShape, foam: foamGfx, grass, chips: [], debrisAcc: 0,
-            flood: this._buildFlood(seg),   // branch-canal water (tilemap only)
+            bore, maskShape, foam: foamGfx, chips: [], debrisAcc: 0,
+            flood: this._buildFlood(seg, band),   // canal water (tilemap only)
             seg: seg || null,
             // A dig site built ahead (endless: the NEXT band, while the
             // camera is still down at the current one) stays dormant — no
@@ -1375,9 +1368,6 @@ console.log(
         const cutH  = tn.progressPx;
         const faceY = tn.entryY - tn.progressPx;
         const b     = tn.bore;
-        // Grass recedes with the blade: its bottom edge sits at the face, so
-        // only the not-yet-dug stretch above stays covered.
-        if (tn.grass) tn.grass.height = Math.max(0, tn.len - tn.progressPx);
         if (b.wobble.isPaused()) b.wobble.resume();
         // UV scroll = rotation: the spiral marches along the shaft (spoil
         // being augered back out of the cut). tilePositionY is in SOURCE
@@ -4266,7 +4256,6 @@ console.log(
     //     this.updateBatteryUnlockDisplay(CONFIG.BATTERY_START_LEVEL);
     // }
 
-
     createBatteryUnlockDisplay() {
         if (!CONFIG.BATTERY_UNLOCK_DISPLAY.DISPLAY_CROWN_PANEL) {
             this.unlockDisplayContainer = this.unlockDisplayText = this.unlockDisplayBatteryIcon = null;
@@ -4350,7 +4339,6 @@ console.log(
         await this.assets.ensureBattery(level); // ADD THIS
         const cell = this.gridCells[row][col];
         const iconLvl = getBatteryIconLevel(level);
-
 
         const draggableBg = this.add.rectangle(
             cell.x, cell.y, this.CELL_SIZE, this.CELL_SIZE,
@@ -4485,8 +4473,6 @@ console.log(
     //         delay: 1000, callback: this.checkLevelUpTimer, callbackScope: this, loop: true,
     //     });
     // }
-
-
 
     async createButtons() {
         const W = this.scale.width;
@@ -4720,7 +4706,6 @@ console.log(
     //         this.spawnButtonBg.setTint(0xffffff).setInteractive({ useHandCursor: true });
     //     }
     // }
-
 
     async updateSpawnButton() {
         if (this.highestBatteryLevel >= 9) {

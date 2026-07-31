@@ -411,25 +411,46 @@ var CONFIG = {
         LAND_COLOR:   0x8ed04f,    // the green ground the channel is cut through
 
         // ── Tile map (authored in Tiled) ───────────────────────────────────
-        // When ENABLED, the landscape band is drawn from a Tiled level: a grid
-        // of tile sprites filling the band. The old procedural land + dug canal
-        // are skipped. Tile art lives in graphics/tiles/, one PNG per tile,
-        // named as the tileset image (the .tmj only stores the grid + names).
+        // The landscape band is drawn from a Tiled level: one SPRITESHEET of
+        // 128px frames, placed on a grid. The .tmj stores the grid of gids
+        // (tile numbers); TILES below gives each gid its meaning, since a bare
+        // spritesheet carries no per-tile data.
         TILEMAP: {
             ENABLED: true,
             FILE:    'level_maps/level_01.tmj',
-            CANAL_FRACTION: 0.55,   // dug centre-channel width as a fraction of a
-                                    // tile — sets how wide the auger + water sit
-                                    // inside the main-canal column
+            SHEET:   'graphics/tilesheets/canal_tilesheet.webp',
+            FRAME:   128,           // frame size in the sheet
+            MAIN_TILES: 2,          // the main canal is this many tiles wide
+            FLOW_OFFSET: 1,         // the water-FILLED version of a tile sits this
+                                    // many frames after it in the sheet (dry then
+                                    // wet, left→right, top→bottom)
             FLOW_SPEED: 0,          // branch-water speed (px/s @ platformScale).
-                                    // 0 = match the main canal (WATER.MIN_SPEED),
-                                    // so side channels flow at the same pace;
-                                    // set a value to override
-            KEYS: [                 // every tile PNG in graphics/tiles/ (no ext)
-                'ditch_es', 'ditch_esw', 'ditch_ew', 'ditch_ne', 'ditch_nes',
-                'ditch_nesw', 'ditch_new', 'ditch_ns', 'ditch_nsw', 'ditch_nw',
-                'ditch_sw', 'ground',
-            ],
+                                    // 0 = match the main canal (WATER.MIN_SPEED)
+
+            BASE_LAYER: 'base',            // grass + dry branches (always shown)
+            MAIN_LAYER: 'main_canal_dry',  // main canal, revealed as it's dug
+
+            // gid → meaning. The gid is the number Tiled shows when you hover a
+            // tile. conn = open edges (any of n/e/s/w). main = 'L'/'R' half of
+            // the 2-wide main canal (main-canal tiles only). Tiles with no entry
+            // (e.g. grass 55) are treated as non-canal.
+            TILES: {
+                // main canal (on the main_canal_dry layer)
+                33: { conn: 'ns',  main: 'L' },   // main-left straight
+                51: { conn: 'ns',  main: 'R' },   // main-right straight
+                35: { conn: 'nsw', main: 'L' },   // main-left + west branch
+                49: { conn: 'nse', main: 'R' },   // main-right + east branch
+                // branches (on the base layer)
+                3:  { conn: 'ews' },              // T, branch down
+                5:  { conn: 'ew'  },              // horizontal
+                13: { conn: 'enw' },              // T, branch up
+                15: { conn: 'ns'  },              // vertical
+                19: { conn: 'nw'  },              // corner
+                23: { conn: 'e'   },              // west end (opens E)
+                25: { conn: 'n'   },              // vertical end (opens N)
+                27: { conn: 's'   },              // vertical end (opens S)
+                29: { conn: 'w'   },              // east end (opens W)
+            },
         },
 
         // ── The channel ───────────────────────────────────────────────────
