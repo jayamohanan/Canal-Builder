@@ -542,7 +542,9 @@ var CONFIG = {
             FOAM:       4,         // white cap on the tip of each finger
                                    // (px @ platformScale) — blocky, following the
                                    // same columns as the front itself
-            FOAM_COLOR: 0xffffff,
+            FOAM_COLOR: 0xdcf2fb,  // bluish white — white tinted toward the shallow
+                                   // water (EDGE_COLOR), so the foam sits in the
+                                   // water's palette rather than reading as pure white
             FOAM_ALPHA: 0.9,
         },
     },

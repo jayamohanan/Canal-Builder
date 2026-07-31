@@ -917,17 +917,42 @@ console.log(
                 }
             }
         }
-        const gfx = this._addB(this.add.graphics().setDepth(1.58), seg);
-        gfx._noRebase = true;                        // foam, redrawn in world coords each frame
-        // Clip the foam to each head's channel width so bubbles never spill past
-        // the banks (the mask is a per-head strip, redrawn each frame).
+        // Foam is drawn as textured sprites (water frame + 30% white, soft
+        // ellipse — baked once). They sit BELOW the revealed water (1.55) so the
+        // filling water covers the foam behind its edge and only the leading
+        // churn shows. A per-head strip mask keeps them inside the banks.
+        this._ensureFoamBlobTexture();
         const foamMask = this._addB(this.add.graphics().setVisible(false), seg);
         foamMask._noRebase = true;
-        gfx.setMask(foamMask.createGeometryMask());
         return { g, cells, active: [], triggered: new Set(),
                  mainLeftCol: g.mainLeftCol, mainRightCol: g.mainRightCol,
-                 gfx, foamMask, channelW: this.road.canalW,
-                 seg, heads: [], headFrame: CONFIG.ROAD.TILEMAP.HEAD_FRAME };
+                 foamMask, blobMask: foamMask.createGeometryMask(),
+                 channelW: this.road.canalW, seg,
+                 heads: [], foamBlobs: [], headFrame: CONFIG.ROAD.TILEMAP.HEAD_FRAME };
+    }
+
+    // Bake the foam blob: the plain water frame lightened 30% toward white and
+    // faded to a soft ellipse at the edges, so foam sprites carry the water
+    // texture rather than a flat colour.
+    _ensureFoamBlobTexture() {
+        if (this.textures.exists('foam_blob')) return;
+        const S = 64;
+        const tex   = this.textures.get('canal_sheet');
+        const frame = tex.get(CONFIG.ROAD.TILEMAP.HEAD_FRAME);
+        const canvas = this.textures.createCanvas('foam_blob', S, S);
+        const ctx = canvas.getContext();
+        ctx.drawImage(tex.getSourceImage(), frame.cutX, frame.cutY,
+                      frame.cutWidth, frame.cutHeight, 0, 0, S, S);   // water texture
+        ctx.globalAlpha = 0.2; ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, S, S); ctx.globalAlpha = 1;                // 20% white
+        ctx.globalCompositeOperation = 'destination-in';             // soft ellipse alpha
+        const grad = ctx.createRadialGradient(S / 2, S / 2, S * 0.12, S / 2, S / 2, S * 0.5);
+        grad.addColorStop(0, 'rgba(0,0,0,1)');
+        grad.addColorStop(0.72, 'rgba(0,0,0,1)');
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad; ctx.fillRect(0, 0, S, S);
+        ctx.globalCompositeOperation = 'source-over';
+        canvas.refresh();
     }
 
     // Advance EVERY band's branch water — not just the active tunnel's. Once
@@ -1023,8 +1048,6 @@ console.log(
         //    the FILLED tile (by the water); branches reveal only FILLED. The
         //    head sits on the reveal edge and hides its straight line, so the
         //    water reads as a flowing front, not a sliding bar.
-        const gfx = F.gfx;
-        gfx.clear();
         F.foamMask.clear().fillStyle(0xffffff, 1);   // rebuilt per head below
         for (const cell of F.cells.values()) {
             if (cell.isMain) this._revealCrop(cell.dry, cell.dryP, 's');
@@ -1032,9 +1055,9 @@ console.log(
         }
 
         // Heads: a bulge of the WATER TEXTURE at each front (a pooled sprite of
-        // the plain water frame) with a cluster of white foam bubbles at its
-        // leading tip. The sprite blends into the trail behind; the bubbles hide
-        // the straight reveal edge and give the flow direction.
+        // the plain water frame), with textured foam blobs churning at the
+        // leading edge — the blobs sit below the revealed water so it swallows
+        // them behind its edge.
         // Channel widths (the gap between banks): one tile's fraction for a
         // branch; for the N-wide main only the two outer walls eat in.
         const cf      = CONFIG.ROAD.TILEMAP.CHANNEL_FRAC || 0.5;
@@ -1042,7 +1065,7 @@ console.log(
         const branchW = g.tile * cf * fit;
         const mainChW = g.tile * (g.mainW - 1 + cf) * fit;   // sits inside the banks
         const MOT = { w: [1, 0], e: [-1, 0], n: [0, 1], s: [0, -1] };
-        let hi = 0;
+        let hi = 0, fbi = 0;
         const putHead = (x, y, mx, my, chW) => {
             const horiz = mx !== 0;
             const ew = horiz ? chW * 0.7 : chW, eh = horiz ? chW : chW * 0.7;
@@ -1059,7 +1082,7 @@ console.log(
             // forward foam bulge isn't clipped, only the sides).
             if (horiz) F.foamMask.fillRect(x - chW, y - chW / 2, 2 * chW, chW);
             else       F.foamMask.fillRect(x - chW / 2, y - chW, chW, 2 * chW);
-            this._drawHeadFoam(gfx, x, y, mx, my, chW, time);
+            fbi = this._placeFoamBlobs(F, fbi, x, y, mx, my, chW, time);
         };
 
         for (const cell of F.active) {
@@ -1085,32 +1108,45 @@ console.log(
             putHead(cx, wy, 0, -1, mainChW);
         }
         for (let k = hi; k < F.heads.length; k++) F.heads[k].setVisible(false);
+        for (let k = fbi; k < F.foamBlobs.length; k++) F.foamBlobs[k].setVisible(false);
     }
 
-    // White foam filling a forward-bulging SEMICIRCLE: a jittered grid of
-    // overlapping circles covering the half-disc (flat base across the channel,
-    // rounded front in the flow direction) — a solid churned crest, not an arc.
-    _drawHeadFoam(gfx, x, y, mx, my, chW, time) {
+    // Foam: a few big overlapping textured blobs (long axis along the flow)
+    // laid across the channel in a forward-bowed cluster — deepest at the
+    // centre — so they merge into a forward-bulging crest. Pooled sprites of
+    // the baked foam texture, below the water. Returns the next pool index.
+    _placeFoamBlobs(F, fbi, x, y, mx, my, chW, time) {
         const WA = CONFIG.ROAD.WATER;
-        gfx.fillStyle(WA.FOAM_COLOR !== undefined ? WA.FOAM_COLOR : 0xffffff,
-                      WA.FOAM_ALPHA !== undefined ? WA.FOAM_ALPHA : 0.9);
+        const horiz = mx !== 0;             // flow runs left-right?
         const px = -my, py = mx;            // across-channel axis
-        const R  = chW * 0.5;               // radius — base spans the channel
-        const base = chW * 0.14;
-        const cr   = base * 3;              // circle width ×3 — fuller, blobbier foam
-        const step = base * 1.15;           // spacing kept, so they overlap heavily
-        let i = 0;
-        for (let a = -R; a <= R + 0.001; a += step) {
-            const fMax = Math.sqrt(Math.max(0, R * R - a * a));   // half-disc front
-            for (let f = 0; f <= fMax + 0.001; f += step) {
-                const seed = ++i * 12.9898 + 4.1;
-                const ja = Math.sin(seed + time / 180) * step * 0.35;
-                const jf = Math.cos(seed * 1.7 + time / 150) * step * 0.35;
-                const cx = x + px * (a + ja) + mx * (f + jf);
-                const cy = y + py * (a + ja) + my * (f + jf);
-                gfx.fillCircle(cx, cy, cr * (0.8 + 0.2 * Math.sin(time / 130 + i)));
+        const n        = 4;                 // blobs per head
+        const spread   = chW * 0.35;        // across half-span of the centres
+        const arcDepth = chW * 0.30;        // forward bow at the centre
+        const baseFwd  = chW * 0.10;        // whole cluster sits ahead of centre
+        const across   = chW * 0.5;         // blob across-diameter
+        const LONG     = 1.8;               // stretched along the flow
+        const WIDE     = 2;                 // across (perpendicular) side ×2
+        for (let i = 0; i < n; i++) {
+            const t   = (i / (n - 1)) * 2 - 1;                 // -1..1 across
+            const fwd = baseFwd + arcDepth * (1 - t * t);      // parabolic forward bow
+            const jit = Math.sin(i * 3.1 + time / 170) * chW * 0.04;
+            const cx  = x + px * (t * spread) + mx * (fwd + jit);
+            const cy  = y + py * (t * spread) + my * (fwd + jit);
+            const d   = across * (0.85 + 0.15 * Math.sin(time / 130 + i));
+            let spr = F.foamBlobs[fbi];
+            if (!spr) {
+                spr = this._addB(this.add.image(0, 0, 'foam_blob')
+                    .setDepth(1.53).setVisible(false), F.seg);   // below the water (1.55)
+                spr._noRebase = true;
+                spr.setMask(F.blobMask);
+                F.foamBlobs.push(spr);
             }
+            const alongD = d * LONG, acrossD = d * WIDE;   // along flow / perpendicular
+            spr.setVisible(true).setPosition(cx, cy)
+               .setDisplaySize(horiz ? alongD : acrossD, horiz ? acrossD : alongD);
+            fbi++;
         }
+        return fbi;
     }
 
     // Reveal a sprite up to fraction `p`, cropping from the edge `dir` faces
