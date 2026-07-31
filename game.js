@@ -921,7 +921,8 @@ console.log(
         gfx._noRebase = true;                        // foam, redrawn in world coords each frame
         return { g, cells, active: [], triggered: new Set(),
                  mainLeftCol: g.mainLeftCol, mainRightCol: g.mainRightCol,
-                 gfx, channelW: this.road.canalW };
+                 gfx, channelW: this.road.canalW,
+                 seg, heads: [], headFrame: CONFIG.ROAD.TILEMAP.HEAD_FRAME };
     }
 
     // Advance EVERY band's branch water — not just the active tunnel's. Once
@@ -1023,44 +1024,72 @@ console.log(
             if (cell.isMain) this._revealCrop(cell.dry, cell.dryP, 's');
             this._revealCrop(cell.flow, cell.progress, cell.entryDir);
         }
-        // Branch heads: one per still-advancing branch cell, at its front.
+
+        // Heads: a bulge of the WATER TEXTURE at each front (a pooled sprite of
+        // the plain water frame) with a cluster of white foam bubbles at its
+        // leading tip. The sprite blends into the trail behind; the bubbles hide
+        // the straight reveal edge and give the flow direction.
+        // Channel widths (the gap between banks): one tile's fraction for a
+        // branch; for the N-wide main only the two outer walls eat in.
+        const cf      = CONFIG.ROAD.TILEMAP.CHANNEL_FRAC || 0.5;
+        const fit     = CONFIG.ROAD.TILEMAP.HEAD_FIT || 1;
+        const branchW = g.tile * cf * fit;
+        const mainChW = g.tile * (g.mainW - 1 + cf) * fit;   // sits inside the banks
+        const MOT = { w: [1, 0], e: [-1, 0], n: [0, 1], s: [0, -1] };
+        let hi = 0;
+        const putHead = (x, y, mx, my, chW) => {
+            const horiz = mx !== 0;
+            const ew = horiz ? chW * 0.7 : chW, eh = horiz ? chW : chW * 0.7;
+            let spr = F.heads[hi];
+            if (!spr) {
+                spr = this._addB(this.add.image(0, 0, 'canal_sheet', F.headFrame)
+                    .setDepth(1.56).setVisible(false), F.seg);
+                spr._noRebase = true;                // repositioned every frame
+                F.heads.push(spr);
+            }
+            spr.setVisible(true).setPosition(x, y).setDisplaySize(ew, eh);
+            hi++;
+            this._drawHeadFoam(gfx, x, y, mx, my, chW, time);
+        };
+
         for (const cell of F.active) {
             if (cell.filled || cell.progress <= 0.02 || cell.progress >= 0.99) continue;
             const cx = g.left + (cell.col + 0.5) * g.tile;
             const cy = tn.exitY + (cell.row + 0.5) * g.tile;
             const half = g.tile / 2, p = cell.progress;
-            let fx = cx, fy = cy, horiz = true;
+            let fx = cx, fy = cy;
             switch (cell.entryDir) {
                 case 'w': fx = cx - half + p * g.tile; break;
                 case 'e': fx = cx + half - p * g.tile; break;
-                case 'n': fy = cy - half + p * g.tile; horiz = false; break;
-                case 's': fy = cy + half - p * g.tile; horiz = false; break;
+                case 'n': fy = cy - half + p * g.tile; break;
+                case 's': fy = cy + half - p * g.tile; break;
             }
-            this._drawHead(gfx, fx, fy, horiz, g.tile * 0.5, time);
+            const m = MOT[cell.entryDir] || [0, 0];
+            putHead(fx, fy, m[0], m[1], branchW);
         }
-        // Main-canal head: one rounded front across the 2-wide channel, riding
-        // the waterline as it climbs.
+        // Main-canal head: one wide front across the 2-wide channel, riding the
+        // waterline up.
         if (tn.wet > 1 && tn.wet < tn.len - 1) {
-            const cx = g.left + F.mainRightCol * g.tile;      // centre of the two columns
-            const wy = tn.exitY + tn.len - tn.wet;            // waterline (world Y)
-            this._drawHead(gfx, cx, wy, false, g.mainW * g.tile * 0.55, time);
+            const cx = g.left + F.mainRightCol * g.tile;
+            const wy = tn.exitY + tn.len - tn.wet;
+            putHead(cx, wy, 0, -1, mainChW);
         }
+        for (let k = hi; k < F.heads.length; k++) F.heads[k].setVisible(false);
     }
 
-    // A simple, casual water head: a bright rounded bulge with a white foam
-    // core, bobbing a little. `horiz` = channel runs left-right (head is tall);
-    // otherwise it's wide. `chW` is the channel cross-width.
-    _drawHead(gfx, x, y, horiz, chW, time) {
-        const WA  = CONFIG.ROAD.WATER;
-        const bob = 1 + 0.12 * Math.sin(time / 110 + x * 0.06 + y * 0.06);
-        const across = chW * 1.0 * bob;                // bulge across the channel
-        const along  = chW * 0.6;                      // shorter along the flow
-        const ew = horiz ? along : across, eh = horiz ? across : along;
-        gfx.fillStyle(WA.EDGE_COLOR !== undefined ? WA.EDGE_COLOR : 0x7fd4f0, 1);
-        gfx.fillEllipse(x, y, ew, eh);
+    // White foam bubbles clustered at a head's leading tip — a few small
+    // jittering circles, not a solid cap, so it reads as churn, not a ring.
+    _drawHeadFoam(gfx, x, y, mx, my, chW, time) {
+        const WA = CONFIG.ROAD.WATER;
         gfx.fillStyle(WA.FOAM_COLOR !== undefined ? WA.FOAM_COLOR : 0xffffff,
-                      WA.FOAM_ALPHA !== undefined ? WA.FOAM_ALPHA : 0.9);
-        gfx.fillEllipse(x, y, ew * 0.5, eh * 0.5);
+                      WA.FOAM_ALPHA !== undefined ? WA.FOAM_ALPHA : 0.85);
+        const tx = x + mx * chW * 0.32, ty = y + my * chW * 0.32;   // the leading tip
+        for (let i = 0; i < 4; i++) {
+            const a  = i * 1.7 + time / 220;
+            const jx = Math.cos(a) * chW * 0.24, jy = Math.sin(a * 1.3) * chW * 0.24;
+            const r  = chW * 0.13 * (0.7 + 0.3 * Math.sin(time / 160 + i * 2));
+            gfx.fillCircle(tx + jx, ty + jy, r);
+        }
     }
 
     // Reveal a sprite up to fraction `p`, cropping from the edge `dir` faces

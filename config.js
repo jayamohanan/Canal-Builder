@@ -421,6 +421,17 @@ var CONFIG = {
             SHEET:   'graphics/tilesheets/canal_tilesheet.webp',
             FRAME:   128,           // frame size in the sheet
             MAIN_TILES: 2,          // the main canal is this many tiles wide
+            HEAD_FRAME: 55,         // sheet frame of the plain water texture — the
+                                    // flowing head's body is drawn with it so it
+                                    // matches the filled canal
+            CHANNEL_FRAC: 0.5,      // water-channel width as a fraction of a tile
+                                    // (the gap between the banks in the art). The
+                                    // head is sized to this so it fits the walls;
+                                    // the 2-wide main gets (mainW-1+frac) tiles,
+                                    // since only its two OUTER walls eat in
+            HEAD_FIT: 0.94,         // head width × this, so it sits just inside the
+                                    // banks and the art's white waterline still
+                                    // shows around it
             FLOW_OFFSET: 1,         // the water-FILLED version of a tile sits this
                                     // many frames after it in the sheet (dry then
                                     // wet, left→right, top→bottom)
