@@ -473,6 +473,22 @@ console.log(
 
         this.startCharging();
 
+        // Debug: a line marking the partA / partB split — vertical in landscape
+        // (left | right), horizontal in portrait (top / bottom). Drawn on the
+        // fixed main camera (created before the snapshot so camB ignores it).
+        if (CONFIG.DEBUG_HALF_LINE) {
+            const W = this.scale.width, H = this.scale.height;
+            const dl = this.add.graphics().setDepth(99999);
+            dl.lineStyle(Math.max(1, 2 * L.platformScale), 0xff00ff, 0.9);
+            if (L.isPortrait) {
+                const y = L.partB.y + L.partB.height;   // split between top/bottom halves
+                dl.lineBetween(0, y, W, y);
+            } else {
+                const x = L.partB.x;                     // split between left/right halves
+                dl.lineBetween(x, 0, x, H);
+            }
+        }
+
         // Endless mode: the landscape camera must ignore every UI/fixed
         // object created above — one-time snapshot now that create() is done.
         this._snapshotCamBIgnores();

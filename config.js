@@ -11,6 +11,8 @@ var CONFIG = {
     TEXT_COLOR: '#1A237E',
 
     RESET_PROGRESS: false,
+    DEBUG_HALF_LINE: true,   // draw a line splitting partA / partB (vertical in
+                             // landscape, horizontal in portrait)
     BATTERY_START_LEVEL: 1,
     BATTERY_IMAGE_EXTENSIONS: ['svg', 'png', 'jpg', 'webp'],
 
