@@ -1182,6 +1182,74 @@ console.log(
         return fbi;
     }
 
+    // A FIXED crack pattern belonging to the ground down the whole dig column
+    // (generated once, in band-relative coords so it never slides with the
+    // machine). Earthy wandering lines with a few forks — not zigzag.
+    _genCrackPattern(tn) {
+        const s     = this.layoutConfig.platformScale;
+        const halfW = tn.crackW * 0.5 * (CONFIG.ROAD.TUNNEL.CRACK.WIDTH || 0.55);
+        const nMain = Math.max(1, CONFIG.ROAD.TUNNEL.CRACK.LINES || 2);
+        const lines = [];
+        for (let m = 0; m < nMain; m++) {
+            const main = [];
+            let dx = (m / Math.max(1, nMain - 1) - 0.5) * halfW * (nMain > 1 ? 1 : 0);
+            for (let dY = 0; dY <= tn.len; dY += 5 * s) {
+                dx += (Math.random() - 0.5) * 2.2 * s;          // gentle wander, not zigzag
+                dx = Math.max(-halfW, Math.min(halfW, dx));
+                main.push({ dx, dY });
+            }
+            lines.push(main);
+            // Occasional short forks off the main crack.
+            for (let i = 3; i < main.length - 3; i += 3 + Math.floor(Math.random() * 4)) {
+                if (Math.random() > 0.5) continue;
+                const dir = Math.random() < 0.5 ? -1 : 1;
+                let bdx = main[i].dx, bdY = main[i].dY;
+                const br = [{ dx: bdx, dY: bdY }];
+                for (let j = 0, n = 2 + (Math.random() * 2 | 0); j < n; j++) {
+                    bdx += dir * (3 + Math.random() * 2) * s;
+                    bdY += (3 + Math.random() * 3) * s;
+                    br.push({ dx: bdx, dY: bdY });
+                }
+                lines.push(br);
+            }
+        }
+        tn.crackLines = lines;
+    }
+
+    // Draw only the stretch of the fixed crack pattern within a short window
+    // AHEAD of the blade: thick/opaque at the face, thinning and fading out
+    // ~a cell ahead. The pattern stays put; only this reveal window moves.
+    _drawAugerCrack(tn, time) {
+        const C = CONFIG.ROAD.TUNNEL.CRACK;
+        const g = tn.crack;
+        if (!g || !C || !C.ENABLED) return;
+        g.clear();
+        if (tn.open || tn.progressPx <= 0 || tn.progressPx >= tn.len - 0.5) return;
+        if (!tn.crackLines) this._genCrackPattern(tn);
+
+        const s      = this.layoutConfig.platformScale;
+        const reveal = (C.LEN || 22) * s;                       // how far ahead is visible
+        const cx = tn.bore.x, ey = tn.entryY, prog = tn.progressPx;
+        const col = C.COLOR !== undefined ? C.COLOR : 0x3c2c1a;
+        const thNear = Math.max(0.5, (C.THICKNESS || 2) * s), thFar = thNear * 0.3;
+        const aNear = C.ALPHA !== undefined ? C.ALPHA : 0.6;
+
+        for (const line of tn.crackLines) {
+            for (let i = 0; i < line.length - 1; i++) {
+                const a = line[i], b = line[i + 1];
+                const ahead = (a.dY + b.dY) / 2 - prog;         // px ahead of the face
+                if (ahead < 0 || ahead > reveal) continue;
+                const f  = ahead / reveal;                      // 0 at face → 1 at limit
+                const th = (thNear + (thFar - thNear) * f) * (1 + 0.18 * Math.sin(time * 0.006 + a.dY)); // pulse thickness only
+                g.lineStyle(Math.max(0.4, th), col, aNear * (1 - f));
+                g.beginPath();
+                g.moveTo(cx + a.dx, ey - a.dY);
+                g.lineTo(cx + b.dx, ey - b.dY);
+                g.strokePath();
+            }
+        }
+    }
+
     // Reveal a sprite up to fraction `p`, cropping from the edge `dir` faces
     // (so it wipes on in the flow direction). dir 's' → bottom-up.
     _revealCrop(spr, p, dir) {
@@ -1294,13 +1362,19 @@ console.log(
         // grass down the centre, and the flood reveals the dug main-canal tiles
         // over it as the auger climbs.
 
+        // Cracks in the grass just ahead of the blade — drawn over the not-yet
+        // dug ground (below the machine), redrawn each frame at the current
+        // face, so it must never be shifted by a rebase.
+        const crack = this._addB(this.add.graphics().setDepth(2.15), seg);
+        crack._noRebase = true;
+
         // The machine advances off a banked-charge account: one progress
         // value drives the shaft, the mask and the head.
         this.tunnel = {
             entryY, exitY, len, bladeLen, bodyH, texScale: sc,
             progressPx: 0, earnedPx: 0, open: false, lastTime: 0, pulseT: 0,
             wet: 0,                          // how far the water has actually come
-            bore, maskShape, foam: foamGfx, chips: [], debrisAcc: 0,
+            bore, maskShape, foam: foamGfx, crack, crackW: mw, chips: [], debrisAcc: 0,
             flood: this._buildFlood(seg, band),   // canal water (tilemap only)
             seg: seg || null,
             // A dig site built ahead (endless: the NEXT band, while the
@@ -1439,6 +1513,9 @@ console.log(
         const dt = tn.lastTime ? Math.min((time - tn.lastTime) / 1000, 0.05) : 0;
         tn.lastTime = time;
         if (dt <= 0) return;
+
+        // Cracks in the grass ahead of the blade — while there's still dig left.
+        this._drawAugerCrack(tn, time);
 
         // Drilling is done: the machine no longer holds the water back, so it
         // runs on to the far mouth — same flow, just a longer way to go.

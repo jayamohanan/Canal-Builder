@@ -514,6 +514,19 @@ var CONFIG = {
             CHIP_SIZE:     10,        // base size of a spoil chip (px). Chunky
                                       // squares — bumped up to read clearly
             DUST_COLOR:    0xa89878,  // soft dust cloud drifting off the cut
+
+            // Cracks in the ground revealed just ahead of the blade. The pattern
+            // is FIXED to the column; a short window near the face reveals it,
+            // thick at the face and fading out over LEN.
+            CRACK: {
+                ENABLED: true,
+                LEN:     52,          // reveal window ahead of the face (px @ platformScale)
+                WIDTH:   0.5,         // crack spread as a fraction of the auger width
+                LINES:   2,           // number of main cracks down the column
+                COLOR:   0x3c2c1a,    // dark earth in the split
+                ALPHA:   0.6,         // opacity at the face (fades to 0 over LEN)
+                THICKNESS: 2,         // line thickness at the face (px @ platformScale)
+            },
         },
 
         ENDLESS: {
