@@ -310,6 +310,10 @@ class GameScene extends Phaser.Scene {
             // all frames in it; TILES maps gids to meaning + filled frame.
             this.load.spritesheet('canal_sheet', TM.SHEET,
                 { frameWidth: TM.FRAME, frameHeight: TM.FRAME });
+            // Crop growth stages: one sheet, a single row of CROP_STAGES
+            // uniform frames. Loaded as a plain image; the frame size is
+            // derived from it at build (width / stages, full height).
+            if (TM.CROP) this.load.image(`${TM.CROP}_src`, `graphics/crops/${TM.CROP}.png`);
         }
 
         // Load gadget sprites from gadgetData.js
@@ -871,6 +875,81 @@ console.log(
         // The dug channel is the full width of the main-canal columns.
         this.road.canalW = g.mainW * g.tile;
         this.createTunnel(band, seg);
+        this._buildCrops(seg, band);
+    }
+
+    // Plant a crop seed on every field (grass) cell, cache its nearest canal
+    // cell, and hold it at stage 1 until the water reaches that cell (see
+    // _updateCrops). Field cells are non-canal base tiles outside the main
+    // canal columns. Sprites are bottom-anchored so taller stages grow upward.
+    _buildCrops(seg, band) {
+        const TM = CONFIG.ROAD.TILEMAP;
+        if (!TM || !TM.CROP || !this.tileGrid) return;
+        const g = this.tileGrid, gTop = band.bandTop;
+        const F = seg.tunnel && seg.tunnel.flood;
+        if (!F || !F.cells.size) return;
+        const canal = [...F.cells.values()];            // canal cells to search
+        const crop  = TM.CROP;
+        // Build a spritesheet texture from the single sheet once, deriving the
+        // frame size from the image: a row of CROP_STAGES equal frames, so
+        // frameWidth = width / stages and frameHeight = full height. No
+        // per-sheet dimensions are hardcoded — drop in a differently sized
+        // sheet and it still slices correctly.
+        const stages = TM.CROP_STAGES || 5;
+        const key    = `${crop}_stages`;
+        if (!this.textures.exists(key)) {
+            const img = this.textures.get(`${crop}_src`).getSourceImage();
+            this.textures.addSpriteSheet(key, img,
+                { frameWidth: img.width / stages, frameHeight: img.height });
+        }
+        const sc    = g.tile / this.textures.getFrame(key, 0).width;   // 128 → one cell
+        const crops = seg.crops = [];
+        for (let r = 0; r < g.rows; r++) {
+            for (let c = 0; c < g.cols; c++) {
+                if (c === g.mainLeftCol || c === g.mainRightCol) continue;   // canal path
+                const gid = g.baseData[r * g.cols + c];
+                if (!gid) continue;
+                const cn = this._connOfGid(gid);
+                if (cn.n || cn.e || cn.s || cn.w) continue;                  // a canal tile
+                // nearest canal cell (Manhattan) — decided once, cached.
+                let best = null, bd = Infinity;
+                for (const cc of canal) {
+                    const d = Math.abs(cc.col - c) + Math.abs(cc.row - r);
+                    if (d < bd) { bd = d; best = cc; }
+                }
+                if (!best) continue;
+                const spr = this._addB(this.add.image(
+                        g.left + (c + 0.5) * g.tile, gTop + (r + 1) * g.tile, key, 0)
+                    .setOrigin(0.5, 1).setScale(sc).setDepth(3 + r * 0.001), seg);
+                crops.push({ watch: best, stage: 1, timer: 0, sprite: spr, crop, done: false });
+            }
+        }
+    }
+
+    // Grow crops whose nearest canal cell has been watered: advance one stage
+    // every CROP_GROW_MS, swapping the sprite, until the last stage.
+    _updateCrops(time) {
+        const TM = CONFIG.ROAD.TILEMAP;
+        if (!TM || !TM.CROP) return;
+        const dt = this._cropT ? Math.min((time - this._cropT) / 1000, 0.1) : 0;
+        this._cropT = time;
+        if (dt <= 0) return;
+        const growS  = (TM.CROP_GROW_MS || 2000) / 1000;
+        const stages = TM.CROP_STAGES || 5;
+        const wet    = TM.CROP_WET !== undefined ? TM.CROP_WET : 0.15;
+        for (const seg of this.segments) {
+            if (!seg.crops) continue;
+            for (const cr of seg.crops) {
+                if (cr.done || !cr.watch || cr.watch.progress <= wet) continue;
+                cr.timer += dt;
+                const st = Math.min(stages, 1 + Math.floor(cr.timer / growS));
+                if (st !== cr.stage) {
+                    cr.stage = st;
+                    cr.sprite.setFrame(st - 1);         // frame 0 = stage 1
+                    if (st >= stages) cr.done = true;
+                }
+            }
+        }
     }
 
     // ── Branch-canal water (flood fill) ──────────────────────────────────────
@@ -5400,6 +5479,8 @@ console.log(
         if (this.tunnel) this._updateTunnel(time);
         // Spread water from the main canal into the pre-built side branches.
         this._updateFlood(time);
+        // Grow crops as the water reaches them.
+        this._updateCrops(time);
     }
 }
 

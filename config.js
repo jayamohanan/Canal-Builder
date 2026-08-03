@@ -423,6 +423,16 @@ var CONFIG = {
             SHEET:   'graphics/tilesheets/canal_tilesheet.webp',
             FRAME:   128,           // frame size in the sheet
             MAIN_TILES: 2,          // the main canal is this many tiles wide
+
+            // ── Crops ───────────────────────────────────────────────────────
+            // A crop grows on every field (grass) cell. Its seed shows from the
+            // start; when the water reaches the cell's NEAREST canal cell it
+            // grows through the stages, one every CROP_GROW_MS. Art lives in
+            // graphics/crops/<CROP>/<CROP>-1.png … -<CROP_STAGES>.png.
+            CROP:         'tomato',
+            CROP_STAGES:  5,
+            CROP_GROW_MS: 2000,     // time between growth stages
+            CROP_WET:     0.15,     // canal-cell fill fraction that counts as "watered"
             HEAD_FRAME: 55,         // sheet frame of the plain water texture — the
                                     // flowing head's body is drawn with it so it
                                     // matches the filled canal
