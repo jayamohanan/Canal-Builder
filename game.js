@@ -881,7 +881,8 @@ console.log(
     // Plant a crop seed on every field (grass) cell, cache its nearest canal
     // cell, and hold it at stage 1 until the water reaches that cell (see
     // _updateCrops). Field cells are non-canal base tiles outside the main
-    // canal columns. Sprites are bottom-anchored so taller stages grow upward.
+    // canal columns. Sprites keep a bottom-centre origin so taller stages grow
+    // upward, but sit at the cell centre rather than on its bottom edge.
     _buildCrops(seg, band) {
         const TM = CONFIG.ROAD.TILEMAP;
         if (!TM || !TM.CROP || !this.tileGrid) return;
@@ -919,7 +920,7 @@ console.log(
                 }
                 if (!best) continue;
                 const spr = this._addB(this.add.image(
-                        g.left + (c + 0.5) * g.tile, gTop + (r + 1) * g.tile, key, 0)
+                        g.left + (c + 0.5) * g.tile, gTop + (r + 0.5) * g.tile, key, 0)
                     .setOrigin(0.5, 1).setScale(sc).setDepth(3 + r * 0.001), seg);
                 crops.push({ watch: best, stage: 1, timer: 0, sprite: spr, crop, done: false });
             }
