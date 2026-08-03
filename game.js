@@ -922,7 +922,9 @@ console.log(
                 const spr = this._addB(this.add.image(
                         g.left + (c + 0.5) * g.tile, gTop + (r + 0.5) * g.tile, key, 0)
                     .setOrigin(0.5, 1).setScale(sc).setDepth(3 + r * 0.001), seg);
-                crops.push({ watch: best, stage: 1, timer: 0, sprite: spr, crop, done: false });
+                // `sc` is cached per crop so the stage-change spring knows the
+                // full y-scale to settle back to. Stage 1 spawns hard, unscaled.
+                crops.push({ watch: best, stage: 1, timer: 0, sprite: spr, sc, crop, done: false });
             }
         }
     }
@@ -938,6 +940,8 @@ console.log(
         const growS  = (TM.CROP_GROW_MS || 2000) / 1000;
         const stages = TM.CROP_STAGES || 5;
         const wet    = TM.CROP_WET !== undefined ? TM.CROP_WET : 0.15;
+        const popFr  = TM.CROP_POP_FROM !== undefined ? TM.CROP_POP_FROM : 0.8;
+        const popMs  = TM.CROP_POP_MS   !== undefined ? TM.CROP_POP_MS   : 260;
         for (const seg of this.segments) {
             if (!seg.crops) continue;
             for (const cr of seg.crops) {
@@ -947,6 +951,19 @@ console.log(
                 if (st !== cr.stage) {
                     cr.stage = st;
                     cr.sprite.setFrame(st - 1);         // frame 0 = stage 1
+                    // Spring the new frame up from a squashed y-scale. Only
+                    // reachable for stage 2+, so the seed never animates.
+                    if (popFr < 1 && popMs > 0) {
+                        if (cr.tw) cr.tw.stop();        // stage skipped mid-spring
+                        cr.sprite.scaleY = cr.sc * popFr;
+                        cr.tw = this.tweens.add({
+                            targets:  cr.sprite,
+                            scaleY:   cr.sc,
+                            duration: popMs,
+                            ease:     'Back.easeOut',
+                            onComplete: () => { cr.tw = null; }
+                        });
+                    }
                     if (st >= stages) cr.done = true;
                 }
             }

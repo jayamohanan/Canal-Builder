@@ -433,6 +433,11 @@ var CONFIG = {
             CROP_STAGES:  5,
             CROP_GROW_MS: 2000,     // time between growth stages
             CROP_WET:     0.15,     // canal-cell fill fraction that counts as "watered"
+            // Each new stage after the seed springs up instead of popping in:
+            // the frame swaps, then y-scale eases from CROP_POP_FROM to full.
+            // Sprites are bottom-anchored, so this reads as growing upward.
+            CROP_POP_FROM: 0.9,     // starting y-scale fraction (1 = no animation)
+            CROP_POP_MS:   260,     // spring duration
             HEAD_FRAME: 55,         // sheet frame of the plain water texture — the
                                     // flowing head's body is drawn with it so it
                                     // matches the filled canal
