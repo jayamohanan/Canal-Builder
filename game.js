@@ -310,10 +310,15 @@ class GameScene extends Phaser.Scene {
             // all frames in it; TILES maps gids to meaning + filled frame.
             this.load.spritesheet('canal_sheet', TM.SHEET,
                 { frameWidth: TM.FRAME, frameHeight: TM.FRAME });
-            // Crop growth stages: one sheet, a single row of CROP_STAGES
-            // uniform frames. Loaded as a plain image; the frame size is
-            // derived from it at build (width / stages, full height).
-            if (TM.CROP) this.load.image(`${TM.CROP}_src`, `graphics/crops/${TM.CROP}.png`);
+            // Crop growth stages: one sheet per crop, a single row of
+            // CROP_STAGES uniform frames. Loaded as plain images; the frame
+            // size is derived from each at build (width / stages, full
+            // height). Every crop in the level rotation is loaded up front —
+            // they are a few hundred KB each and a level can start at any
+            // point in the cycle after a rebase.
+            for (const c of this._cropCycle()) {
+                this.load.image(`${c}_src`, `graphics/crops/${c}.png`);
+            }
         }
 
         // Load gadget sprites from gadgetData.js
@@ -878,6 +883,25 @@ console.log(
         this._buildCrops(seg, band);
     }
 
+    // The crop art rotation, in level order. Falls back to the single CROP so
+    // a config with no cycle still behaves exactly as before.
+    _cropCycle() {
+        const TM = CONFIG.ROAD && CONFIG.ROAD.TILEMAP;
+        if (!TM) return [];
+        const cy = TM.CROP_CYCLE;
+        if (Array.isArray(cy) && cy.length) return cy;
+        return TM.CROP ? [TM.CROP] : [];
+    }
+
+    // Which crop the level being built right now grows. segIndex is the
+    // 0-based level counter, so it wraps: 0 tomato, 1 mango, 2 grape, 3 tomato…
+    _cropForLevel() {
+        const cy = this._cropCycle();
+        if (!cy.length) return null;
+        const i = this.endless ? this.endless.segIndex : 0;
+        return cy[i % cy.length];
+    }
+
     // Plant a crop seed on every field (grass) cell, cache its nearest canal
     // cell, and hold it at stage 1 until the water reaches that cell (see
     // _updateCrops). Field cells are non-canal base tiles outside the main
@@ -885,14 +909,16 @@ console.log(
     // upward, but sit at the cell centre rather than on its bottom edge.
     _buildCrops(seg, band) {
         const TM = CONFIG.ROAD.TILEMAP;
-        if (!TM || !TM.CROP || !this.tileGrid) return;
+        if (!TM || !this.tileGrid) return;
+        const crop = this._cropForLevel();
+        if (!crop) return;
         const g = this.tileGrid, gTop = band.bandTop;
         const F = seg.tunnel && seg.tunnel.flood;
         if (!F || !F.cells.size) return;
         const canal = [...F.cells.values()];            // canal cells to search
-        const crop  = TM.CROP;
-        // Build a spritesheet texture from the single sheet once, deriving the
-        // frame size from the image: a row of CROP_STAGES equal frames, so
+        // Build a spritesheet texture from this crop's sheet once (keyed per
+        // crop, so a revisited crop reuses it), deriving the frame size from
+        // the image: a row of CROP_STAGES equal frames, so
         // frameWidth = width / stages and frameHeight = full height. No
         // per-sheet dimensions are hardcoded — drop in a differently sized
         // sheet and it still slices correctly.
@@ -933,7 +959,7 @@ console.log(
     // every CROP_GROW_MS, swapping the sprite, until the last stage.
     _updateCrops(time) {
         const TM = CONFIG.ROAD.TILEMAP;
-        if (!TM || !TM.CROP) return;
+        if (!TM || !this._cropCycle().length) return;
         const dt = this._cropT ? Math.min((time - this._cropT) / 1000, 0.1) : 0;
         this._cropT = time;
         if (dt <= 0) return;

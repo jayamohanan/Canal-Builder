@@ -427,9 +427,16 @@ var CONFIG = {
             // ── Crops ───────────────────────────────────────────────────────
             // A crop grows on every field (grass) cell. Its seed shows from the
             // start; when the water reaches the cell's NEAREST canal cell it
-            // grows through the stages, one every CROP_GROW_MS. Art lives in
-            // graphics/crops/<CROP>/<CROP>-1.png … -<CROP_STAGES>.png.
-            CROP:         'tomato',
+            // grows through the stages, one every CROP_GROW_MS. Art is one
+            // sheet per crop at graphics/crops/<name>.png: a single row of
+            // CROP_STAGES frames, each 128x256, sliced at build.
+            // The crop changes per level, cycling through CROP_CYCLE in order
+            // and wrapping — level 1 tomato, 2 mango, 3 grape, 4 tomato again.
+            // All levels share the one level_01 layout, so the crop is what
+            // makes each field read as a different farm. Add a sheet to
+            // graphics/crops/ and its name here to extend the rotation.
+            CROP_CYCLE:   ['tomato', 'mango', 'grape'],
+            CROP:         'tomato',  // fallback when CROP_CYCLE is empty
             CROP_STAGES:  5,
             CROP_GROW_MS: 2000,     // time between growth stages
             CROP_WET:     0.15,     // canal-cell fill fraction that counts as "watered"
