@@ -1172,12 +1172,15 @@ console.log(
             cell.filled   = cell.progress >= 1;
         }
 
-        // 1. Seed branches as the waterline passes each junction row (its
-        //    centre, (rows-r-0.5) tiles up). The 2-wide main canal's LEFT column
-        //    can open west (from the main_canal_dry layer), its RIGHT east.
+        // 1. Seed branches once the waterline is SPLIT_AT into each junction
+        //    row, measured from that row's bottom edge ((rows-r-1) tiles up).
+        //    The 2-wide main canal's LEFT column can open west (from the main
+        //    layer), its RIGHT east.
+        const splitAt = CONFIG.ROAD.TILEMAP.SPLIT_AT !== undefined
+                      ? CONFIG.ROAD.TILEMAP.SPLIT_AT : 0.5;
         for (let r = 0; r < g.rows; r++) {
             if (F.triggered.has(r)) continue;
-            if (tn.wet >= (g.rows - r - 0.5) * g.tile) {
+            if (tn.wet >= (g.rows - r - 1 + splitAt) * g.tile) {
                 F.triggered.add(r);
                 const cL = this._connOfGid(g.mainData[r * g.cols + F.mainLeftCol]);
                 const cR = this._connOfGid(g.mainData[r * g.cols + F.mainRightCol]);
@@ -1206,7 +1209,7 @@ console.log(
                     continue;
                 }
                 const through = cell.entryDir ? DIR[cell.entryDir][2] : null;
-                if (!cell.split && cell.progress >= 0.5) {
+                if (!cell.split && cell.progress >= splitAt) {
                     cell.split = true;
                     for (const d of ['n', 'e', 's', 'w']) {
                         if (cell.conn[d] && d !== cell.entryDir && d !== through) spawn(cell, d);
@@ -1243,9 +1246,12 @@ console.log(
         const mainChW = g.tile * (g.mainW - 1 + cf) * fit;   // sits inside the banks
         const MOT = { w: [1, 0], e: [-1, 0], n: [0, 1], s: [0, -1] };
         let hi = 0, fbi = 0;
+        const hLen    = CONFIG.ROAD.TILEMAP.HEAD_LEN !== undefined
+                      ? CONFIG.ROAD.TILEMAP.HEAD_LEN : 0.35;
         const putHead = (x, y, mx, my, chW) => {
             const horiz = mx !== 0;
-            const ew = horiz ? chW * 0.7 : chW, eh = horiz ? chW : chW * 0.7;
+            // Full channel width across the flow, HEAD_LEN of it along the flow.
+            const ew = horiz ? chW * hLen : chW, eh = horiz ? chW : chW * hLen;
             let spr = F.heads[hi];
             if (!spr) {
                 spr = this._addB(this.add.image(0, 0, 'canal_sheet', F.headFrame)
@@ -1300,21 +1306,44 @@ console.log(
         const WA = CONFIG.ROAD.WATER;
         const horiz = mx !== 0;             // flow runs left-right?
         const px = -my, py = mx;            // across-channel axis
+        const TM = CONFIG.ROAD.TILEMAP;
+        const cfg = (k, d) => (TM[k] !== undefined ? TM[k] : d);
+        // How far the crest reaches past the revealed water edge, in units of
+        // chW: FOAM_FWD + FOAM_ARC + (FOAM_ACROSS * FOAM_LONG / 2). Shrinking
+        // FOAM_LONG thins the BODY behind the arc, which is what drags the arc
+        // forward off the water's tip — the bow itself is FOAM_ARC.
         const n        = 4;                 // blobs per head
-        const spread   = chW * 0.35;        // across half-span of the centres
-        const arcDepth = chW * 0.30;        // forward bow at the centre
-        const baseFwd  = chW * 0.10;        // whole cluster sits ahead of centre
-        const across   = chW * 0.5;         // blob across-diameter
-        const LONG     = 1.8;               // stretched along the flow
+        const spread   = chW * cfg('FOAM_SPREAD', 0.35);  // half-span of centres
+        const calm     = cfg('FOAM_EDGE_CALM', 1);        // stillness at the walls
+        const arcDepth = chW * cfg('FOAM_ARC', 0.30);   // forward bow at the centre
+        const baseFwd  = chW * cfg('FOAM_FWD', 0);      // cluster ahead of centre
+        const across   = chW * cfg('FOAM_ACROSS', 0.5); // blob across-diameter
+        const LONG     = cfg('FOAM_LONG', 1.0);         // stretch along the flow
         const WIDE     = 2;                 // across (perpendicular) side ×2
         const RIM      = 1.18;              // white backing this much larger → rim
+        const foamWater = cfg('FOAM_WATER', true);
+        const back      = chW * cfg('FOAM_WATER_BACK', 0.25);   // water copy trails
+        // Which side of the revealed tile (1.55) the crest sits on. Read once
+        // per frame but only APPLIED when a pooled sprite is first created, so
+        // flipping it takes a reload — deliberate: writing depth every frame
+        // would dirty the display list and force a full re-sort each frame.
+        const above     = cfg('FOAM_ABOVE', false);
+        const dWhite    = above ? 1.56  : 1.525;
+        const dBlob     = above ? 1.565 : 1.53;
         for (let i = 0; i < n; i++) {
             const t   = (i / (n - 1)) * 2 - 1;                 // -1..1 across
             const fwd = baseFwd + arcDepth * (1 - t * t);      // parabolic forward bow
-            const jit = Math.sin(i * 3.1 + time / 170) * chW * 0.04;
+            // Animation is damped toward the walls: at FOAM_EDGE_CALM = 1 the
+            // outermost blobs are perfectly still and stay at full size, so the
+            // foam is always pinned to both banks. Without this they shrink and
+            // drift with the rest and the water momentarily looks detached from
+            // the wall. The middle keeps its full churn.
+            const anim = 1 - calm * (t * t);
+            const jit = Math.sin(i * 3.1 + time / 170) * chW * 0.04 * anim;
             const cx  = x + px * (t * spread) + mx * (fwd + jit);
             const cy  = y + py * (t * spread) + my * (fwd + jit);
-            const d   = across * (0.85 + 0.15 * Math.sin(time / 130 + i));
+            const pulse = 0.85 + 0.15 * Math.sin(time / 130 + i);
+            const d   = across * (1 - anim * (1 - pulse));
             const alongD = d * LONG, acrossD = d * WIDE;   // along flow / perpendicular
             const ew = horiz ? alongD : acrossD, eh = horiz ? acrossD : alongD;
             const grab = (pool, tex, depth) => {
@@ -1325,12 +1354,18 @@ console.log(
                 }
                 return s;
             };
-            // White backing (larger, behind), then the water blob on top —
-            // both share the position/size so the rim animates with the blob.
-            grab(F.foamWhite, 'foam_white', 1.525).setVisible(true)
+            // White foam crest, then the same blob in water texture set BACK
+            // along the flow. FOAM_ABOVE picks which side of the revealed tile
+            // (1.55) they sit on: BELOW, the tile cuts them and only what runs
+            // past its straight edge shows; ABOVE, the whole blob is visible
+            // and rides over the revealed water, tails included.
+            grab(F.foamWhite, 'foam_white', dWhite).setVisible(true)
                 .setPosition(cx, cy).setDisplaySize(ew * RIM, eh * RIM);
-            grab(F.foamBlobs, 'foam_blob', 1.53).setVisible(true)
-                .setPosition(cx, cy).setDisplaySize(ew, eh);
+            if (foamWater) {
+                grab(F.foamBlobs, 'foam_blob', dBlob).setVisible(true)
+                    .setPosition(cx - mx * back, cy - my * back)
+                    .setDisplaySize(ew, eh);
+            }
             fbi++;
         }
         return fbi;
@@ -1782,6 +1817,7 @@ console.log(
         if (fm) fm.fillStyle(WA.FOAM_COLOR !== undefined ? WA.FOAM_COLOR : 0xffffff,
                              WA.FOAM_ALPHA !== undefined ? WA.FOAM_ALPHA : 0.9);
 
+        const caps  = WA.FOAM_CAPS !== undefined ? WA.FOAM_CAPS : true;
         const W     = this.scale.width;
         const sc    = this.layoutConfig.platformScale;
         const front = Math.min(tn.wet, (WA.FRONT || 12) * sc);
@@ -1804,9 +1840,11 @@ console.log(
             const fx  = x0 + i * cw - 0.5;
             g.fillRect(fx, edge - len, cw + 1, Math.max(0, len));
             // White cap on this finger's tip — same blocky column, so the
-            // foam breaks up along the front exactly as the water does.
+            // foam breaks up along the front exactly as the water does. Off by
+            // default: it reads as a squared-off tip, and the rounded foam
+            // blobs of the tilemap head already crest this front.
             const fl = Math.min(len, foamL);
-            if (fm && fl > 0.5) fm.fillRect(fx, edge - len, cw + 1, fl);
+            if (fm && caps && fl > 0.5) fm.fillRect(fx, edge - len, cw + 1, fl);
         }
     }
 

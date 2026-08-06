@@ -448,6 +448,13 @@ var CONFIG = {
             HEAD_FRAME: 55,         // sheet frame of the plain water texture — the
                                     // flowing head's body is drawn with it so it
                                     // matches the filled canal
+            SPLIT_AT:     0.3,      // how far the water must get into a junction
+                                    // tile before a side branch starts, as a
+                                    // fraction of the tile. 0.5 = the tile's
+                                    // centre; lower starts the branch sooner, so
+                                    // the water is seen to divide while it is
+                                    // still crossing rather than looking held
+                                    // back until the tile is full
             CHANNEL_FRAC: 0.5,      // water-channel width as a fraction of a tile
                                     // (the gap between the banks in the art). The
                                     // head is sized to this so it fits the walls;
@@ -456,6 +463,61 @@ var CONFIG = {
             HEAD_FIT: 0.94,         // head width × this, so it sits just inside the
                                     // banks and the art's white waterline still
                                     // shows around it
+            HEAD_LEN: 0,            // the head's WATER bulge (the body behind the
+                                    // foam), measured ALONG the flow, as a fraction
+                                    // of the channel width. Across the channel it
+                                    // always spans the full width — this only
+                                    // shortens how far it reaches forward, i.e. how
+                                    // far the drawn front runs ahead of the water
+                                    // that has actually been revealed
+            // The front is TWO rounded clusters, both drawn BEHIND the revealed
+            // water tile (depths 1.525 / 1.53 vs the tile's 1.55), so each is
+            // clipped by the tile and only the part poking past its straight
+            // crop edge is seen:
+            //   • white blobs  — the foam crest, straddling the reveal edge so
+            //     half sits on revealed water and half runs ahead of it
+            //   • water blobs  — the same cluster copied FOAM_WATER_BACK behind
+            //     the white one, so a curved water edge shows between the foam
+            //     and the tile instead of the tile's straight cut
+            FOAM_ABOVE: false,      // draw the crest ABOVE the revealed tile
+                                    // (1.56/1.565) instead of below it
+                                    // (1.525/1.53). Above, the whole blob shows
+                                    // and rides over the revealed water instead
+                                    // of being cut by its straight edge
+            FOAM_WATER: true,       // draw the trailing water-textured copy
+            FOAM_WATER_BACK: 0.0625, // how far behind the white cluster it sits.
+                                    // Smaller = the water copy rides further
+                                    // forward over the white one, leaving a
+                                    // thinner rim of foam showing at the crest
+            // Crest shape, all in units of the channel width. The leading tip
+            // sits FOAM_FWD + FOAM_ARC + FOAM_ACROSS*FOAM_LONG/2 ahead of the
+            // revealed water edge.
+            FOAM_LONG:   2.0,       // blob stretch ALONG the flow (NOT across —
+                                    // that is FOAM_ACROSS). Long enough that the
+                                    // blob's tail always runs back UNDER the
+                                    // revealed tile: as the crest animates, a
+                                    // short blob leaves a bare gap between itself
+                                    // and the tile edge and the front breaks into
+                                    // pieces. With the tail buried there is no
+                                    // gap to see and the front reads as one mass
+            FOAM_ARC:    0.30,      // depth of the forward bow at the channel
+                                    // centre — this is the arc itself, keep it
+            FOAM_FWD:   -0.40,      // whole cluster shifted ahead of the edge.
+                                    // NEGATIVE pulls it back. Holds the leading
+                                    // tip at 0.40*chW: the blob grew by 0.25 at
+                                    // BOTH ends, so this cancels the forward half
+                                    // and spends the whole gain on the buried tail
+            FOAM_ACROSS: 0.5,       // blob diameter across the channel
+            FOAM_EDGE_CALM: 1,      // how much the churn is damped toward the two
+                                    // banks. 1 = the outermost blobs never move
+                                    // or shrink, so the foam stays welded to both
+                                    // walls while the middle still churns.
+                                    // 0 = every blob animates equally (old look,
+                                    // where the ends pull back off the wall and
+                                    // the water looks briefly detached from it)
+            FOAM_SPREAD: 0.35,      // how far out the outermost blob centres sit
+                                    // from the channel centre. Raise it if the
+                                    // foam still fails to reach the walls
             FLOW_OFFSET: 1,         // the water-FILLED version of a tile sits this
                                     // many frames after it in the sheet (dry then
                                     // wet, left→right, top→bottom)
@@ -591,6 +653,10 @@ var CONFIG = {
                                    // (px @ platformScale)
             FRONT_COLS: 7,         // fingers across that edge — each on its own
                                    // phase, so the front never repeats a shape
+            FOAM_CAPS:  false,     // draw the blocky white caps on the finger tips.
+                                   // Off: the main canal's front is left to the
+                                   // rounded foam blobs of the tilemap head, so
+                                   // there is no squared-off white tip
             FOAM:       4,         // white cap on the tip of each finger
                                    // (px @ platformScale) — blocky, following the
                                    // same columns as the front itself
