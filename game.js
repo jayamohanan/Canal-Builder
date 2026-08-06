@@ -709,6 +709,7 @@ console.log(
                 groundData: layer(TM.GROUND_LAYER) || [],   // plain land
                 branchData: layer(TM.BRANCH_LAYER) || [],   // dry branches
                 mainData: layer(TM.MAIN_LAYER) || [],       // dug main canal
+                cropsData: layer(TM.CROPS_LAYER) || [],     // crop markers (not drawn)
                 mainLeftCol, mainRightCol, mainW,
             };
             // The spritesheet frame for a gid is (gid - firstgid); TILES gives
@@ -906,11 +907,10 @@ console.log(
         return cy[i % cy.length];
     }
 
-    // Plant a crop seed on every field (grass) cell, cache its nearest canal
-    // cell, and hold it at stage 1 until the water reaches that cell (see
-    // _updateCrops). Field cells are non-canal base tiles outside the main
-    // canal columns. Sprites keep a bottom-centre origin so taller stages grow
-    // upward, but sit at the cell centre rather than on its bottom edge.
+    // Plant a crop seed at the centre of every cell marked on the CROPS
+    // layer, cache its nearest canal cell, and hold it at stage 1 until the
+    // water reaches that cell (see _updateCrops). Sprites keep a bottom-centre
+    // origin so taller stages grow upward out of that centre point.
     _buildCrops(seg, band) {
         const TM = CONFIG.ROAD.TILEMAP;
         if (!TM || !this.tileGrid) return;
@@ -935,15 +935,14 @@ console.log(
         }
         const sc    = g.tile / this.textures.getFrame(key, 0).width;   // 128 → one cell
         const crops = seg.crops = [];
-        // Land comes from the GROUND layer and BRANCH holds only the dry
-        // branches, so a cell is farmable when it has ground and no branch on
-        // top of it.
+        // The CROPS layer is the single source of truth: one plant per marked
+        // cell, at that cell's centre. Which gid was used doesn't matter — the
+        // layer is never drawn, only tested for a tile. Cells left blank stay
+        // bare, which is how canals, the field edges and anything decorated
+        // (trees, rocks, buildings) are kept clear.
         for (let r = 0; r < g.rows; r++) {
             for (let c = 0; c < g.cols; c++) {
-                if (c === g.mainLeftCol || c === g.mainRightCol) continue;   // canal path
-                if (!g.groundData[r * g.cols + c]) continue;                 // no land here
-                const cn = this._connOfGid(g.branchData[r * g.cols + c] || 0);
-                if (cn.n || cn.e || cn.s || cn.w) continue;                  // a branch canal
+                if (!g.cropsData[r * g.cols + c]) continue;      // not a crop cell
                 // nearest canal cell (Manhattan) — decided once, cached.
                 let best = null, bd = Infinity;
                 for (const cc of canal) {

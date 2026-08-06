@@ -470,12 +470,15 @@ var CONFIG = {
                                     // fills quietly on to END_FILL
 
             // Layer order in the .tmj, bottom to top. Every level map carries
-            // these three, named exactly this. GROUND is the plain land under
-            // everything and is what marks a cell as farmable; BRANCH carries
-            // ONLY the dry branch canals sitting on that land.
+            // these four, named exactly this. GROUND and BRANCH are drawn as
+            // soon as the band is built; MAIN is held back and revealed as the
+            // auger digs. CROPS is a MARKER layer — never drawn, it only says
+            // which cells grow a crop, one plant at each marked cell's centre.
+            // Any gid works as the marker (only non-zero is tested).
             GROUND_LAYER: 'ground',        // plain land, under everything
             BRANCH_LAYER: 'branch',        // dry branch canals (always shown)
-            MAIN_LAYER: 'main_canal_dry',  // main canal, revealed as it's dug
+            MAIN_LAYER: 'main',            // main canal, revealed as it's dug
+            CROPS_LAYER: 'crops',          // marker only — where crops spawn
 
             // gid → meaning. The gid is the number Tiled shows when you hover a
             // tile. conn = open edges (any of n/e/s/w). main = 'L'/'R' half of
