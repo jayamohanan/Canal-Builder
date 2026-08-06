@@ -22,7 +22,9 @@ with visible height.
 Cozy 2D farming game art. Smooth painterly finish, soft clean edges,
 subtle shading — not pixel art. Flat even lighting, no cast shadows from
 off-screen, no vignette, no gradient across the tile. Clean readable
-shapes with light texture detail. One square tile filling the entire
+shapes with light texture detail. 
+
+One square tile filling the entire
 frame edge to edge — no border, no frame, no padding, no drop shadow
 crossing the edge.
 Palette limited to: grass #8ed04f, dark grass #6ea83a, tilled soil

@@ -469,7 +469,12 @@ var CONFIG = {
                                     // over the rounded closing); the water still
                                     // fills quietly on to END_FILL
 
-            BASE_LAYER: 'base',            // grass + dry branches (always shown)
+            // Layer order in the .tmj, bottom to top. Every level map carries
+            // these three, named exactly this. GROUND is the plain land under
+            // everything and is what marks a cell as farmable; BRANCH carries
+            // ONLY the dry branch canals sitting on that land.
+            GROUND_LAYER: 'ground',        // plain land, under everything
+            BRANCH_LAYER: 'branch',        // dry branch canals (always shown)
             MAIN_LAYER: 'main_canal_dry',  // main canal, revealed as it's dug
 
             // gid → meaning. The gid is the number Tiled shows when you hover a

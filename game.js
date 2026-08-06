@@ -706,8 +706,9 @@ console.log(
                 cols, rows, tile,
                 left: B.x + (B.width - gw) / 2,   // centred horizontally
                 w: gw, h: gh,
-                baseData: layer(TM.BASE_LAYER) || map.layers[0].data,  // grass + branches
-                mainData: layer(TM.MAIN_LAYER) || [],                  // dug main canal
+                groundData: layer(TM.GROUND_LAYER) || [],   // plain land
+                branchData: layer(TM.BRANCH_LAYER) || [],   // dry branches
+                mainData: layer(TM.MAIN_LAYER) || [],       // dug main canal
                 mainLeftCol, mainRightCol, mainW,
             };
             // The spritesheet frame for a gid is (gid - firstgid); TILES gives
@@ -849,21 +850,24 @@ console.log(
         const g    = this.tileGrid;
         const gTop = bandBot - g.h;            // anchor grid to the band's bottom
 
-        // The BASE layer — grass everywhere + the pre-built dry branches — is
-        // drawn statically and always visible (each cell a spritesheet frame).
-        // The main canal (main_canal_dry layer) is NOT drawn here; the flood
-        // system reveals it as the auger digs.
-        for (let row = 0; row < g.rows; row++) {
-            for (let col = 0; col < g.cols; col++) {
-                const gid = g.baseData[row * g.cols + col];
-                if (!gid) continue;
-                this._addB(this.add.image(
-                        g.left + (col + 0.5) * g.tile,
-                        gTop   + (row + 0.5) * g.tile,
-                        'canal_sheet', gid - this.tileFirstGid)
-                    // +1px so neighbours overlap and no sub-pixel gap shows.
-                    .setDisplaySize(g.tile + 1, g.tile + 1)
-                    .setDepth(1.5), seg);
+        // GROUND (plain land) then BRANCH (the pre-built dry branches on top
+        // of it) are drawn statically and always visible, each cell one
+        // spritesheet frame. Both come from the same sheet, so they batch as
+        // one. The main canal (main_canal_dry layer) is NOT drawn here; the
+        // flood system reveals it as the auger digs.
+        for (const [data, depth] of [[g.groundData, 1.4], [g.branchData, 1.5]]) {
+            for (let row = 0; row < g.rows; row++) {
+                for (let col = 0; col < g.cols; col++) {
+                    const gid = data[row * g.cols + col];
+                    if (!gid) continue;
+                    this._addB(this.add.image(
+                            g.left + (col + 0.5) * g.tile,
+                            gTop   + (row + 0.5) * g.tile,
+                            'canal_sheet', gid - this.tileFirstGid)
+                        // +1px so neighbours overlap and no sub-pixel gap shows.
+                        .setDisplaySize(g.tile + 1, g.tile + 1)
+                        .setDepth(depth), seg);
+                }
             }
         }
 
@@ -931,13 +935,15 @@ console.log(
         }
         const sc    = g.tile / this.textures.getFrame(key, 0).width;   // 128 → one cell
         const crops = seg.crops = [];
+        // Land comes from the GROUND layer and BRANCH holds only the dry
+        // branches, so a cell is farmable when it has ground and no branch on
+        // top of it.
         for (let r = 0; r < g.rows; r++) {
             for (let c = 0; c < g.cols; c++) {
                 if (c === g.mainLeftCol || c === g.mainRightCol) continue;   // canal path
-                const gid = g.baseData[r * g.cols + c];
-                if (!gid) continue;
-                const cn = this._connOfGid(gid);
-                if (cn.n || cn.e || cn.s || cn.w) continue;                  // a canal tile
+                if (!g.groundData[r * g.cols + c]) continue;                 // no land here
+                const cn = this._connOfGid(g.branchData[r * g.cols + c] || 0);
+                if (cn.n || cn.e || cn.s || cn.w) continue;                  // a branch canal
                 // nearest canal cell (Manhattan) — decided once, cached.
                 let best = null, bd = Infinity;
                 for (const cc of canal) {
@@ -1039,13 +1045,13 @@ console.log(
                     cells.set(c + ',' + r, {
                         col: c, row: r, conn: mConn, progress: 0, dryP: 0,
                         entryDir: 's', filling: false, filled: false, isMain: true,
-                        dry:  sprite(mainGid,       c, r, 1.52),  // above base grass
+                        dry:  sprite(mainGid,       c, r, 1.52),  // above ground + branch
                         flow: sprite(mainGid + off, c, r, 1.55),
                     });
                     continue;
                 }
-                const baseGid = g.baseData[r * g.cols + c] || 0;
-                const bConn   = this._connOfGid(baseGid);
+                const branchGid = g.branchData[r * g.cols + c] || 0;
+                const bConn     = this._connOfGid(branchGid);
                 if (bConn.n || bConn.e || bConn.s || bConn.w) {
                     // Branch cell — dry tile already static; filled twin only.
                     // A single-connection tile is a dead end (its channel closes
@@ -1055,7 +1061,7 @@ console.log(
                     cells.set(c + ',' + r, {
                         col: c, row: r, conn: bConn, progress: 0, isEnd: nConn === 1,
                         entryDir: null, filling: false, filled: false, isMain: false,
-                        dry: null, flow: sprite(baseGid + off, c, r, 1.55),
+                        dry: null, flow: sprite(branchGid + off, c, r, 1.55),
                     });
                 }
             }
