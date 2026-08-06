@@ -1129,6 +1129,16 @@ console.log(
         return true;
     }
 
+    // Has every crop in this segment reached its last growth stage? `done` is
+    // set by _updateCrops the frame a crop hits the final stage. Only meaningful
+    // once the flood is finished — a crop whose watched canal cell never fills
+    // never starts growing, so this is checked alongside _floodDone, not alone.
+    _cropsDone(seg) {
+        if (!seg.crops) return true;
+        for (const cr of seg.crops) if (!cr.done) return false;
+        return true;
+    }
+
     _updateFloodOne(tn, dt, time) {
         const F  = tn.flood, g = F.g;
         // Smooth continuous speed — the branches flow at the main canal's pace.
@@ -1928,9 +1938,13 @@ console.log(
         const E = this.endless;
         if (!E || !E.nextReady || E.panning) return;
         // Don't move on until the finished band's branches have all filled —
-        // let the water reach the end of every ditch first.
+        // let the water reach the end of every ditch first — and then until
+        // every crop it waters has grown through to its final stage. The whole
+        // point of the level is watching the field come in, so the payoff is
+        // never cut short by the pan.
         for (const seg of this.segments) {
-            if (seg.tunnel && seg.tunnel.open && !this._floodDone(seg.tunnel)) {
+            if (!seg.tunnel || !seg.tunnel.open) continue;
+            if (!this._floodDone(seg.tunnel) || !this._cropsDone(seg)) {
                 this.time.delayedCall(300, () => this._maybePan());
                 return;
             }
