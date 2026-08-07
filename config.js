@@ -445,6 +445,23 @@ var CONFIG = {
             // Sprites are bottom-anchored, so this reads as growing upward.
             CROP_POP_FROM: 0.9,     // starting y-scale fraction (1 = no animation)
             CROP_POP_MS:   260,     // spring duration
+            // The ground under a plant changes as it matures. Each entry ADDS a
+            // transparent perlin overlay on top of the map's own ground tile —
+            // nothing is replaced and nothing is removed, so by the last stage a
+            // cell is ground + damp + grass, all three visible. `frame` is a
+            // tilesheet FRAME index (not a map gid); the key is the crop stage
+            // that adds it. Cells with no crop are never touched.
+            //
+            // Blend modes differ on purpose:
+            //   MULTIPLY for damp — wet soil is the SAME soil darkened, so
+            //     multiplying keeps the ground's grain showing through and
+            //     adapts to whatever ground tile sits below it
+            //   NORMAL for grass — grass is new material lying on the soil,
+            //     not a darkening of it, so it should cover rather than tint
+            CROP_OVERLAY: {
+                2: { frame: 56, blend: 'MULTIPLY', alpha: 1 },   // damp soil
+                4: { frame: 57, blend: 'NORMAL',   alpha: 1 },   // grass
+            },
             HEAD_FRAME: 55,         // sheet frame of the plain water texture — the
                                     // flowing head's body is drawn with it so it
                                     // matches the filled canal

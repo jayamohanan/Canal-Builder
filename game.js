@@ -856,18 +856,24 @@ console.log(
         // spritesheet frame. Both come from the same sheet, so they batch as
         // one. The main canal (main_canal_dry layer) is NOT drawn here; the
         // flood system reveals it as the auger digs.
+        // The ground pass keeps its sprites, indexed by cell, so a crop can
+        // green the tile under itself as it grows (see _updateCrops). Branch
+        // tiles never change, so that pass stays anonymous.
+        const ground = seg.groundSprites = [];
         for (const [data, depth] of [[g.groundData, 1.4], [g.branchData, 1.5]]) {
+            const isGround = data === g.groundData;
             for (let row = 0; row < g.rows; row++) {
                 for (let col = 0; col < g.cols; col++) {
                     const gid = data[row * g.cols + col];
                     if (!gid) continue;
-                    this._addB(this.add.image(
+                    const spr = this._addB(this.add.image(
                             g.left + (col + 0.5) * g.tile,
                             gTop   + (row + 0.5) * g.tile,
                             'canal_sheet', gid - this.tileFirstGid)
                         // +1px so neighbours overlap and no sub-pixel gap shows.
                         .setDisplaySize(g.tile + 1, g.tile + 1)
                         .setDepth(depth), seg);
+                    if (isGround) ground[row * g.cols + col] = spr;
                 }
             }
         }
@@ -955,9 +961,46 @@ console.log(
                     .setOrigin(0.5, 1).setScale(sc).setDepth(3 + r * 0.001), seg);
                 // `sc` is cached per crop so the stage-change spring knows the
                 // full y-scale to settle back to. Stage 1 spawns hard, unscaled.
-                crops.push({ watch: best, stage: 1, timer: 0, sprite: spr, sc, crop, done: false });
+                // `ground` is this cell's ground tile — never changed itself, but
+                // the anchor the growth overlays are laid on. `ovl` counts them.
+                crops.push({ watch: best, stage: 1, timer: 0, sprite: spr, sc, crop,
+                             ground: (seg.groundSprites || [])[r * g.cols + c] || null,
+                             ovl: 0, done: false });
             }
         }
+    }
+
+    // Begin the overlay due at crop stage `at`, fading it in over `ms`. It is
+    // started one stage EARLY so it lands fully on exactly as that stage
+    // arrives — damp soil creeps in across the seed, grass across the young
+    // plant. Overlays STACK: each is a new sprite just above the last, so damp
+    // stays visible under the grass and nothing is ever replaced.
+    // Called again for a stage already laid (a skipped stage) it just snaps
+    // that one to full rather than adding a second copy.
+    _startCropOverlay(seg, cr, at, o, ms) {
+        if (!cr.ground) return;
+        const done = cr.ovlSpr || (cr.ovlSpr = {});
+        const full = o.alpha !== undefined ? o.alpha : 1;
+        if (done[at]) {                          // already laid
+            if (ms <= 0) {                       // stage passed — finish it now
+                this.tweens.killTweensOf(done[at]);
+                done[at].setAlpha(full);
+            }
+            return;
+        }
+        const gnd = cr.ground;
+        const spr = this._addB(this.add.image(gnd.x, gnd.y, 'canal_sheet', o.frame)
+            .setDisplaySize(gnd.displayWidth, gnd.displayHeight)
+            // Ground sits at 1.4 and the dry branches at 1.5; each overlay slots
+            // between them in the order it was added.
+            .setDepth(1.4 + 0.02 * (++cr.ovl)), seg);
+        const bm = o.blend && Phaser.BlendModes[o.blend];
+        if (bm !== undefined) spr.setBlendMode(bm);
+        done[at] = spr;
+        if (ms <= 0) { spr.setAlpha(full); return; }
+        spr.setAlpha(0);
+        this.tweens.add({ targets: spr, alpha: full, duration: ms, ease: 'Sine.easeIn' });
+        return spr;
     }
 
     // Grow crops whose nearest canal cell has been watered: advance one stage
@@ -968,20 +1011,40 @@ console.log(
         const dt = this._cropT ? Math.min((time - this._cropT) / 1000, 0.1) : 0;
         this._cropT = time;
         if (dt <= 0) return;
-        const growS  = (TM.CROP_GROW_MS || 2000) / 1000;
+        const growMs = TM.CROP_GROW_MS || 2000;   // one stage — also the fade time
+        const growS  = growMs / 1000;
         const stages = TM.CROP_STAGES || 5;
         const wet    = TM.CROP_WET !== undefined ? TM.CROP_WET : 0.15;
         const popFr  = TM.CROP_POP_FROM !== undefined ? TM.CROP_POP_FROM : 0.8;
         const popMs  = TM.CROP_POP_MS   !== undefined ? TM.CROP_POP_MS   : 260;
+        const ovl    = TM.CROP_OVERLAY || null;  // stage → ground overlay to add
         for (const seg of this.segments) {
             if (!seg.crops) continue;
             for (const cr of seg.crops) {
                 if (cr.done || !cr.watch || cr.watch.progress <= wet) continue;
+                // The very first tick after this cell's canal wets: the plant is
+                // still a seed, and that is when the overlay due one stage later
+                // begins its fade, so damp soil arrives exactly as it sprouts.
+                if (ovl && cr.timer === 0 && ovl[cr.stage + 1]) {
+                    this._startCropOverlay(seg, cr, cr.stage + 1, ovl[cr.stage + 1], growMs);
+                }
                 cr.timer += dt;
                 const st = Math.min(stages, 1 + Math.floor(cr.timer / growS));
                 if (st !== cr.stage) {
+                    const from = cr.stage;
                     cr.stage = st;
                     cr.sprite.setFrame(st - 1);         // frame 0 = stage 1
+                    // Overlays fade in ACROSS a stage, not on arrival: entering a
+                    // stage starts the one due at the next. Every crossed stage is
+                    // scanned, so a skipped stage (a long frame, or the level
+                    // running fast) still lays its layer — snapped straight to
+                    // full, since its fade window has already gone by.
+                    if (cr.ground && ovl) {
+                        for (let s = from + 1; s <= st; s++) {
+                            if (ovl[s + 1]) this._startCropOverlay(seg, cr, s + 1, ovl[s + 1], growMs);
+                            if (ovl[s])     this._startCropOverlay(seg, cr, s,     ovl[s],     0);
+                        }
+                    }
                     // Spring the new frame up from a squashed y-scale. Only
                     // reachable for stage 2+, so the seed never animates.
                     if (popFr < 1 && popMs > 0) {
