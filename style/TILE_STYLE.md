@@ -29,11 +29,16 @@ frame edge to edge — no border, no frame, no padding, no drop shadow
 crossing the edge.
 Palette limited to: grass #8ed04f, dark grass #6ea83a, tilled soil
 #84694a, dark soil #5f4a33, water #2f8fd0, shallow water #7fd4f0,
-stone #9a9a90. No text, no labels, no watermark, no UI elements.
+stone #9a9a90, wood #b49c74, dark wood #7a6348. No text, no labels,
+no watermark, no UI elements.
 ```
 
 The palette hexes are the game's own colours — `LAND_COLOR`, `WATER.COLOR`,
 `WATER.EDGE_COLOR`, `TUNNEL.CUT_COLOR` in [config.js](../config.js). Keep them in sync.
+
+**Wood** is deliberately low-saturation (~30%) muted honey-oak, not a warm
+red-brown — see [FENCE_STYLE.md](FENCE_STYLE.md), which owns all timber art and
+the reasoning behind those two hexes.
 
 ---
 
@@ -241,3 +246,5 @@ in `_makeTunnelTextures()` ([game.js](../game.js)) may need re-measuring against
 | 2026-07-24 | Main canal is 5 tiles: `main_ns` ×2 variations, `main_nse`, `main_nsw`, `main_nsew` (junction stubs are branch-width 0.42) |
 | 2026-07-24 | Two channel widths only: main 0.85, branch 0.42 (sub and sub-sub share a width) |
 | 2026-07-24 | Full branch Wang set incl. 4 corners + 4 end caps (15 pieces) for level variety |
+| 2026-08-07 | Palette gains **wood #b49c74 / dark wood #7a6348** — muted honey-oak at ~30% saturation, NOT a warm red-brown |
+| 2026-08-07 | All fence/timber art moved to [FENCE_STYLE.md](FENCE_STYLE.md); this file keeps the shared style lock and palette |

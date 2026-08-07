@@ -445,6 +445,13 @@ var CONFIG = {
             // Sprites are bottom-anchored, so this reads as growing upward.
             CROP_POP_FROM: 0.9,     // starting y-scale fraction (1 = no animation)
             CROP_POP_MS:   260,     // spring duration
+            // Where the plant's STEM meets the ground, as a fraction of the
+            // frame height. Not 1: the art carries a blurred elliptical shadow
+            // below the stem, so the stem base sits 230px down a 256px frame
+            // with the shadow filling the rest. This is the sprite's origin, so
+            // it is the stem — not the frame's bottom edge — that lands on the
+            // cell centre, and the growth spring pins there too.
+            CROP_STEM_Y: 230 / 256,
             // The ground under a plant changes as it matures. Each entry ADDS a
             // transparent perlin overlay on top of the map's own ground tile —
             // nothing is replaced and nothing is removed, so by the last stage a

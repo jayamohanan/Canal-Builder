@@ -940,6 +940,10 @@ console.log(
                 { frameWidth: img.width / stages, frameHeight: img.height });
         }
         const sc    = g.tile / this.textures.getFrame(key, 0).width;   // 128 → one cell
+        // Origin is the stem base, not the frame bottom — the art hangs a
+        // shadow ellipse below the stem, and it is the stem that must land on
+        // the cell centre.
+        const stemY = TM.CROP_STEM_Y !== undefined ? TM.CROP_STEM_Y : 1;
         const crops = seg.crops = [];
         // The CROPS layer is the single source of truth: one plant per marked
         // cell, at that cell's centre. Which gid was used doesn't matter — the
@@ -958,7 +962,7 @@ console.log(
                 if (!best) continue;
                 const spr = this._addB(this.add.image(
                         g.left + (c + 0.5) * g.tile, gTop + (r + 0.5) * g.tile, key, 0)
-                    .setOrigin(0.5, 1).setScale(sc).setDepth(3 + r * 0.001), seg);
+                    .setOrigin(0.5, stemY).setScale(sc).setDepth(3 + r * 0.001), seg);
                 // `sc` is cached per crop so the stage-change spring knows the
                 // full y-scale to settle back to. Stage 1 spawns hard, unscaled.
                 // `ground` is this cell's ground tile — never changed itself, but
