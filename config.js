@@ -420,7 +420,7 @@ var CONFIG = {
         TILEMAP: {
             ENABLED: true,
             FILE:    'level_maps/level_01.tmj',
-            SHEET:   'graphics/tilesheets/canal_tilesheet.webp',
+            SHEET:   'graphics/tilesheets/canals.webp',
             FRAME:   128,           // frame size in the sheet
             MAIN_TILES: 2,          // the main canal is this many tiles wide
 
@@ -497,26 +497,44 @@ var CONFIG = {
             // stands off the bank rather than hugging it, and the inner row
             // stands off the outer one. Streaks touching the bank read as an
             // edging painted on the canal instead of light floating on it.
+            // Insets are measured to the streak's CENTRE, so its own thickness
+            // eats into the gaps either side of it. Budget across the channel's
+            // half width (0.225 tile), from the bank inward:
+            //   bank → 0.030 clear → row 1 (0.055 thick) → 0.040 clear →
+            //   row 2 (0.045 thick) → the rest is open water to the centreline
+            // Thin rows are what make room for the gaps to be visible at all —
+            // there is only ~10px of half-channel on screen to work with.
             MARK_LAYERS: [
-                { inset: 0.74, chance: 0.34, len: 0.60, thick: 0.07 },
-                { inset: 0.44, chance: 0.13, len: 0.36, thick: 0.055 },
+                { inset: 0.74, chance: 0.34, len: 0.60, thick: 0.055 },
+                { inset: 0.34, chance: 0.13, len: 0.36, thick: 0.045 },
             ],
-            MARK_MIN:     0.15,     // dimmest — never fully off, so it shimmers
-            MARK_MAX:     0.70,     // brightest
-            MARK_MS_MIN:  1500,     // one fade cycle, randomised per streak so
-            MARK_MS_MAX:  3000,     // no two ever pulse together
-            MARK_FADE_MS: 500,      // ease-in when a cell first settles
-            MARK_DRIFT:   0.03,     // lateral travel ALONG the bank, as a
-                                    // fraction of a tile — a couple of pixels.
-                                    // Pixel games nudge these one pixel at a
-                                    // time; this is the smooth equivalent
-            MARK_DRIFT_MS: 2600,    // one there-and-back drift, per streak ±25%
-            // Streaks cycle between an off-white and a blue-tinted white rather
-            // than sitting at one colour — never pure white, which reads as UI
-            // rather than as light on water.
-            MARK_COLOR_A: 0xeaf6fb, // soft off-white
-            MARK_COLOR_B: 0x9fdcf2, // blue-white, pulled toward the shallows
-            MARK_COLOR_MS: 3400,    // colour cycle, deliberately out of step
+            // STEPPED, not smooth. Every value below snaps between a handful of
+            // fixed states and holds, the way a hand-drawn pixel animation
+            // cycles frames — no easing, no interpolation. Brightness, drift and
+            // colour each run their own cycle at their own rate, so a streak
+            // rarely changes two things at once and the field never falls into
+            // a visible rhythm.
+            MARK_MIN:     0.15,     // dimmest state — never fully off
+            MARK_MAX:     0.70,     // brightest state
+            MARK_LEVELS:  4,        // how many brightness states to snap between
+            // Cycle times are for a WHOLE cycle, and a cycle is several steps —
+            // brightness at 4 levels is 6 steps up and back, so a 5s cycle
+            // holds each state for a bit over 800ms. That slowness is the
+            // point: a stepped animation that changes quickly reads as flicker.
+            MARK_MS_MIN:  4000,     // time for one full brightness cycle,
+            MARK_MS_MAX:  7000,     // randomised per streak
+            MARK_FADE_MS: 500,      // ease-in when a cell first settles (the one
+                                    // deliberately smooth part — a streak that
+                                    // popped into existence would read as a bug)
+            MARK_DRIFT:   0.03,     // lateral travel ALONG the bank, fraction of
+                                    // a tile — the extreme of the jump, not a
+                                    // smooth slide
+            MARK_DRIFT_STEPS: 3,    // discrete positions: back, centre, forward
+            MARK_DRIFT_MS: 6000,    // one full drift cycle, per streak ±25%
+            // Snaps between these in order and back again. Never pure white —
+            // that reads as UI rather than as light on water.
+            MARK_COLORS: [0xeaf6fb, 0xbfe8f7, 0x9fdcf2],
+            MARK_COLOR_MS: 7500,    // colour cycle, deliberately out of step
                                     // with the brightness so they never align
             // Measured off the art, NOT the same as CHANNEL_FRAC below: the
             // painted water spans ~0.45 of a tile in a branch tile, and the

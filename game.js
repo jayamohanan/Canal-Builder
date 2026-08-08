@@ -1394,29 +1394,35 @@ console.log(
                 this._placeCellMarks(tn, F, cell, time);
             }
         }
-        // Brightness, a slow slide ALONG the bank, and a colour cycle — all on
-        // separate periods per streak so nothing ever lines up. Only position,
-        // alpha and tint change; none of those disturb the draw order.
+        // STEPPED animation. Each value snaps between a few fixed states and
+        // holds — nothing eases. `stepIdx` walks a cycle up through the states
+        // and back down (0,1,2,3,2,1…) so a streak brightens and dims in
+        // discrete jumps rather than sliding. Brightness, drift and colour run
+        // at different rates so they rarely change on the same frame. Only
+        // position, alpha and tint change; none disturb the draw order.
         if (F.marks.length) {
             const MK = CONFIG.ROAD.TILEMAP;
             const lo = MK.MARK_MIN !== undefined ? MK.MARK_MIN : 0.15;
             const hi = MK.MARK_MAX !== undefined ? MK.MARK_MAX : 0.70;
             const fadeMs = MK.MARK_FADE_MS !== undefined ? MK.MARK_FADE_MS : 500;
+            const lv = Math.max(2, MK.MARK_LEVELS || 4);
+            const ds = Math.max(2, MK.MARK_DRIFT_STEPS || 3);
+            const cols = MK.MARK_COLORS || [0xeaf6fb, 0x9fdcf2];
             const cMs = MK.MARK_COLOR_MS || 3400;
-            const cA  = MK.MARK_COLOR_A !== undefined ? MK.MARK_COLOR_A : 0xeaf6fb;
-            const cB  = MK.MARK_COLOR_B !== undefined ? MK.MARK_COLOR_B : 0x9fdcf2;
-            const aR = (cA >> 16) & 255, aG = (cA >> 8) & 255, aB = cA & 255;
-            const bR = (cB >> 16) & 255, bG = (cB >> 8) & 255, bB = cB & 255;
+            // Position in a hold-and-jump cycle: 0..n-1 and back, never between.
+            const stepIdx = (t, periodMs, n, phase) => {
+                const span = 2 * n - 2;                       // up then back down
+                const i = Math.floor((((t / periodMs + phase) % 1) + 1) % 1 * span);
+                return i < n ? i : span - i;
+            };
             for (const m of F.marks) {
                 const fade = fadeMs > 0 ? Math.min(1, (time - m.t0) / fadeMs) : 1;
-                const w = 0.5 + 0.5 * Math.sin(time / m.period * 6.283 + m.phase);
-                m.spr.setAlpha((lo + (hi - lo) * w) * fade);
-                const d = Math.sin(time / m.dPeriod * 6.283 + m.dPhase) * m.drift;
-                if (m.vert) m.spr.y = m.y + d; else m.spr.x = m.x + d;
-                const t = 0.5 + 0.5 * Math.sin(time / cMs * 6.283 + m.cPhase);
-                m.spr.setTint(((aR + (bR - aR) * t) << 16 |
-                               (aG + (bG - aG) * t) << 8  |
-                               (aB + (bB - aB) * t)) & 0xffffff);
+                const b = stepIdx(time, m.period, lv, m.phase) / (lv - 1);
+                m.spr.setAlpha((lo + (hi - lo) * b) * fade);
+                const d = stepIdx(time, m.dPeriod, ds, m.dPhase) / (ds - 1) * 2 - 1;
+                if (m.vert) m.spr.y = m.y + d * m.drift;
+                else        m.spr.x = m.x + d * m.drift;
+                m.spr.setTint(cols[stepIdx(time, cMs, cols.length, m.cPhase)]);
             }
         }
 
