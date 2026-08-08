@@ -479,6 +479,51 @@ var CONFIG = {
                                     // the water is seen to divide while it is
                                     // still crossing rather than looking held
                                     // back until the tile is full
+            // ── Bank shimmer ────────────────────────────────────────────────
+            // Once a cell has finished filling, a few small light streaks sit
+            // just inside the water at its edges and slowly fade up and down.
+            // It is the settled water's only animation and it does most of the
+            // work of making a still canal look alive — cheap, because the
+            // streaks never move: only their brightness changes.
+            MARK_ENABLED: true,
+            // Two rows of streaks per bank. The outer row sits against the
+            // water's edge and carries the effect; the inner row is a sparse
+            // scatter a little further in, which stops the outer one reading as
+            // a line ruled down the bank. Each entry: how far out as a fraction
+            // of the channel's half width (1 = on the water's edge, 0 = the
+            // centreline), the chance any one arm-side gets a streak, and the
+            // streak's size as fractions of a tile.
+            // Insets leave clear water on BOTH sides of each row: the outer row
+            // stands off the bank rather than hugging it, and the inner row
+            // stands off the outer one. Streaks touching the bank read as an
+            // edging painted on the canal instead of light floating on it.
+            MARK_LAYERS: [
+                { inset: 0.74, chance: 0.34, len: 0.60, thick: 0.07 },
+                { inset: 0.44, chance: 0.13, len: 0.36, thick: 0.055 },
+            ],
+            MARK_MIN:     0.15,     // dimmest — never fully off, so it shimmers
+            MARK_MAX:     0.70,     // brightest
+            MARK_MS_MIN:  1500,     // one fade cycle, randomised per streak so
+            MARK_MS_MAX:  3000,     // no two ever pulse together
+            MARK_FADE_MS: 500,      // ease-in when a cell first settles
+            MARK_DRIFT:   0.03,     // lateral travel ALONG the bank, as a
+                                    // fraction of a tile — a couple of pixels.
+                                    // Pixel games nudge these one pixel at a
+                                    // time; this is the smooth equivalent
+            MARK_DRIFT_MS: 2600,    // one there-and-back drift, per streak ±25%
+            // Streaks cycle between an off-white and a blue-tinted white rather
+            // than sitting at one colour — never pure white, which reads as UI
+            // rather than as light on water.
+            MARK_COLOR_A: 0xeaf6fb, // soft off-white
+            MARK_COLOR_B: 0x9fdcf2, // blue-white, pulled toward the shallows
+            MARK_COLOR_MS: 3400,    // colour cycle, deliberately out of step
+                                    // with the brightness so they never align
+            // Measured off the art, NOT the same as CHANNEL_FRAC below: the
+            // painted water spans ~0.45 of a tile in a branch tile, and the
+            // main canal's outer water edge sits ~0.19 tile from each of its
+            // two columns' centres. Streaks are placed against these.
+            MARK_CHAN:    0.45,     // painted branch water width, tile fraction
+            MARK_MAIN:    0.19,     // main canal outer edge, from cell centre
             CHANNEL_FRAC: 0.5,      // water-channel width as a fraction of a tile
                                     // (the gap between the banks in the art). The
                                     // head is sized to this so it fits the walls;

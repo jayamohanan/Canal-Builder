@@ -1137,11 +1137,12 @@ console.log(
         // filling water covers the foam behind its edge and only the leading
         // churn shows. A per-head strip mask keeps them inside the banks.
         this._ensureFoamBlobTexture();
+        this._ensureMarkTexture();
         const foamMask = this._addB(this.add.graphics().setVisible(false), seg);
         foamMask._noRebase = true;
         return { g, cells, active: [], triggered: new Set(),
                  mainLeftCol: g.mainLeftCol, mainRightCol: g.mainRightCol,
-                 foamMask, blobMask: foamMask.createGeometryMask(),
+                 foamMask, blobMask: foamMask.createGeometryMask(), marks: [],
                  channelW: this.road.canalW, seg,
                  heads: [], foamBlobs: [], foamWhite: [],
                  headFrame: CONFIG.ROAD.TILEMAP.HEAD_FRAME };
@@ -1204,6 +1205,94 @@ console.log(
         if (!seg.crops) return true;
         for (const cr of seg.crops) if (!cr.done) return false;
         return true;
+    }
+
+    // Lay the shimmer streaks on a cell that has just finished filling. One
+    // per arm-side at most, and only some of those — sparse and irregular, so
+    // it never reads as an outline drawn down the banks. Positions are fixed
+    // here and never touched again; only brightness animates afterwards.
+    // Reuses the baked white foam ellipse, squashed thin, so there is no new
+    // art and the streaks batch with the foam.
+    _placeCellMarks(tn, F, cell, time) {
+        const TM = CONFIG.ROAD.TILEMAP, g = F.g;
+        const layers = TM.MARK_LAYERS || [{ inset: 0.86, chance: 0.34, len: 0.30, thick: 0.07 }];
+        const half = (TM.MARK_CHAN !== undefined ? TM.MARK_CHAN : 0.45) / 2;
+        const mainOut = TM.MARK_MAIN !== undefined ? TM.MARK_MAIN : 0.19;
+        const drift = (TM.MARK_DRIFT !== undefined ? TM.MARK_DRIFT : 0.03) * g.tile;
+        const driftMs = TM.MARK_DRIFT_MS || 2600;
+        const cx = g.left   + (cell.col + 0.5) * g.tile;
+        const cy = tn.exitY + (cell.row + 0.5) * g.tile;
+
+        // One entry per bank a streak could sit against. A main cell is always
+        // a vertical run, and its two centre columns each have only ONE outer
+        // bank — the seam between them is open water, so a streak there would
+        // be a glint down the middle of the canal.
+        const OPP = { n: 's', e: 'w', s: 'n', w: 'e' };
+        const banks = [];
+        if (cell.isMain) {
+            banks.push({ vert: true, side: cell.col === F.mainLeftCol ? -1 : 1,
+                         edge: mainOut, straight: true });
+        } else {
+            for (const d of ['n', 'e', 's', 'w']) {
+                if (!cell.conn[d]) continue;
+                // A straight run's two arms share the same PAIR of banks, so
+                // take that pair once — otherwise every straight tile gets
+                // twice the streaks of a corner.
+                const straight = !!cell.conn[OPP[d]];
+                if (straight && (d === 'n' || d === 'w')) continue;
+                for (const side of [-1, 1]) banks.push({ vert: d === 'n' || d === 's',
+                                                         side, edge: half, dir: d, straight });
+            }
+        }
+        for (const L of layers) {
+            const lenP = L.len * g.tile, thkP = L.thick * g.tile;
+            const span = 0.5 * g.tile - lenP / 2;      // keeps it inside the tile
+            for (const b of banks) {
+                if (Math.random() > L.chance) continue;
+                let along;
+                if (b.straight) {
+                    // The bank runs unbroken through the cell, so the streak may
+                    // sit anywhere along it — which is what lets it be long.
+                    if (span <= 0) continue;
+                    along = -span + Math.random() * 2 * span;
+                } else {
+                    // A turn or a junction: stay outside the cell's open centre,
+                    // where there is no bank to catch light.
+                    const lo = half * g.tile;
+                    if (span <= lo) continue;
+                    along = (lo + Math.random() * (span - lo)) *
+                            (b.dir === 'n' || b.dir === 'w' ? -1 : 1);
+                }
+                const off = b.side * b.edge * L.inset * g.tile;
+                const x = b.vert ? cx + off   : cx + along;
+                const y = b.vert ? cy + along : cy + off;
+                const spr = this._addB(this.add.image(x, y, 'mark_px')
+                    .setDisplaySize(b.vert ? thkP : lenP, b.vert ? lenP : thkP)
+                    .setDepth(1.556)          // on the water (1.55), under the head
+                    .setAlpha(0), F.seg);
+                F.marks.push({
+                    spr, t0: time, x, y, vert: b.vert, drift,
+                    phase:   Math.random() * Math.PI * 2,
+                    period:  (TM.MARK_MS_MIN || 1500) +
+                             Math.random() * ((TM.MARK_MS_MAX || 3000) - (TM.MARK_MS_MIN || 1500)),
+                    dPhase:  Math.random() * Math.PI * 2,
+                    dPeriod: driftMs * (0.75 + Math.random() * 0.5),
+                    cPhase:  Math.random() * Math.PI * 2,
+                });
+            }
+        }
+        cell.marked = true;
+    }
+
+    // A crisp solid-white rectangle, tinted per streak at runtime. Deliberately
+    // NOT the soft foam ellipse: the shimmer wants hard edges, so it reads as a
+    // facet of light on the surface rather than a glow.
+    _ensureMarkTexture() {
+        if (this.textures.exists('mark_px')) return;
+        const t = this.textures.createCanvas('mark_px', 4, 4);
+        const c = t.getContext();
+        c.fillStyle = '#ffffff'; c.fillRect(0, 0, 4, 4);
+        t.refresh();
     }
 
     _updateFloodOne(tn, dt, time) {
@@ -1295,9 +1384,40 @@ console.log(
         //    head sits on the reveal edge and hides its straight line, so the
         //    water reads as a flowing front, not a sliding bar.
         F.foamMask.clear().fillStyle(0xffffff, 1);   // rebuilt per head below
+        const marks = CONFIG.ROAD.TILEMAP.MARK_ENABLED !== false;
         for (const cell of F.cells.values()) {
             if (cell.isMain) this._revealCrop(cell.dry, cell.dryP, 's');
             this._revealCrop(cell.flow, cell.progress, cell.entryDir);
+            // Shimmer belongs to SETTLED water — while a cell is still filling
+            // the moving crest is the interest, so wait for it to finish.
+            if (marks && cell.filled && !cell.marked) {
+                this._placeCellMarks(tn, F, cell, time);
+            }
+        }
+        // Brightness, a slow slide ALONG the bank, and a colour cycle — all on
+        // separate periods per streak so nothing ever lines up. Only position,
+        // alpha and tint change; none of those disturb the draw order.
+        if (F.marks.length) {
+            const MK = CONFIG.ROAD.TILEMAP;
+            const lo = MK.MARK_MIN !== undefined ? MK.MARK_MIN : 0.15;
+            const hi = MK.MARK_MAX !== undefined ? MK.MARK_MAX : 0.70;
+            const fadeMs = MK.MARK_FADE_MS !== undefined ? MK.MARK_FADE_MS : 500;
+            const cMs = MK.MARK_COLOR_MS || 3400;
+            const cA  = MK.MARK_COLOR_A !== undefined ? MK.MARK_COLOR_A : 0xeaf6fb;
+            const cB  = MK.MARK_COLOR_B !== undefined ? MK.MARK_COLOR_B : 0x9fdcf2;
+            const aR = (cA >> 16) & 255, aG = (cA >> 8) & 255, aB = cA & 255;
+            const bR = (cB >> 16) & 255, bG = (cB >> 8) & 255, bB = cB & 255;
+            for (const m of F.marks) {
+                const fade = fadeMs > 0 ? Math.min(1, (time - m.t0) / fadeMs) : 1;
+                const w = 0.5 + 0.5 * Math.sin(time / m.period * 6.283 + m.phase);
+                m.spr.setAlpha((lo + (hi - lo) * w) * fade);
+                const d = Math.sin(time / m.dPeriod * 6.283 + m.dPhase) * m.drift;
+                if (m.vert) m.spr.y = m.y + d; else m.spr.x = m.x + d;
+                const t = 0.5 + 0.5 * Math.sin(time / cMs * 6.283 + m.cPhase);
+                m.spr.setTint(((aR + (bR - aR) * t) << 16 |
+                               (aG + (bG - aG) * t) << 8  |
+                               (aB + (bB - aB) * t)) & 0xffffff);
+            }
         }
 
         // Channel widths (the gap between banks): one tile's fraction for a
