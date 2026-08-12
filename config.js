@@ -424,6 +424,17 @@ var CONFIG = {
             FRAME:   128,           // frame size in the sheet
             MAIN_TILES: 2,          // the main canal is this many tiles wide
 
+            // ── Terrain sheet ───────────────────────────────────────────────
+            // Everything that is NOT a canal piece: the plain ground, the flat
+            // water the flow head is drawn from, and the two growth overlays.
+            // The canal sheet now carries only canal tiles (gid ≤ 53); nothing
+            // reads past that. 5 columns × 4 rows of 128px frames, so a frame
+            // is (row-1) * 5 + (col-1).
+            TERRAIN: 'graphics/tilesheets/terrain.webp',
+            TERRAIN_GROUND: 0,      // row 1, col 1 — the field's base tile
+            TERRAIN_WATER:  1,      // row 1, col 2 — flat water; the flow head
+                                    // and its foam blobs are cut from this
+
             // ── Crops ───────────────────────────────────────────────────────
             // A crop grows on every field (grass) cell. Its seed shows from the
             // start; when the water reaches the cell's NEAREST canal cell it
@@ -465,13 +476,13 @@ var CONFIG = {
             //     adapts to whatever ground tile sits below it
             //   NORMAL for grass — grass is new material lying on the soil,
             //     not a darkening of it, so it should cover rather than tint
+            // Frames are on the TERRAIN sheet, not the canal one.
             CROP_OVERLAY: {
-                2: { frame: 56, blend: 'MULTIPLY', alpha: 1 },   // damp soil
-                4: { frame: 57, blend: 'NORMAL',   alpha: 1 },   // grass
+                2: { frame: 10, blend: 'MULTIPLY', alpha: 1 },   // damp — row 3, col 1
+                4: { frame: 15, blend: 'NORMAL',   alpha: 1 },   // mossy — row 4, col 1
             },
-            HEAD_FRAME: 55,         // sheet frame of the plain water texture — the
-                                    // flowing head's body is drawn with it so it
-                                    // matches the filled canal
+                                    // (the flow head's water now comes from
+                                    // TERRAIN_WATER above, not the canal sheet)
             SPLIT_AT:     0.3,      // how far the water must get into a junction
                                     // tile before a side branch starts, as a
                                     // fraction of the tile. 0.5 = the tile's

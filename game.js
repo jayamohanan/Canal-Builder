@@ -310,6 +310,10 @@ class GameScene extends Phaser.Scene {
             // all frames in it; TILES maps gids to meaning + filled frame.
             this.load.spritesheet('canal_sheet', TM.SHEET,
                 { frameWidth: TM.FRAME, frameHeight: TM.FRAME });
+            // Ground, flat water and the growth overlays live on their own
+            // sheet — the canal sheet is canal pieces only.
+            if (TM.TERRAIN) this.load.spritesheet('terrain', TM.TERRAIN,
+                { frameWidth: TM.FRAME, frameHeight: TM.FRAME });
             // Crop growth stages: one sheet per crop, a single row of
             // CROP_STAGES uniform frames. Loaded as plain images; the frame
             // size is derived from each at build (width / stages, full
@@ -860,7 +864,15 @@ console.log(
         // green the tile under itself as it grows (see _updateCrops). Branch
         // tiles never change, so that pass stays anonymous.
         const ground = seg.groundSprites = [];
-        for (const [data, depth] of [[g.groundData, 1.4], [g.branchData, 1.5]]) {
+        const TM = CONFIG.ROAD.TILEMAP;
+        // The GROUND layer's own gid is ignored — every painted cell draws the
+        // one terrain ground frame. BRANCH still resolves its gid against the
+        // canal sheet, since each branch cell is a different shape.
+        const gFrame = TM.TERRAIN_GROUND !== undefined ? TM.TERRAIN_GROUND : 0;
+        for (const [data, depth, tex, fixed] of [
+                [g.groundData, 1.4, 'terrain',     gFrame],
+                [g.branchData, 1.5, 'canal_sheet', null],
+            ]) {
             const isGround = data === g.groundData;
             for (let row = 0; row < g.rows; row++) {
                 for (let col = 0; col < g.cols; col++) {
@@ -869,7 +881,7 @@ console.log(
                     const spr = this._addB(this.add.image(
                             g.left + (col + 0.5) * g.tile,
                             gTop   + (row + 0.5) * g.tile,
-                            'canal_sheet', gid - this.tileFirstGid)
+                            tex, fixed !== null ? fixed : gid - this.tileFirstGid)
                         // +1px so neighbours overlap and no sub-pixel gap shows.
                         .setDisplaySize(g.tile + 1, g.tile + 1)
                         .setDepth(depth), seg);
@@ -993,7 +1005,7 @@ console.log(
             return;
         }
         const gnd = cr.ground;
-        const spr = this._addB(this.add.image(gnd.x, gnd.y, 'canal_sheet', o.frame)
+        const spr = this._addB(this.add.image(gnd.x, gnd.y, 'terrain', o.frame)
             .setDisplaySize(gnd.displayWidth, gnd.displayHeight)
             // Ground sits at 1.4 and the dry branches at 1.5; each overlay slots
             // between them in the order it was added.
@@ -1145,7 +1157,8 @@ console.log(
                  foamMask, blobMask: foamMask.createGeometryMask(), marks: [],
                  channelW: this.road.canalW, seg,
                  heads: [], foamBlobs: [], foamWhite: [],
-                 headFrame: CONFIG.ROAD.TILEMAP.HEAD_FRAME };
+                 headFrame: CONFIG.ROAD.TILEMAP.TERRAIN_WATER !== undefined
+                          ? CONFIG.ROAD.TILEMAP.TERRAIN_WATER : 1 };
     }
 
     // Bake the foam textures: a water-texture soft ellipse ('foam_blob') and a
@@ -1163,9 +1176,11 @@ console.log(
             ctx.fillStyle = grad; ctx.fillRect(0, 0, S, S);
             ctx.globalCompositeOperation = 'source-over';
         };
-        // Water blob.
-        const tex   = this.textures.get('canal_sheet');
-        const frame = tex.get(CONFIG.ROAD.TILEMAP.HEAD_FRAME);
+        // Water blob — cut from the terrain sheet's flat water frame, so the
+        // foam matches the canal's water exactly.
+        const TMW = CONFIG.ROAD.TILEMAP;
+        const tex   = this.textures.get('terrain');
+        const frame = tex.get(TMW.TERRAIN_WATER !== undefined ? TMW.TERRAIN_WATER : 1);
         const blob  = this.textures.createCanvas('foam_blob', S, S);
         const bctx  = blob.getContext();
         bctx.drawImage(tex.getSourceImage(), frame.cutX, frame.cutY,
@@ -1447,7 +1462,7 @@ console.log(
             const ew = horiz ? chW * hLen : chW, eh = horiz ? chW : chW * hLen;
             let spr = F.heads[hi];
             if (!spr) {
-                spr = this._addB(this.add.image(0, 0, 'canal_sheet', F.headFrame)
+                spr = this._addB(this.add.image(0, 0, 'terrain', F.headFrame)
                     .setDepth(1.56).setVisible(false), F.seg);
                 spr._noRebase = true;                // repositioned every frame
                 F.heads.push(spr);
