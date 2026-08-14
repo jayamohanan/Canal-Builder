@@ -476,11 +476,22 @@ var CONFIG = {
             //     adapts to whatever ground tile sits below it
             //   NORMAL for grass — grass is new material lying on the soil,
             //     not a darkening of it, so it should cover rather than tint
-            // Frames are on the TERRAIN sheet, not the canal one.
+            // Frames are on the TERRAIN sheet, not the canal one. `frame` is the
+            // FIRST of six consecutive edge variants — see CROP_OVERLAY_EDGES.
             CROP_OVERLAY: {
-                2: { frame: 10, blend: 'MULTIPLY', alpha: 1 },   // damp — row 3, col 1
-                4: { frame: 15, blend: 'NORMAL',   alpha: 1 },   // mossy — row 4, col 1
+                2: { frame: 12, blend: 'MULTIPLY', alpha: 1 },   // damp  — row 3
+                4: { frame: 18, blend: 'NORMAL',   alpha: 1 },   // mossy — row 4
             },
+            // Each overlay is drawn with a RAGGED edge where it borders bare
+            // ground and a straight one where it meets another overlay cell, so
+            // a patch gets an organic outline and a seamless interior. The six
+            // variants run left to right from the base frame; this lists which
+            // sides each draws ragged, as an N/E/S/W bitmask (N=1 E=2 S=4 W=8):
+            //   inner=0  n=1  ne=3  ns=5  nes=7  nesw=15
+            // All 16 possible situations are covered by ROTATING one of these.
+            // No flipped versions are needed, and a flip would mirror the
+            // organic noise into a visible reflection.
+            CROP_OVERLAY_EDGES: [0, 1, 3, 5, 7, 15],
                                     // (the flow head's water now comes from
                                     // TERRAIN_WATER above, not the canal sheet)
             SPLIT_AT:     0.3,      // how far the water must get into a junction

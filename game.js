@@ -975,15 +975,42 @@ console.log(
                 const spr = this._addB(this.add.image(
                         g.left + (c + 0.5) * g.tile, gTop + (r + 0.5) * g.tile, key, 0)
                     .setOrigin(0.5, stemY).setScale(sc).setDepth(3 + r * 0.001), seg);
+                // Which sides of this cell face bare ground, as an N/E/S/W
+                // bitmask — the growth overlays draw a ragged edge on those and
+                // a straight one where a crop neighbour continues the patch.
+                // Off-grid counts as bare, so the field's border is ragged.
+                const nb = (cc, rr) => (cc >= 0 && cc < g.cols && rr >= 0 && rr < g.rows &&
+                                        g.cropsData[rr * g.cols + cc]) ? 0 : 1;
+                const edge = nb(c, r - 1) | (nb(c + 1, r) << 1) |
+                             (nb(c, r + 1) << 2) | (nb(c - 1, r) << 3);
                 // `sc` is cached per crop so the stage-change spring knows the
                 // full y-scale to settle back to. Stage 1 spawns hard, unscaled.
                 // `ground` is this cell's ground tile — never changed itself, but
                 // the anchor the growth overlays are laid on. `ovl` counts them.
-                crops.push({ watch: best, stage: 1, timer: 0, sprite: spr, sc, crop,
+                crops.push({ watch: best, stage: 1, timer: 0, sprite: spr, sc, crop, edge,
                              ground: (seg.groundSprites || [])[r * g.cols + c] || null,
                              ovl: 0, done: false });
             }
         }
+    }
+
+    // Every exposed-side combination (0-15) → which of the six drawn edge
+    // variants to use and how far to turn it. Built once by rotating each
+    // variant's own mask four times: the six between them reach all 16, so no
+    // combination is ever missing and no flipped art is needed. Turning a mask
+    // 90° clockwise moves N→E→S→W→N, which is one shift with a wrap.
+    _edgeVariants() {
+        if (this._edgeTbl) return this._edgeTbl;
+        const base = CONFIG.ROAD.TILEMAP.CROP_OVERLAY_EDGES || [0, 1, 3, 5, 7, 15];
+        const tbl = this._edgeTbl = {};
+        base.forEach((mask, off) => {
+            let m = mask;
+            for (let r = 0; r < 4; r++) {
+                if (tbl[m] === undefined) tbl[m] = { off, angle: r * 90 };
+                m = ((m << 1) | (m >> 3)) & 15;
+            }
+        });
+        return tbl;
     }
 
     // Begin the overlay due at crop stage `at`, fading it in over `ms`. It is
@@ -1005,8 +1032,13 @@ console.log(
             return;
         }
         const gnd = cr.ground;
-        const spr = this._addB(this.add.image(gnd.x, gnd.y, 'terrain', o.frame)
+        // Pick the edge variant for this cell's exposed sides, and the rotation
+        // that turns the drawn tile onto them. The tile is square and drawn from
+        // its centre, so rotating stays aligned to the cell.
+        const v = this._edgeVariants()[cr.edge || 0] || { off: 0, angle: 0 };
+        const spr = this._addB(this.add.image(gnd.x, gnd.y, 'terrain', o.frame + v.off)
             .setDisplaySize(gnd.displayWidth, gnd.displayHeight)
+            .setAngle(v.angle)
             // Ground sits at 1.4 and the dry branches at 1.5; each overlay slots
             // between them in the order it was added.
             .setDepth(1.4 + 0.02 * (++cr.ovl)), seg);
