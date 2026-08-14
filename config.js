@@ -736,7 +736,10 @@ var CONFIG = {
                                    // of the reveal line (uncut side); the other
                                    // 0.6 trails over the open trench
                 BELT_FPS:   50,    // belt cycle speed  (calibrate)
-                CTRL_FPS:   12,    // control-unit cycle speed (calibrate)
+                CTRL_FPS:   12,    // control-unit (wheel) cycle speed. The rig
+                                   // travels at whatever the batteries pay for,
+                                   // so this is what sets how far the wheels
+                                   // appear to turn per px of travel
                 FLIP_Y:     false, // the dig runs UP the screen; flip both parts
                                    // if the art is drawn facing the other way
                                    // (flips the pair together — the offsets are
@@ -753,7 +756,7 @@ var CONFIG = {
                 // the offset. Both steps are source px on the same ratio.
                 SHADOW_Y:     -80, // step 1: centre, +y from the dig line
                 SHADOW_OFF_X: 40,  // step 2: the authored 46,31 offset
-                SHADOW_OFF_Y: 30,
+                SHADOW_OFF_Y: 15,
                 SHADOW_ALPHA: 1,   // the art carries its own softness; this is
                                    // just a global knock-back if it reads heavy
                 DEPTH_SHADOW: 1.522,  // under both parts, over the trench tile
