@@ -1500,8 +1500,10 @@ console.log(
             const ew = horiz ? chW * hLen : chW, eh = horiz ? chW : chW * hLen;
             let spr = F.heads[hi];
             if (!spr) {
+                const ha = CONFIG.ROAD.TILEMAP.HEAD_ALPHA;
                 spr = this._addB(this.add.image(0, 0, 'terrain', F.headFrame)
-                    .setDepth(1.56).setVisible(false), F.seg);
+                    .setDepth(1.56).setAlpha(ha !== undefined ? ha : 1)
+                    .setVisible(false), F.seg);
                 spr._noRebase = true;                // repositioned every frame
                 F.heads.push(spr);
             }
@@ -1576,6 +1578,9 @@ console.log(
         const above     = cfg('FOAM_ABOVE', false);
         const dWhite    = above ? 1.56  : 1.525;
         const dBlob     = above ? 1.565 : 1.53;
+        // Same one-shot treatment as the depth: the crest is see-through so the
+        // machine under it still reads.
+        const crestA    = cfg('CREST_ALPHA', 1);
         for (let i = 0; i < n; i++) {
             const t   = (i / (n - 1)) * 2 - 1;                 // -1..1 across
             const fwd = baseFwd + arcDepth * (1 - t * t);      // parabolic forward bow
@@ -1595,7 +1600,8 @@ console.log(
             const grab = (pool, tex, depth) => {
                 let s = pool[fbi];
                 if (!s) {
-                    s = this._addB(this.add.image(0, 0, tex).setDepth(depth).setVisible(false), F.seg);
+                    s = this._addB(this.add.image(0, 0, tex).setDepth(depth)
+                        .setAlpha(crestA).setVisible(false), F.seg);
                     s._noRebase = true; s.setMask(F.blobMask); pool.push(s);
                 }
                 return s;

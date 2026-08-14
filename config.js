@@ -588,6 +588,13 @@ var CONFIG = {
             //   • water blobs  — the same cluster copied FOAM_WATER_BACK behind
             //     the white one, so a curved water edge shows between the foam
             //     and the tile instead of the tile's straight cut
+            // Opacity of the moving front. The trencher's belt sits just under
+            // these (see TUNNEL.TRENCHER depths), so knocking them back lets
+            // the machine read THROUGH the water rolling over it. Applied when
+            // a pooled sprite is first created — like FOAM_ABOVE, a change
+            // takes a reload, so the display list is never dirtied per frame.
+            HEAD_ALPHA:  0.75,      // the head — the water tongue at the front
+            CREST_ALPHA: 0.75,      // the foam crest blobs (white + water copy)
             FOAM_ABOVE: false,      // draw the crest ABOVE the revealed tile
                                     // (1.56/1.565) instead of below it
                                     // (1.525/1.53). Above, the whole blob shows
