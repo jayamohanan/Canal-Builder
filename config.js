@@ -690,24 +690,57 @@ var CONFIG = {
                                    // machine — it spins and advances for this long,
                                    // then sits dead until the next tick
             ADVANCE_PER_CHARGE: 2, // px of digging banked per unit of battery charge
-            SCROLL: 90,            // UV scroll speed (screen px/s) on the auger's
-                                   // spiral section — the perceived rotation speed
-            BLADE_LEN: 72,         // FIXED machine length (px @ platformScale): the
-                                   // rig climbs with the face rather than being a
-                                   // shaft stretching back to where it started.
-                                   // Width comes from BLADE_DIAM × the bore, so move
-                                   // the two together to keep the rig's proportions
-            BLADE_DIAM: 0.82,      // machine width (the auger art's flight is its
-                                   // widest part) as a fraction of the bore
             MARGIN: 9,             // loose ground the bore takes beyond the channel
-                                   // on each side (px @ platformScale). The machine
-                                   // is sized off the bore, so this widens it too
+                                   // on each side (px @ platformScale)
+
+            // ── The trencher ──────────────────────────────────────────────
+            // A heavy trenching machine, drawn as TWO sprites that move as one
+            // rig: the trenching unit (the spiked belt) straddles the reveal
+            // line at the FRONT, the control unit trails behind it. They are
+            // separate only so each part's AI-drawn frames stay coherent on
+            // their own — never move one without the other.
+            //
+            // The machine works BACKWARDS: it drives up-screen with the control
+            // unit LEADING, dragging the belt behind it — so along the canal the
+            // belt is the part nearest the finished trench and the control unit
+            // is the part farthest from it, out over untouched ground. Its
+            // displacement is the reveal line's, nothing else — see
+            // _updateTunnel.
+            //
+            // SIZING: one ratio does everything. The BELT's width maps onto
+            // BELT_TILES tile widths; every other number below is source px of
+            // the same art, scaled by that same ratio — so the two parts keep
+            // their authored proportions and spacing at any tile size. At 1.5
+            // the control unit comes out ≈2.28 tiles wide (396/260 × 1.5).
+            TRENCHER: {
+                FRAMES:     5,     // frames per part (belt1..5 / control_unit1..5)
+                BELT_W:     260,   // trenching-unit art size (source px)
+                BELT_H:     794,
+                CTRL_W:     396,   // control-unit art size (source px)
+                CTRL_H:     492,
+                CTRL_GAP:   566,   // belt centre → control centre, AHEAD of the
+                                   // belt (source px, same ratio as the sizes):
+                                   // the control unit leads, the belt trails at
+                                   // the trench it is cutting
+                BELT_TILES: 1.9,   // belt width in tile widths — the scale anchor
+                                   // (the trenching unit spans 1.5 tiles; every
+                                   //  other dimension follows from this)
+                AHEAD_FRAC: 0.4,   // fraction of the belt's height sitting AHEAD
+                                   // of the reveal line (uncut side); the other
+                                   // 0.6 trails over the open trench
+                BELT_FPS:   50,    // belt cycle speed  (calibrate)
+                CTRL_FPS:   12,    // control-unit cycle speed (calibrate)
+                FLIP_Y:     false, // the dig runs UP the screen; flip both parts
+                                   // if the art is drawn facing the other way
+                                   // (flips the pair together — the offsets are
+                                   //  measured from the reveal line either way)
+            },
 
             // (the last dry stretch is flooded by the water's own flow — see
             //  WATER.FLOW_TAU / MIN_SPEED, not a timed animation)
 
             // ── Colours ───────────────────────────────────────────────────
-            // (machine look comes from graphics/auger.png)
+            // (machine look comes from graphics/trencher/)
             CUT_COLOR:     0x84694a,  // raw soil exposed in the cut under the
                                       // machine, before the water reaches it
             DEBRIS_COLORS: [0x6e4a21, 0xa97537],
@@ -724,7 +757,7 @@ var CONFIG = {
             CRACK: {
                 ENABLED: true,
                 LEN:     52,          // reveal window ahead of the face (px @ platformScale)
-                WIDTH:   0.5,         // crack spread as a fraction of the auger width
+                WIDTH:   0.5,         // crack spread as a fraction of the belt width
                 LINES:   2,           // number of main cracks down the column
                 COLOR:   0x3c2c1a,    // dark earth in the split
                 ALPHA:   0.6,         // opacity at the face (fades to 0 over LEN)

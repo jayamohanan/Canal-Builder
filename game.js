@@ -296,9 +296,15 @@ class GameScene extends Phaser.Scene {
         // Shared white glow texture used by charge effects (additive blend)
         this.load.image('glow', 'graphics/gadgets/glow.png');
 
-        // The boring machine's art (sliced into tip/spiral/cap at create).
+        // The trencher's art: two parts, each its own 5-frame animation. They
+        // are separate sprites (not one sheet) so each part's frames stay
+        // coherent on their own — see TUNNEL.TRENCHER.
         if (CONFIG.ROAD && CONFIG.ROAD.ENABLED) {
-            this.load.image('auger_src', 'graphics/auger.png');
+            const TR = CONFIG.ROAD.TUNNEL.TRENCHER;
+            for (let i = 1; i <= (TR.FRAMES || 5); i++) {
+                this.load.image(`trencher_belt_${i}`, `graphics/trencher/belt/belt${i}.png`);
+                this.load.image(`trencher_ctrl_${i}`, `graphics/trencher/control_unit/control_unit${i}.png`);
+            }
         }
 
         // Tile map: the level layout (.tmj) plus one image per tile type.
@@ -1697,17 +1703,15 @@ console.log(
     }
 
     // ================================================================
-    // THE BORING MACHINE (battery-powered)
+    // THE TRENCHING MACHINE (battery-powered)
     // ================================================================
-    // Merged batteries bank digging distance; the auger cuts the channel
-    // bottom → top. The apparent rotation is the barber-pole illusion: a helix
-    // spinning about its long axis reads, from above, as its flights sliding
-    // ALONG the axis — so the shaft is a TileSprite whose helix texture
-    // scrolls, with the cylinder shading baked in per-column (x-only, so
-    // scrolling never disturbs it).
+    // Merged batteries bank digging distance; the trencher cuts the channel
+    // bottom → top. It is a heavy trencher, not a borer: the spiked belt at the
+    // front chews the face and the rig REVERSES up the band as the trench opens
+    // behind it, control unit trailing. Both parts are driven by one number —
+    // the reveal line (progressPx) — so they can never drift apart.
     createTunnel(band, seg) {
         const TN = CONFIG.ROAD.TUNNEL;
-        const s  = (v) => v * this.layoutConfig.platformScale;
         const r  = this.road;
 
         // Entry = the head of the canal already built at the bottom of the
@@ -1718,25 +1722,37 @@ console.log(
         const exitY  = band.bandTop;
         const len    = entryY - exitY;
 
-        // The bore is the channel plus a margin of loose ground each side.
-        const margin = s(TN.MARGIN);
-        const boreW  = r.canalW + margin * 2;
-        // The machine is the auger.png art, sliced into tip / spiral / cap by
-        // _makeTunnelTextures. Its flight is the widest part, scaled to nearly
-        // fill the bore.
-        const mw = Math.max(8, Math.round(boreW * (TN.BLADE_DIAM || 0.82)));
-        // The soil strip is CHANNEL-sized, not bore-sized: what the blade
-        // leaves behind is exactly as wide as the finished canal.
+        // The soil strip is CHANNEL-sized: what the machine leaves behind is
+        // exactly as wide as the finished canal.
         const cutW = Math.round(r.canalW);
         this._makeTunnelTextures(cutW);
 
-        const bladeLen = s(TN.BLADE_LEN);
-        // One uniform scale maps the art onto the machine width; tip and cap
-        // keep the art's proportions, the spiral section fills the rest of
-        // BLADE_LEN (measured behind the face).
-        const sc    = mw / this.textures.get('auger_mid').getSourceImage().width;
-        const capH  = this.textures.get('auger_tail').getSourceImage().height * sc;
-        const bodyH = Math.max(4, bladeLen - capH);
+        // ── Trencher geometry ─────────────────────────────────────────────
+        // One ratio sizes the whole rig: the belt art's width maps onto
+        // BELT_TILES tile widths, and every other source-px number rides that
+        // same ratio, so the two parts keep their authored proportions and
+        // their spacing at any tile size.
+        const TR   = TN.TRENCHER;
+        // Off the tilemap (no grid) the main canal's own width stands in: it is
+        // MAIN_TILES tiles across.
+        const tile = (this.tileGrid && this.tileGrid.tile)
+                   || r.canalW / (CONFIG.ROAD.TILEMAP.MAIN_TILES || 2);
+        const tsc  = tile * (TR.BELT_TILES || 1) / TR.BELT_W;
+        const beltW = TR.BELT_W * tsc, beltH = TR.BELT_H * tsc;
+        const ctrlW = TR.CTRL_W * tsc, ctrlH = TR.CTRL_H * tsc;
+        // Offsets from the reveal line (the dig runs up-screen, so -y is ahead
+        // of the machine and +y is back over the open trench). AHEAD_FRAC of
+        // the belt sits on the uncut side of the line, the rest trails over the
+        // trench; the control unit LEADS, CTRL_GAP ahead of the belt's centre.
+        const ahead  = TR.AHEAD_FRAC !== undefined ? TR.AHEAD_FRAC : 0.4;
+        const beltDY = (0.5 - ahead) * beltH;
+        const ctrlDY = beltDY - TR.CTRL_GAP * tsc;
+        // The rig's length for the water: the waterline is held back until the
+        // rear of the BELT — the trailing part — has passed, so the canal never
+        // fills under the machine.
+        const bladeLen = beltDY + beltH / 2;
+        // Spoil sprays over the belt's trailing half.
+        const bodyH = Math.max(4, beltH * (1 - ahead));
 
         // The water for the whole stretch is drawn complete at create and
         // hidden behind a mask that follows the blade, so it appears
@@ -1765,31 +1781,30 @@ console.log(
         const revealMask = maskShape.createGeometryMask();
         roadGfx.setMask(revealMask);
 
-        // The machine: a FIXED-length rig that climbs with the face — head at
-        // the front, a machine-length of auger behind it. It parks at the head
-        // of the built canal and digs upward. Drawn above the water it leaves.
+        // The machine: a fixed rig that travels with the face. It parks at the
+        // head of the built canal and works upward. Drawn above the water it
+        // leaves behind.
         const x = band.cx;
         // The raw cut: a strip of churned soil over the dug wake, face back
         // to the mouth it started from.
         const cut = this._addB(this.add.tileSprite(x, entryY, cutW, 1, 'cut_sand')
             .setOrigin(0.5, 0).setDepth(2.05).setVisible(false), seg);
-        // Three stacked slices of the art: pointed tip biting into the face,
-        // the spiral section behind it (a TileSprite — scrolling its UVs is
-        // the rotation), and the drive cap at the rear. The slice edges all
-        // sit at bare-shaft rows, so they join cleanly.
-        const head = this._addB(this.add.image(x, entryY, 'auger_tip')
-            .setOrigin(0.5, 1).setScale(sc).setDepth(2.25), seg);
-        const shaft = this._addB(this.add.tileSprite(x, entryY, mw, bodyH, 'auger_mid')
-            .setOrigin(0.5, 0).setTileScale(sc).setDepth(2.2), seg);
-        const tail = this._addB(this.add.image(x, entryY + bodyH, 'auger_tail')
-            .setOrigin(0.5, 0).setScale(sc).setDepth(2.2), seg);
-        const wobble = this.tweens.add({ targets: head, x: x + Math.max(1, s(0.8)),
-                          duration: 55, yoyo: true, repeat: -1, paused: true });
-        const bore = { x, cut, shaft, tail, head, wobble };
+        // Two sprites, one rig. The trenching unit is drawn ABOVE the control
+        // unit so the belt reads as passing over the machine's frame. Both are
+        // parked on frame 1 and only run while the machine is working.
+        this._makeTrencherAnims();
+        const flip = !!TR.FLIP_Y;
+        const belt = this._addB(this.add.sprite(x, entryY + beltDY, 'trencher_belt_1')
+            .setDisplaySize(beltW, beltH).setFlipY(flip).setDepth(2.25), seg);
+        const ctrl = this._addB(this.add.sprite(x, entryY + ctrlDY, 'trencher_ctrl_1')
+            .setDisplaySize(ctrlW, ctrlH).setFlipY(flip).setDepth(2.2), seg);
+        belt.play('trencher_belt'); belt.anims.pause();
+        ctrl.play('trencher_ctrl'); ctrl.anims.pause();
+        const bore = { x, cut, belt, ctrl, beltDY, ctrlDY, rigW: beltW };
 
         // No grass overlay in tile-map mode — the base layer already shows
         // grass down the centre, and the flood reveals the dug main-canal tiles
-        // over it as the auger climbs.
+        // over it as the machine climbs.
 
         // Cracks in the grass just ahead of the blade — drawn over the not-yet
         // dug ground (below the machine), redrawn each frame at the current
@@ -1798,12 +1813,12 @@ console.log(
         crack._noRebase = true;
 
         // The machine advances off a banked-charge account: one progress
-        // value drives the shaft, the mask and the head.
+        // value drives the rig, the mask and the reveal.
         this.tunnel = {
-            entryY, exitY, len, bladeLen, bodyH, texScale: sc,
+            entryY, exitY, len, bladeLen, bodyH,
             progressPx: 0, earnedPx: 0, open: false, lastTime: 0, pulseT: 0,
             wet: 0,                          // how far the water has actually come
-            bore, maskShape, foam: foamGfx, crack, crackW: mw, chips: [], debrisAcc: 0,
+            bore, maskShape, foam: foamGfx, crack, crackW: beltW, chips: [], debrisAcc: 0,
             flood: this._buildFlood(seg, band),   // canal water (tilemap only)
             seg: seg || null,
             // A dig site built ahead (endless: the NEXT band, while the
@@ -1815,34 +1830,45 @@ console.log(
         if (seg) seg.tunnel = this.tunnel;
     }
 
-    // Slice the auger.png art into the machine's three stacked parts.
-    //
-    // The art already points UP (drill tip at the top, drive cap at the
-    // bottom) — the same way the machines drill — so the slices are straight
-    // crops, no flip. The cut rows are fractions of the art height, measured
-    // from the pixels: spiral section 0.209·H–0.828·H is exactly two flight
-    // pitches with near-bare shaft at both edges, so it tiles seamlessly and
-    // its UVs scroll forever. The static slices must contain NO ribbon (a
-    // non-scrolling wrap reads as a stalled blade): the tip is only the
-    // featureless cone point (above 0.118·H), the tail only bare shaft and
-    // the drive cap (below 0.828·H).
+    // The two trencher loops, built once and shared by every segment's rig.
+    // Each part's frames are separate images (not a sheet), so the animation is
+    // an explicit frame list. Both loop forever; the machine drives them by
+    // pausing/resuming, never by restarting — a resumed loop carries on from
+    // the frame it stopped on, which is what makes a stall read as a stall.
+    _makeTrencherAnims() {
+        if (this.anims.exists('trencher_belt')) return;
+        const TR = CONFIG.ROAD.TUNNEL.TRENCHER;
+        const n  = TR.FRAMES || 5;
+        const list = (prefix) => {
+            const f = [];
+            for (let i = 1; i <= n; i++) f.push({ key: `${prefix}${i}` });
+            return f;
+        };
+        this.anims.create({ key: 'trencher_belt', frames: list('trencher_belt_'),
+                            frameRate: TR.BELT_FPS || 12, repeat: -1 });
+        this.anims.create({ key: 'trencher_ctrl', frames: list('trencher_ctrl_'),
+                            frameRate: TR.CTRL_FPS || 12, repeat: -1 });
+    }
+
+    // Belt runs only while the machine is actually cutting; the control unit
+    // only while the rig is actually travelling. Anything else freezes both on
+    // the frame they stopped at.
+    _setTrencherRunning(tn, cutting, moving) {
+        const b = tn && tn.bore;
+        if (!b || !b.belt) return;
+        const set = (spr, on) => {
+            if (!spr || !spr.anims) return;
+            if (on) { if (spr.anims.isPaused) spr.anims.resume(); }
+            else if (!spr.anims.isPaused) spr.anims.pause();
+        };
+        set(b.belt, cutting);
+        set(b.ctrl, moving);
+    }
+
     _makeTunnelTextures(cutW) {
         // Dimensions are identical for every segment, so bake once and reuse —
         // never remove textures a previous segment's sprites still display.
-        if (this.textures.exists('auger_mid') && this.textures.exists('cut_sand')) return;
-        const src = this.textures.get('auger_src').getSourceImage();
-        const sw  = src.width, sh = src.height;
-        const crop = (key, y0, y1) => {
-            const cy = Math.round(sh * y0), ch = Math.round(sh * y1) - cy;
-            if (this.textures.exists(key)) this.textures.remove(key);
-            const canvas = this.textures.createCanvas(key, sw, ch);
-            const ctx = canvas.getContext();
-            ctx.drawImage(src, 0, cy, sw, ch, 0, 0, sw, ch);
-            canvas.refresh();
-        };
-        crop('auger_tip',  0,     0.118);
-        crop('auger_mid',  0.209, 0.828);
-        crop('auger_tail', 0.828, 1);
+        if (this.textures.exists('cut_sand')) return;
 
         // The raw-cut floor: churned sand, not flat paint — per-pixel grain
         // noise, scattered darker pebbles, faint vertical drag streaks from
@@ -1970,35 +1996,30 @@ console.log(
 
         // The machine runs on the battery's 1-second pulse: each charge tick
         // arms a short burst (pulseT). Outside a burst — or with nothing owed —
-        // it sits completely dead: no spin, no wobble, no advance.
+        // it sits completely dead: belt stopped, tracks stopped, no advance.
         if (remaining <= 0.01 || tn.pulseT <= 0) {
-            const b = tn.bore;
-            if (!b.wobble.isPaused()) { b.wobble.pause(); b.head.x = b.x; }
+            this._setTrencherRunning(tn, false, false);
             return;
         }
 
         const TN = CONFIG.ROAD.TUNNEL;
-        const pulseDur = Math.max(0.05, (TN.PULSE_MS || 450) / 1000);
         // Spend what's owed evenly across the rest of the burst, so each tick's
         // banked distance is fully consumed by the time the burst ends.
         const step = Math.min(remaining, remaining * dt / tn.pulseT);
         tn.pulseT = Math.max(0, tn.pulseT - dt);
-        const wind = tn.pulseT / pulseDur;   // 1 → 0 over the burst
         tn.progressPx += step;
 
         // The face climbs from the mouth the machine started at.
         const cutH  = tn.progressPx;
         const faceY = tn.entryY - tn.progressPx;
         const b     = tn.bore;
-        if (b.wobble.isPaused()) b.wobble.resume();
-        // UV scroll = rotation: the spiral marches along the shaft (spoil
-        // being augered back out of the cut). tilePositionY is in SOURCE
-        // texture pixels, so divide by the display scale to get SCROLL px/s
-        // on screen. Winds down over the burst: jolt, then coast.
-        b.shaft.tilePositionY -= TN.SCROLL * (0.35 + 0.65 * wind) * dt / tn.texScale;
-        b.shaft.y = faceY;
-        b.tail.y  = faceY + tn.bodyH;
-        b.head.y  = faceY;
+        // Both parts hang off the reveal line by their fixed offsets — that is
+        // the whole of the rig's motion, so they can never separate. The belt
+        // cuts (it is trenching, on battery), the control unit's tracks turn
+        // only while the rig is really travelling backwards.
+        b.belt.y = faceY + b.beltDY;
+        b.ctrl.y = faceY + b.ctrlDY;
+        this._setTrencherRunning(tn, true, step > 0.01);
         // The soil strip in the wake is no longer shown — the ditch sprite is
         // what gets uncovered as the grass recedes. (The cut sprite is kept only
         // so its width still feeds the foam-finger layout.)
@@ -2096,7 +2117,7 @@ console.log(
     _spawnTunnelChip(b, faceY) {
         const tn   = this.tunnel;
         const TN   = CONFIG.ROAD.TUNNEL;
-        const half = b.shaft.width / 2;
+        const rigW = b.rigW;
         const grab = (tex, depth) => {
             const o = tn.chips.pop() ||
                 this._addB(this.add.image(0, 0, tex), tn.seg);
@@ -2116,7 +2137,7 @@ console.log(
             const chip = grab('debris_chip', 2.3)
                 .setTint(tint)
                 .setAngle(Math.random() * 90)          // varied square orientation
-                .setPosition(b.x + off * b.shaft.width * 0.9,
+                .setPosition(b.x + off * rigW * 0.9,
                              faceY + Math.random() * tn.bodyH * 0.5)
                 .setScale(0.8 + Math.random() * 0.8)
                 .setAlpha(1);
@@ -2135,7 +2156,7 @@ console.log(
         if (Math.random() < 0.8) {
             const puff = grab('dust_puff', 2.35)
                 .setTint(TN.DUST_COLOR)
-                .setPosition(b.x + (Math.random() - 0.5) * b.shaft.width * 0.7,
+                .setPosition(b.x + (Math.random() - 0.5) * rigW * 0.7,
                              faceY + Math.random() * tn.bodyH * 0.4)
                 .setScale(0.6 + Math.random() * 0.4)
                 .setAlpha(0.55);
@@ -2162,8 +2183,8 @@ console.log(
         if (tn.open) return;
         tn.open = true;
 
-        this.tweens.killTweensOf(tn.bore.head);
-        const parts = [tn.bore.shaft, tn.bore.tail, tn.bore.head];
+        this._setTrencherRunning(tn, false, false);
+        const parts = [tn.bore.belt, tn.bore.ctrl];
         this.tweens.add({
             targets: parts,
             alpha: 0, duration: 700,
