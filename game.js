@@ -1747,10 +1747,11 @@ console.log(
         const ahead  = TR.AHEAD_FRAC !== undefined ? TR.AHEAD_FRAC : 0.4;
         const beltDY = (0.5 - ahead) * beltH;
         const ctrlDY = beltDY - TR.CTRL_GAP * tsc;
-        // The rig's length for the water: the waterline is held back until the
-        // rear of the BELT — the trailing part — has passed, so the canal never
-        // fills under the machine.
-        const bladeLen = beltDY + beltH / 2;
+        // How far the waterline is held behind the reveal line: it follows the
+        // machine right up onto the belt, WATER_OVER of the belt's height past
+        // its rear edge (and is drawn over it — see the depths below).
+        const over     = TR.WATER_OVER !== undefined ? TR.WATER_OVER : 0.35;
+        const bladeLen = Math.max(0, beltH * (1 - ahead - over));
         // Spoil sprays over the belt's trailing half.
         const bodyH = Math.max(4, beltH * (1 - ahead));
 
@@ -1790,14 +1791,20 @@ console.log(
         const cut = this._addB(this.add.tileSprite(x, entryY, cutW, 1, 'cut_sand')
             .setOrigin(0.5, 0).setDepth(2.05).setVisible(false), seg);
         // Two sprites, one rig. The trenching unit is drawn ABOVE the control
-        // unit so the belt reads as passing over the machine's frame. Both are
-        // parked on frame 1 and only run while the machine is working.
+        // unit so the belt reads as passing over the machine's frame, and both
+        // sit over the dry trench tile (1.52) but under the whole waterline —
+        // its crest foam (1.525/1.53), the water itself (1.55) and the head
+        // (1.56). The machine is down in the ditch, so the water it lets in
+        // rolls over the belt's trailing end, crest and all. Both are parked
+        // on frame 1 and only run while the machine is working.
         this._makeTrencherAnims();
         const flip = !!TR.FLIP_Y;
         const belt = this._addB(this.add.sprite(x, entryY + beltDY, 'trencher_belt_1')
-            .setDisplaySize(beltW, beltH).setFlipY(flip).setDepth(2.25), seg);
+            .setDisplaySize(beltW, beltH).setFlipY(flip)
+            .setDepth(TR.DEPTH_BELT !== undefined ? TR.DEPTH_BELT : 1.524), seg);
         const ctrl = this._addB(this.add.sprite(x, entryY + ctrlDY, 'trencher_ctrl_1')
-            .setDisplaySize(ctrlW, ctrlH).setFlipY(flip).setDepth(2.2), seg);
+            .setDisplaySize(ctrlW, ctrlH).setFlipY(flip)
+            .setDepth(TR.DEPTH_CTRL !== undefined ? TR.DEPTH_CTRL : 1.523), seg);
         belt.play('trencher_belt'); belt.anims.pause();
         ctrl.play('trencher_ctrl'); ctrl.anims.pause();
         const bore = { x, cut, belt, ctrl, beltDY, ctrlDY, rigW: beltW };

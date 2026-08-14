@@ -734,6 +734,27 @@ var CONFIG = {
                                    // if the art is drawn facing the other way
                                    // (flips the pair together — the offsets are
                                    //  measured from the reveal line either way)
+
+                // ── Water vs. the machine ─────────────────────────────────
+                // The canal water follows the trencher and washes OVER the
+                // belt: the belt is down IN the trench it is cutting, so the
+                // filling water covers its trailing end rather than the belt
+                // sitting on top of a dry-looking canal.
+                WATER_OVER: 0.35,  // how far up the belt the waterline is let
+                                   // come, as a fraction of the belt's height
+                                   // measured from its REAR edge. 0 = water
+                                   // stops at the belt's back edge; (1 -
+                                   // AHEAD_FRAC) = water right up to the
+                                   // reveal line
+                // Draw order. Both parts sit above the dry trench tile (1.52)
+                // and below EVERYTHING the water brings with it — the crest
+                // foam that leads the waterline (1.525 / 1.53 when
+                // TILEMAP.FOAM_ABOVE is off), the revealed water (1.55) and the
+                // head (1.56). So the machine is down in the ditch and the
+                // water rolls over it, crest first. The belt stays above the
+                // control unit.
+                DEPTH_BELT: 1.524,
+                DEPTH_CTRL: 1.523,
             },
 
             // (the last dry stretch is flooded by the water's own flow — see
