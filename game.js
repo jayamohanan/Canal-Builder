@@ -305,6 +305,9 @@ class GameScene extends Phaser.Scene {
                 this.load.image(`trencher_belt_${i}`, `graphics/trencher/belt/belt${i}.png`);
                 this.load.image(`trencher_ctrl_${i}`, `graphics/trencher/control_unit/control_unit${i}.png`);
             }
+            // One shadow for the whole rig — it never animates, it just rides
+            // along under both parts.
+            this.load.image('trencher_shadow', 'graphics/trencher/shadow.png');
         }
 
         // Tile map: the level layout (.tmj) plus one image per tile type.
@@ -1805,6 +1808,18 @@ console.log(
         // on frame 1 and only run while the machine is working.
         this._makeTrencherAnims();
         const flip = !!TR.FLIP_Y;
+        // The rig's shadow: one still image for both parts, sized by the same
+        // ratio (its art is authored in the same source-px space, so a plain
+        // scale is all it needs) and hung off the dig line like everything
+        // else. Drawn under both parts, still over the trench tile.
+        // Two steps, as authored: centre it SHADOW_Y past the dig line, then
+        // slide it by the offset.
+        const shdDX = (TR.SHADOW_OFF_X || 0) * tsc;
+        const shdDY = ((TR.SHADOW_Y || 0) + (TR.SHADOW_OFF_Y || 0)) * tsc;
+        const shadow = this._addB(this.add.image(x + shdDX, entryY + shdDY, 'trencher_shadow')
+            .setScale(tsc).setFlipY(flip)
+            .setAlpha(TR.SHADOW_ALPHA !== undefined ? TR.SHADOW_ALPHA : 1)
+            .setDepth(TR.DEPTH_SHADOW !== undefined ? TR.DEPTH_SHADOW : 1.522), seg);
         const belt = this._addB(this.add.sprite(x, entryY + beltDY, 'trencher_belt_1')
             .setDisplaySize(beltW, beltH).setFlipY(flip)
             .setDepth(TR.DEPTH_BELT !== undefined ? TR.DEPTH_BELT : 1.524), seg);
@@ -1813,7 +1828,7 @@ console.log(
             .setDepth(TR.DEPTH_CTRL !== undefined ? TR.DEPTH_CTRL : 1.523), seg);
         belt.play('trencher_belt'); belt.anims.pause();
         ctrl.play('trencher_ctrl'); ctrl.anims.pause();
-        const bore = { x, cut, belt, ctrl, beltDY, ctrlDY, rigW: beltW };
+        const bore = { x, cut, belt, ctrl, shadow, beltDY, ctrlDY, shdDY, rigW: beltW };
 
         // No grass overlay in tile-map mode — the base layer already shows
         // grass down the centre, and the flood reveals the dug main-canal tiles
@@ -2032,6 +2047,7 @@ console.log(
         // only while the rig is really travelling backwards.
         b.belt.y = faceY + b.beltDY;
         b.ctrl.y = faceY + b.ctrlDY;
+        if (b.shadow) b.shadow.y = faceY + b.shdDY;
         this._setTrencherRunning(tn, true, step > 0.01);
         // The soil strip in the wake is no longer shown — the ditch sprite is
         // what gets uncovered as the grass recedes. (The cut sprite is kept only
@@ -2197,7 +2213,7 @@ console.log(
         tn.open = true;
 
         this._setTrencherRunning(tn, false, false);
-        const parts = [tn.bore.belt, tn.bore.ctrl];
+        const parts = [tn.bore.belt, tn.bore.ctrl, tn.bore.shadow].filter(Boolean);
         this.tweens.add({
             targets: parts,
             alpha: 0, duration: 700,

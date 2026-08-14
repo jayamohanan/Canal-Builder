@@ -742,6 +742,22 @@ var CONFIG = {
                                    // (flips the pair together — the offsets are
                                    //  measured from the reveal line either way)
 
+                // ── Shadow ────────────────────────────────────────────────
+                // graphics/trencher/shadow.png is ONE shadow for the whole rig
+                // (454×1266 in the same source-px space as the two parts), so
+                // it needs no size of its own — it rides the same ratio as
+                // everything else. It never animates; it just travels with the
+                // machine.
+                // Placed in two steps, exactly as it was authored: put the
+                // image's CENTRE on the dig line + SHADOW_Y, then slide it by
+                // the offset. Both steps are source px on the same ratio.
+                SHADOW_Y:     -80, // step 1: centre, +y from the dig line
+                SHADOW_OFF_X: 40,  // step 2: the authored 46,31 offset
+                SHADOW_OFF_Y: 30,
+                SHADOW_ALPHA: 1,   // the art carries its own softness; this is
+                                   // just a global knock-back if it reads heavy
+                DEPTH_SHADOW: 1.522,  // under both parts, over the trench tile
+
                 // ── Water vs. the machine ─────────────────────────────────
                 // The canal water follows the trencher and washes OVER the
                 // belt: the belt is down IN the trench it is cutting, so the
