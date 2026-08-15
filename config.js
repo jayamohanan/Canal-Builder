@@ -10,15 +10,33 @@ var CONFIG = {
     FONT_FAMILY: 'Arial',
     TEXT_COLOR: '#1A237E',
 
+    // ── Screen split ──────────────────────────────────────────────────────────
+    // Landscape puts the UI (grid, coin, spawn button, battery slots) on the LEFT
+    // and the farm on the RIGHT. The farm is what the game is about, so it takes
+    // the larger share: the UI needs only the grid panel's width plus margins.
+    // Portrait stays a 50/50 top/bottom split — see calculateLayout().
+    LAYOUT: {
+        LANDSCAPE_SPLIT: 0.4,      // UI's share of the width; the farm gets the rest
+        // The design reference is a 1440×778 MacBook. REF_W is the UI half AT THAT
+        // SPLIT, so changing the split alone never resizes the grid: the scale works
+        // out to screenWidth/1440 either way (0.5·W/720 === 0.4·W/576).
+        REF_W_PORTRAIT: 720,
+        REF_H: 778,
+    },
+
     RESET_PROGRESS: false,
     DEBUG_HALF_LINE: true,   // draw a line splitting partA / partB (vertical in
                              // landscape, horizontal in portrait)
     BATTERY_START_LEVEL: 1,
     BATTERY_IMAGE_EXTENSIONS: ['svg', 'png', 'jpg', 'webp'],
 
-    BACKGROUND: {
-        GRADIENT_START_COLOR: "#79d288",
-        GRADIENT_END_COLOR: "#79d288",
+    // BACKGROUND: {
+    //     GRADIENT_START_COLOR: "#79d288",
+    //     GRADIENT_END_COLOR: "#79d288",
+    // },
+     BACKGROUND: {
+        GRADIENT_START_COLOR: "#B6915c",
+        GRADIENT_END_COLOR: "#B6915c",
     },
 
     BUTTON: {
@@ -58,10 +76,18 @@ var CONFIG = {
 
     MERGE_GRID: {
         PADDING_FROM_BUTTON_TOP: 50,
+        // Drop the whole grid block (panel, cells and — in portrait — the coin
+        // line above it) by this much, closing the gap over the spawn button.
+        // The panel art carries its own baked shadow well below the last row of
+        // cells, so it may run into the button: that is fine, the button is
+        // drawn at a far higher depth and covers it.
+        PANEL_DROP: 30,                // px @ design scale
     },
 
     BATTERY_UNLOCK_DISPLAY: {
-        DISPLAY_CROWN_PANEL: true,
+        DISPLAY_CROWN_PANEL: false,    // OFF — the crown + battery-name line above
+                                       // the grid is gone. Everything below still
+                                       // works if it is ever wanted back
         SHOW_CROWN_ICON: true,
         SHOW_BATTERY_ICON: false,
         CROWN_ICON_SIZE: 32,
@@ -106,7 +132,9 @@ var CONFIG = {
         LEVEL_TEXT_Y_OFFSET: -40,
         DRAGGABLE_BG_COLOR: "#FFFFFF",
         DRAGGABLE_BG_ALPHA: 0,
-        GRID_PANEL_PADDING: 40,
+        GRID_PANEL_PADDING: 14,        // the panel is a drawn rounded square now,
+                                       // so this is real padding around the cells
+                                       // rather than the old art's baked margin
         GRID_PANEL_COLOR: "#ccd5d7",
         GRID_PANEL_RADIUS: 15,
         GRID_PANEL_BORDER_COLOR: "#364549",
@@ -180,6 +208,25 @@ var CONFIG = {
         // ── Battery slot ──────────────────────────────────────────────────────
         SLOT_PADDING_FROM_LEFT: 40,    // padding from stripe left edge to slot left edge (px)
         SLOT_SIZE: 130,                // slot square size (px)
+
+        // In LANDSCAPE the three slots sit in the UI half above the grid, packed
+        // to the LEFT from the grid panel's edge and spaced by the grid's own
+        // cell gap, with the trencher icon filling the space left on the right —
+        // "these batteries drive that machine". Drop SLOT_SIZE_FRAC first if the
+        // column ever overflows on a short window.
+        // (Portrait keeps the slots in the farm half — see createSlots.)
+        // The slot SIZE is derived, not set: the three slots take the row's full
+        // width less the icon and the gaps, capped at ONE GRID CELL — a battery
+        // in a slot should look like a battery in a cell. With the row running
+        // edge to edge that cap is what binds, so the slots and the cells match.
+        SLOT_ROW_EDGE_PAD: 12,         // screen edge → first slot (px @ design)
+        TRENCHER_ICON_W: 0.62,         // icon width as a fraction of a grid cell.
+                                       // The icon sits directly after the last
+                                       // slot, so growing this eats the space to
+                                       // its right, not the slots
+        TRENCHER_GAP:   0.18,          // gap from the last slot, in cells
+        TRENCHER_EDGE_PAD: 12,         // hard stop: icon's right edge never gets
+                                       // closer than this to the farm-half boundary
         SLOT_RADIUS: 15,               // corner radius (px)
         SLOT_ABOVE_STRIPE: 14,         // gap (px) between slot bottom and stripe top
         CHARGE_RATE_GAP: 10,           // gap (px) between charge-rate label bottom and slot top
@@ -408,8 +455,10 @@ var CONFIG = {
     ROAD: {
         ENABLED: true,             // master switch — when true, partB shows the land
 
-        BOTTOM_GAP:   40,          // gap above the batteries/junction where the
-                                   // land band stops (px @ platformScale)
+        BOTTOM_MARGIN: 0,          // gap left below the land band (px @ platformScale).
+                                   // The band is the whole farm half in landscape;
+                                   // in portrait the slots at the foot of the half
+                                   // are subtracted first, and this is on top of that
         LAND_COLOR:   0x8ed04f,    // the green ground the channel is cut through
 
         // ── Tile map (authored in Tiled) ───────────────────────────────────

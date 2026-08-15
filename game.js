@@ -118,16 +118,20 @@ class GameScene extends Phaser.Scene {
         const P    = CONFIG.PLATFORM;
         const isP  = this.isPortrait;
 
-        // ── partA (grid/UI) and partB (platforms): strict 50/50 split ──────────
-        // Portrait:  partA = bottom half, partB = top half
-        // Landscape: partA = left half,   partB = right half
+        // ── partA (UI) and partB (the farm) ───────────────────────────────────
+        // Portrait:  partA = bottom half, partB = top half        (50/50)
+        // Landscape: partA = left,        partB = right           (LANDSCAPE_SPLIT)
+        // The farm takes the larger share in landscape — it is the half worth
+        // looking at, and partA needs no more than the grid panel plus margins.
+        const LY    = CONFIG.LAYOUT || {};
+        const split = LY.LANDSCAPE_SPLIT !== undefined ? LY.LANDSCAPE_SPLIT : 0.4;
         let partA, partB;
         if (isP) {
-            partA = { x: 0,     y: H * 0.5, width: W,       height: H * 0.5 };
-            partB = { x: 0,     y: 0,       width: W,       height: H * 0.5 };
+            partA = { x: 0,       y: H * 0.5, width: W,             height: H * 0.5 };
+            partB = { x: 0,       y: 0,       width: W,             height: H * 0.5 };
         } else {
-            partA = { x: 0,     y: 0,       width: W * 0.5, height: H };
-            partB = { x: W*0.5, y: 0,       width: W * 0.5, height: H };
+            partA = { x: 0,       y: 0,       width: W * split,     height: H };
+            partB = { x: W*split, y: 0,       width: W * (1-split), height: H };
         }
 
         // ── TWO-FACTOR RESPONSIVE SIZING ───────────────────────────────────────
@@ -145,7 +149,12 @@ class GameScene extends Phaser.Scene {
         const coinGapRef  = 25;
         const spawnBtnLogHalfRef = CONFIG.BUTTON.SPAWN_HEIGHT / 2;   // 45
 
-        const REF_W = 720, REF_H = 778;                 // design partA from my 1440×778 MacBook
+        // The reference partA on my 1440×778 MacBook. In landscape it is the half
+        // AT THE CURRENT SPLIT, which is what keeps the grid the same size when
+        // the split moves: sW works out to screenWidth/1440 either way
+        // (0.5·W/720 === 0.4·W/576). Do not "simplify" this back to a constant.
+        const REF_H = LY.REF_H || 778;
+        const REF_W = isP ? (LY.REF_W_PORTRAIT || 720) : 1440 * split;
         const sW    = partA.width  / REF_W;             // horizontal ratio
         const sH    = partA.height / REF_H;             // vertical ratio
         const scale = Math.min(sW, sH);                 // uniform size factor (square-preserving)
@@ -170,11 +179,51 @@ class GameScene extends Phaser.Scene {
         const designPanH        = designGridH + 2 * panPadRef;                      // 478
         const designButtonCY    = REF_H - btnBotRef;                                // 708
         const designGridBotEdge = designButtonCY - spawnBtnLogHalfRef - btnGridRef; // 613
-        const designPanelCY     = designGridBotEdge + panPadRef - designPanH / 2;   // 414
+        // PANEL_DROP slides the grid block down toward the button, closing the
+        // dead space between them. The panel's baked shadow may then overlap the
+        // button — harmless, the button's depth (100) is far above the panel (1.5).
+        const designPanelCY     = designGridBotEdge + panPadRef - designPanH / 2
+                                + (CONFIG.MERGE_GRID.PANEL_DROP || 0);             // 414 + drop
         const designCoinCY      = designPanelCY - designPanH / 2 - coinGapRef;      // 150
         const buttonCenterY     = partA.y + designButtonCY * sH;
         const panelCenterY      = partA.y + designPanelCY  * sH;
-        const coinCenterY       = partA.y + designCoinCY   * sH;
+        let   coinCenterY       = partA.y + designCoinCY   * sH;
+
+        // ── LANDSCAPE: the battery-slot row ───────────────────────────────────
+        // The row owns the whole band above the grid panel and the whole WIDTH of
+        // the half: it starts at the screen edge (not the panel's edge) and runs
+        // to the trencher icon parked against the half's boundary. Given all that
+        // room the slots hit their cap — one grid cell — which is the point: a
+        // battery in a slot should look like a battery in a cell.
+        //
+        // The coin counter shares the row's height rather than sitting above it
+        // (it keeps its right-aligned x, clear of the slots). Stacked above, it
+        // would eat the band and cap the slots near 95 — the band is only ~175
+        // design px tall.
+        const designSlotLabel = P.CHARGE_RATE_GAP + 14;                    // gap + text
+        const designRowTop    = 6 + designSlotLabel;                       // under the label
+        const designRowBot    = designPanelCY - designPanH / 2 - 8;        // just over the panel
+        const designEdgePad   = P.SLOT_ROW_EDGE_PAD  || 12;                // screen edge → slot 1
+        const designIconPad   = P.TRENCHER_EDGE_PAD  || 12;                // icon → half boundary
+        const designIconW     = BASE * (P.TRENCHER_ICON_W || 0.31);
+        const designIconGap   = BASE * (P.TRENCHER_GAP || 0.18);
+        const designSlotSize  = Math.min(
+            BASE,                                           // never bigger than a cell
+            designRowBot - designRowTop,                    // the band's height
+            (REF_W - designEdgePad - designIconPad - designIconW - designIconGap
+                   - 2 * CONFIG.CELL.GAP) / 3);             // what the width leaves
+        const designSlotCY    = designRowTop + designSlotSize / 2;
+        const slotRowCenterY  = partA.y + designSlotCY * sH;
+        const slotSize        = designSlotSize * scale;
+        if (!isP) {
+            // Coin counter goes back above the grid, centred in the band the
+            // dropped panel opened up between the slot row and the panel's top
+            // edge. Derived from the row's actual bottom, so it keeps its place
+            // whatever the slots and PANEL_DROP work out to.
+            const designRowEnd = designRowTop + designSlotSize;
+            coinCenterY = partA.y
+                        + (designRowEnd + (designPanelCY - designPanH / 2)) / 2 * sH;
+        }
 
         // ── Platform scale: slot size matches cell size (partB == partA dims) ──
         const platformScale       = cellSize / P.SLOT_SIZE;   // === scale; no 1.0 clamp
@@ -211,7 +260,7 @@ class GameScene extends Phaser.Scene {
 
         // Coin counter display (above grid panel)
         const coinIconSize       = Math.round(CONFIG.COIN_COUNTER.COIN_ICON_WIDTH * scale);
-        const coinTextSize       = Math.max(20, Math.round(48 * scale)) + 'px';
+        const coinTextSize       = Math.max(12, Math.round(29 * scale)) + 'px';   // 40% down from 48
         const coinTextIconGap    = Math.max(3,  Math.round(5 * scale));
 
         // Crown / battery-name unlock display
@@ -238,7 +287,7 @@ class GameScene extends Phaser.Scene {
             partA, partB,
             platformScale, platformYPositions, platformStripeWidth,
             sW, sH, scale,
-            panelCenterY, buttonCenterY, coinCenterY,
+            panelCenterY, buttonCenterY, coinCenterY, slotRowCenterY, slotSize,
             // Battery / cell content
             batteryDisplaySize, batteryYOffset, levelTextYOffset, levelTextSize,
             // Spawn button contents
@@ -281,7 +330,7 @@ class GameScene extends Phaser.Scene {
         this.load.image('coin',          'graphics/coin.png');
         this.load.image('point',         'graphics/point.png');
         this.load.image('button',        'graphics/spawn_button3.png');
-        this.load.image('grid_panel',    'graphics/grid_panel.png');
+        // (grid_panel.png retired — the panel is drawn in createGrid)
         this.load.image('battery_crown', 'graphics/battery_crown.png');
         this.load.image('bolt',          'graphics/bolt_64.png');
         this.load.image('gadget_socket',   'graphics/connection/socket.png');
@@ -308,6 +357,9 @@ class GameScene extends Phaser.Scene {
             // One shadow for the whole rig — it never animates, it just rides
             // along under both parts.
             this.load.image('trencher_shadow', 'graphics/trencher/shadow.png');
+            // A side-on view of the machine, for the battery-slot row. The field
+            // art is top-down, which reads as nothing at icon size.
+            this.load.image('trencher_icon', 'graphics/trencher/trencher_icon.png');
         }
 
         // Lily pads: 1 and 2 are single pads, 3 and 4 are ready-made clumps.
@@ -527,57 +579,73 @@ console.log(
     }
 
     // ================================================================
-    // PLATFORM SYSTEM (TOP HALF)
+    // PLATFORM SYSTEM (battery slots)
     // ================================================================
-    // ── 3 battery slots in a horizontal row at the BOTTOM of partB, all wired up
-    //    to a single junction plug that feeds one shared gadget above them.
-    //    Slots (and their converging wires + junction) are STATIC — they persist
-    //    across levels; only the gadget is rebuilt per level in loadGadgets().
+    // ── 3 battery slots in a horizontal row.
+    //
+    //    LANDSCAPE: in the UI half (partA), above the grid, with one trencher
+    //    icon to their right — the batteries drive that machine, and the icon is
+    //    all that says so now that the plug, junction and converging wires are
+    //    gone (they were from before the farm pivot and wired to a gadget that
+    //    no longer exists in this mode).
+    //    PORTRAIT: unchanged — the row still sits at the bottom of partB.
+    //
+    //    Slots are STATIC: they persist across levels.
     createSlots() {
         const P     = CONFIG.PLATFORM;
         const L     = this.layoutConfig;
         const scale = L.platformScale;
         const s     = (v) => v * scale;
-        const B     = L.partB;
+        const land  = !L.isPortrait;
+        const B     = land ? L.partA : L.partB;
 
-        const ssz         = L.cellSize;                       // slot == grid cell size
+        // Landscape derives the slot from what the row's right column and gaps
+        // leave (calculateLayout), capped at a grid cell so the two read as the
+        // same object. Portrait keeps slot == cell.
+        const ssz         = land ? L.slotSize : L.cellSize;
         const chargeGap   = s(P.CHARGE_RATE_GAP);
         const boltSize    = s(P.CHARGE_RATE_BOLT_SIZE);
-        const plugSize    = s(P.PLUG_SIZE);
         const fontSize    = Math.max(12, Math.round(22 * scale)) + 'px';
 
-        // Row of 3 slots, horizontally centred, near the bottom of partB.
-        const centerX      = B.x + B.width / 2;
-        const slotGap      = Math.round(ssz * 0.5);
-        const bottomMargin = Math.round(45 * L.sH);
-        const slotY        = B.y + B.height - bottomMargin - ssz / 2;
-        const spacing      = ssz + slotGap;
-        const slotXs       = [centerX - spacing, centerX, centerX + spacing];
+        // LANDSCAPE: the three slots are packed to the LEFT from the screen edge,
+        // spaced by the grid's own cell gap — same size, same spacing as the grid
+        // below, so the two blocks read as one system.
+        // PORTRAIT: the old centred row, spaced by half a slot.
+        const rowLeft  = B.x + (P.SLOT_ROW_EDGE_PAD || 12) * L.sW;
+        const slotGap  = land ? L.cellGap : Math.round(ssz * 0.5);
+        const spacing  = ssz + slotGap;
+        const centerX  = land ? rowLeft + ssz / 2 + spacing   // centre slot of the three
+                              : B.x + B.width / 2;
 
-        // Junction plug (common hub) sits above the centre slot; the gadget's
-        // output wire will run up from here in loadGadgets().
-        const junctionX = centerX;
-        const junctionY = slotY - ssz / 2 - Math.round(46 * scale);
+        const slotY = land
+            ? L.slotRowCenterY                                   // above the grid
+            : B.y + B.height - Math.round(45 * L.sH) - ssz / 2;  // bottom of the farm half
+        const slotXs = [centerX - spacing, centerX, centerX + spacing];
+
         this.stationCenterX = centerX;
-        this.junctionX = junctionX;
-        this.junctionY = junctionY;
         this.slotY = slotY;
         this.slotSize = ssz;
+        // Anchors the pre-pivot gadget path still reads (loadGadgets — dormant
+        // while ROAD.ENABLED). Kept pointing somewhere real so that code has
+        // usable coordinates if it is ever revived; nothing is drawn here now.
+        this.junctionX = centerX;
+        this.junctionY = slotY - ssz / 2 - Math.round(46 * scale);
 
-        // Wires from each slot's top-centre converging on the junction (behind slots).
-        // Manhattan routing: straight up, rounded 90° corner, then horizontal into the
-        // socket (the centre slot is a plain vertical run).
-        const slotWireGfx = this.add.graphics().setDepth(3.45);
-        for (let i = 0; i < 3; i++) {
-            this._drawManhattanWire(slotWireGfx, slotXs[i], slotY - ssz / 2, junctionX, junctionY);
+        // The trencher icon: the machine these batteries are charging. It follows
+        // straight on from the last slot — the three batteries and the machine
+        // they feed as one run — rather than being parked out at the boundary
+        // with a hole between. Sized by WIDTH (it is a side-on view), centred on
+        // the row, and never allowed past the edge of the half.
+        this.trencherIcon = null;
+        if (land && this.textures.exists('trencher_icon')) {
+            const iconW = L.cellSize * (P.TRENCHER_ICON_W || 0.62);
+            const iconH = iconW / this._texAspect('trencher_icon');
+            const limit = B.x + B.width - (P.TRENCHER_EDGE_PAD || 12) * L.sW - iconW / 2;
+            const after = centerX + spacing + ssz / 2                  // last slot's edge
+                        + L.cellSize * (P.TRENCHER_GAP || 0.18) + iconW / 2;
+            this.trencherIcon = this.add.image(Math.min(after, limit), slotY, 'trencher_icon')
+                .setDisplaySize(iconW, iconH).setDepth(3.6);
         }
-        this.slotWireGfx = slotWireGfx;
-
-        // Common junction socket where the three wires meet.
-        this.junctionPlug = (this.textures.exists('gadget_socket')
-            ? this.add.image(junctionX, junctionY, 'gadget_socket').setDisplaySize(plugSize * 1.2, plugSize * 1.2)
-            : this.add.circle(junctionX, junctionY, plugSize * 0.6, 0x778899))
-            .setDepth(3.7);
 
         for (let i = 0; i < 3; i++) {
             const slotX = slotXs[i];
@@ -615,38 +683,12 @@ console.log(
         }
     }
 
-    // Right-angle (Manhattan) cable: vertical from the slot, a rounded 90° corner,
-    // then horizontal into the socket. A vertical run (x1 == x2) is drawn straight.
-    _drawManhattanWire(gfx, x1, y1, x2, y2) {
-        const P     = CONFIG.PLATFORM;
-        const scale = this.platformScale || 1;
-        gfx.lineStyle(this.wireThickness, P.WIRE_COLOR, 1);
-        gfx.beginPath();
-        gfx.moveTo(x1, y1);
-
-        const dx = x2 - x1;
-        if (Math.abs(dx) < 1) {                 // centre slot → straight vertical
-            gfx.lineTo(x2, y2);
-            gfx.strokePath();
-            return;
-        }
-
-        const dir = Math.sign(dx);
-        const r   = Math.min(14 * scale, Math.abs(dx) / 2, Math.abs(y1 - y2) / 2);
-        const vy  = y2 + Math.sign(y1 - y2) * r;   // stop the vertical run r before the corner
-
-        gfx.lineTo(x1, vy);                     // up to just before the corner
-
-        // Rounded corner: quadratic from (x1,vy) via corner (x1,y2) to (x1+dir*r, y2)
-        const sx = x1, sy = vy, cx = x1, cy = y2, ex = x1 + dir * r, ey = y2, N = 8;
-        for (let i = 1; i <= N; i++) {
-            const t = i / N, mt = 1 - t;
-            gfx.lineTo(mt * mt * sx + 2 * mt * t * cx + t * t * ex,
-                       mt * mt * sy + 2 * mt * t * cy + t * t * ey);
-        }
-
-        gfx.lineTo(x2, y2);                     // horizontal into the socket
-        gfx.strokePath();
+    // Width ÷ height of a loaded texture, so an icon can be given a height and
+    // keep its proportions.
+    _texAspect(key) {
+        if (!this.textures.exists(key)) return 1;
+        const img = this.textures.get(key).getSourceImage();
+        return img.height ? img.width / img.height : 1;
     }
 
     // Slightly-sagging cable between two points (droop grows with horizontal span;
@@ -695,21 +737,23 @@ console.log(
         const scale = L.platformScale;
         const s     = (v) => v * scale;
 
-        const bottom = (this.junctionY || (B.y + B.height * 0.62)) - s(RC.BOTTOM_GAP);
-        const top    = B.y;
+        // The band is the WHOLE farm half now, less a margin. It used to stop
+        // above the battery slots; those have moved to the UI half (landscape),
+        // and in portrait the slots sit at the foot of this half, so the margin
+        // covers them there.
+        const bottomInset = L.isPortrait
+            ? (this.slotY !== undefined ? (B.y + B.height) - (this.slotY - this.slotSize / 2)
+                                        : B.height * 0.38)
+            : 0;
+        const bottom = B.y + B.height - bottomInset - s(RC.BOTTOM_MARGIN || 0);
+        let   top    = B.y;
         const canalW = s(RC.CANAL.WIDTH);
-
-        this.road = {
-            top, bottom, canalW,
-            canalCx: B.x + B.width / 2,       // the channel is centred in the half
-            band:    null,                    // the live segment's band record
-        };
 
         // ── Tile map: fit the authored grid into the landscape band ────────
         // Rows are fixed by the level; the tile SIZE is derived so the grid is
-        // square and fills the band (height-limited on this aspect, otherwise
-        // width-limited). The grid is anchored to the BOTTOM of the band (just
-        // above the battery slots) and centred horizontally.
+        // square and fills the space available (width-limited on a wide half,
+        // otherwise height-limited). The grid is anchored to the BOTTOM of the
+        // band and centred horizontally.
         this.tileGrid = null;
         const TM = RC.TILEMAP;
         if (TM && TM.ENABLED) {
@@ -717,6 +761,11 @@ console.log(
             const cols = map.width, rows = map.height;
             const tile = Math.min((bottom - top) / rows, B.width / cols);
             const gw   = cols * tile, gh = rows * tile;
+            // The BAND becomes exactly the grid: endless stacks each new band a
+            // band-height above the last, so a band taller than its own tiles
+            // would leave a seam of bare background between levels. Any slack
+            // sits above the band instead, which is where the next one arrives.
+            top = bottom - gh;
             // The two centre columns are the 2-wide main canal.
             const mainW = TM.MAIN_TILES || 2;
             const mainRightCol = Math.floor(cols / 2);
@@ -741,11 +790,17 @@ console.log(
             this.tileMeta = TM.TILES || {};
         }
 
+        this.road = {
+            top, bottom, canalW,
+            canalCx: B.x + B.width / 2,       // the channel is centred in the half
+            band:    null,                    // the live segment's band record
+        };
+
         // ── Endless mode: a second camera owns the landscape ──────────────
         // The world extends upward one band at a time; camB pans up it while
-        // the main camera keeps the merge grid and platform UI fixed. camB's
-        // viewport covers ONLY the land band, so the fixed bottom strip
-        // (slots/junction) is never overdrawn by panning world. With ENDLESS
+        // the main camera keeps the merge grid and the battery slots fixed.
+        // camB's viewport covers ONLY the farm half, so panning world can never
+        // overdraw the UI (in portrait, nor the slots below it). With ENDLESS
         // off, camB is never created and _addB degrades to a plain registry
         // push — behaviour is identical to before.
         this.segments  = [];
@@ -5032,8 +5087,20 @@ console.log(
         const cx   = gridStartX - this.CELL_SIZE / 2 + gridW / 2;
         const cy   = gridStartY - this.CELL_SIZE / 2 + gridH / 2;
 
-        const panel = this.add.image(cx, cy, 'grid_panel');
-        panel.setDisplaySize(panW, panH).setDepth(1.5);
+        // The panel is drawn, not art: a rounded square hugging the cells with a
+        // small even padding. The old grid_panel.png carried a lot of baked
+        // margin and shadow around the nine cells, which cost vertical space the
+        // half does not have to spare.
+        const C     = CONFIG.CELL;
+        const panel = this.add.graphics().setDepth(1.5);
+        const radius = Math.round(C.GRID_PANEL_RADIUS * L.scale);
+        const border = Math.max(1, Math.round(C.GRID_PANEL_BORDER_WIDTH * L.scale));
+        panel.fillStyle(hexColor(C.GRID_PANEL_COLOR), 1);
+        panel.fillRoundedRect(cx - panW / 2, cy - panH / 2, panW, panH, radius);
+        if (border > 0) {
+            panel.lineStyle(border, hexColor(C.GRID_PANEL_BORDER_COLOR), 1);
+            panel.strokeRoundedRect(cx - panW / 2, cy - panH / 2, panW, panH, radius);
+        }
 
         const inset = this.cellInset;
         for (let row = 0; row < this.GRID_ROWS; row++) {
