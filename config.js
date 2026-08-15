@@ -854,6 +854,90 @@ var CONFIG = {
                                    // water's palette rather than reading as pure white
             FOAM_ALPHA: 0.9,
         },
+
+        // ── Lily pads ─────────────────────────────────────────────────────────
+        // A few clusters of pads resting on the finished main canal. They never
+        // travel — the water is a still channel, not a river — they only breathe:
+        // a slow turn, a barely-there rock in place and an optional size pulse,
+        // each pad on its own phase so the group never moves as one. That is what
+        // sells "floating on water that is alive" without anything drifting.
+        //
+        // They appear only AFTER the water has passed, never on dry ground: a
+        // main-canal cluster waits until the waterline is REVEAL_LAG past it, a
+        // branch one until its own cell has filled.
+        //
+        // WHERE THE WATER IS. The main canal is two columns meeting at a shared
+        // seam, and each of those tiles is MAIN_WATER water measured from that
+        // seam outwards — the rest of the tile, on its OUTER side, is bank. So
+        // the open water is one band straddling the seam, MAIN_WATER of a tile
+        // to each side of it. A branch is a single tile with BRANCH_WATER of its
+        // width running down its middle. Pads are pushed out toward a bank
+        // (BANK_BIAS) rather than sitting on the centre line — pads gather at
+        // the edges of real water, and the middle stays clear.
+        LILY: {
+            ENABLED: true,
+            MAIN_WATER:   0.72,    // water share of ONE main tile, from the seam out
+            BRANCH_WATER: 0.32,    // water share of a branch tile, centred
+            BANK_BIAS:    0.85,    // how far toward the bank a cluster sits: 0 = on
+                                   // the centre line, 1 = pad edge touching the bank
+            CLUSTERS_MIN: 2,       // lilies on the MAIN canal per stretch
+            CLUSTERS_MAX: 3,
+            // The art comes in two kinds: lily1/lily2 are single pads, lily3/
+            // lily4 are ready-made clumps. Nothing is assembled from singles —
+            // each lily is ONE image. Singles are randomly rotated; clumps are
+            // placed as drawn. A clump is COMBO_SCALE wider, being several
+            // pads' worth of art in the one picture.
+            COMBO_CHANCE: 0.45,    // odds a lily is a clump rather than a single
+            COMBO_SCALE:  1.4,     // clump width vs. a single's
+            SIZE:         0.67,    // single-pad width as a fraction of a tile
+                                   // (height follows — the art keeps its aspect)
+            SIZE_VAR:     0,       // ± random size spread per lily. 0 = every
+                                   // lily of a kind is exactly this size
+            MIN_GAP:      0.12,    // least spacing between lilies along the canal,
+                                   // as a fraction of the stretch's length
+            SPAN:        [0.08, 0.9],  // where clusters may sit along the stretch
+            REVEAL_LAG:   1.2,     // how far past a cluster the waterline must be
+                                   // before it appears, in tiles
+            FADE_MS:      520,     // fade-in once revealed
+            POP_FROM:     0.55,    // it pops in rather than appearing: starts this
+            POP_MS:       620,     // size and springs up to full over POP_MS
+            POP_EASE:     'Back.easeOut',   // the small overshoot at the end
+            DEPTH:        1.57,    // above the water (1.55) and its head (1.56)
+
+            // ── Branches ─────────────────────────────────────────────────────
+            // One lily per branch, on a random cell of it. A branch channel is
+            // barely a third of a tile wide, so it gets its own smaller size —
+            // the main-canal size would not fit — and singles only: a clump is
+            // wider than the whole branch channel.
+            BRANCH:       false,   // OFF: a branch channel is a third of a tile
+                                   // wide, so a pad in one is too small to read.
+                                   // Set true to put them back — the placement
+                                   // below still works
+            BRANCH_SIZE:  0.24,    // single-pad width as a fraction of a tile
+            BRANCH_COMBO: false,   // allow clumps in branches (they will overhang)
+
+            // ── The breathing ────────────────────────────────────────────────
+            // The whole point of the pads: still water reads as dead, so they
+            // must never come to rest. All of these run forever, yoyoing, each
+            // with its own duration and a random start delay so no two pads move
+            // together. The lily stays where it was put — it wanders about that
+            // spot, it does not travel.
+            ROCK_DEG:     11,      // rock about the pad's own centre (degrees)
+            ROCK_MS:     [1700, 2600],   // one way; randomised per pad
+            DRIFT:        0.13,    // wander WITH and AGAINST the flow, as a
+                                   // fraction of a tile — the give and take of
+                                   // the current pushing at the pad
+            DRIFT_CROSS:  0.05,    // the smaller sway across the channel. Kept
+                                   // under DRIFT so the motion reads as being
+                                   // along the water, not random jitter, and
+                                   // capped at run time by the room the bank
+                                   // leaves — a branch pad has almost none
+            DRIFT_MS:    [1500, 2300],   // the two axes run at different rates on
+                                   // purpose, so the path never repeats itself
+            SCALE_AMP:    0.06,    // size pulse (0 = off) — the swell passing
+                                   // under
+            SCALE_MS:    [1300, 2100],
+        },
     },
 };
 

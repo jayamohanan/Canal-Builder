@@ -310,6 +310,16 @@ class GameScene extends Phaser.Scene {
             this.load.image('trencher_shadow', 'graphics/trencher/shadow.png');
         }
 
+        // Lily pads: 1 and 2 are single pads, 3 and 4 are ready-made clumps.
+        // Each is placed whole and randomly rotated, so the same four images
+        // never read as the same stamp twice.
+        if (CONFIG.ROAD && CONFIG.ROAD.ENABLED && CONFIG.ROAD.LILY
+            && CONFIG.ROAD.LILY.ENABLED) {
+            for (let i = 1; i <= 4; i++) {
+                this.load.image(`lily_${i}`, `graphics/lily/lily${i}.png`);
+            }
+        }
+
         // Tile map: the level layout (.tmj) plus one image per tile type.
         // The .tmj only carries the grid + tile names; the PNGs live here.
         const TM = CONFIG.ROAD && CONFIG.ROAD.TILEMAP;
@@ -1353,6 +1363,10 @@ console.log(
 
     _updateFloodOne(tn, dt, time) {
         const F  = tn.flood, g = F.g;
+        // Pads land on water that has already arrived. Driven from HERE, not
+        // from the machine's update: branches keep filling long after the dig
+        // finished, and this runs for every segment until they do.
+        this._updateLilies(tn);
         // Smooth continuous speed — the branches flow at the main canal's pace.
         const speed = (CONFIG.ROAD.TILEMAP.FLOW_SPEED || CONFIG.ROAD.WATER.MIN_SPEED || 30)
                     * this.layoutConfig.platformScale;
@@ -1855,7 +1869,215 @@ console.log(
             // settled (_rebaseWorld arms it). The first segment starts armed.
             ready: this.segments.length <= 1,
         };
+        this.tunnel.lilies = this._buildLilies(seg, band, this.tunnel);
         if (seg) seg.tunnel = this.tunnel;
+    }
+
+    // ── Lily pads ────────────────────────────────────────────────────────────
+    // Built with the stretch but hidden: each cluster waits for the waterline to
+    // pass it (see _updateLilies) and only then fades in, so a pad is never seen
+    // sitting in a dry ditch.
+    //
+    // A cluster is a CONTAINER holding its pads. That matters twice over: the
+    // pads' idle tweens run in LOCAL coordinates, so an endless-mode rebase can
+    // shift the container's world y without fighting a running tween, and the
+    // whole clump can be faded in with one target.
+    _buildLilies(seg, band, tn) {
+        const L = CONFIG.ROAD.LILY;
+        if (!L || !L.ENABLED || !this.tileGrid) return null;
+        const g = this.tileGrid;
+        const rnd  = (a, b) => a + Math.random() * (b - a);
+        const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+        // One lily: a container at (x, y) holding a single sprite — either a
+        // lone pad (1/2) or a ready-made clump (3/4), drawn whole rather than
+        // assembled here, and turned to a random angle. A clump is COMBO_SCALE
+        // bigger, since it is several pads' worth of art in one image.
+        // `half` is the channel's half-width, so the lily can be pushed out
+        // toward a bank and still fit; the container is kept so the idle tweens
+        // run in local coordinates, out of reach of a rebase.
+        const cluster = (x, y, size, half, acrossX, combo) => {
+            const cont = this._addB(this.add.container(0, 0)
+                .setDepth(L.DEPTH !== undefined ? L.DEPTH : 1.57)
+                .setAlpha(0).setVisible(false), seg);
+            const tex = combo ? pick(['lily_3', 'lily_4']) : pick(['lily_1', 'lily_2']);
+            const src = this.textures.get(tex).getSourceImage();
+            const w   = size * (combo ? (L.COMBO_SCALE || 1.4) : 1)
+                             * rnd(1 - (L.SIZE_VAR || 0), 1 + (L.SIZE_VAR || 0));
+            // Room left between the lily's outer edge and the bank, then push it
+            // that far out — lilies gather at the water's edge, not on its
+            // centre line — toward one bank or the other at random.
+            const room = Math.max(0, half - w / 2);
+            const off  = room * (L.BANK_BIAS !== undefined ? L.BANK_BIAS : 0.85)
+                       * (Math.random() < 0.5 ? -1 : 1);
+            cont.setPosition(x + (acrossX ? off : 0), y + (acrossX ? 0 : off));
+            // What is left between this lily's edge and the bank. The sway
+            // across the channel is capped to it, so a wide pad in a narrow
+            // branch rocks in place instead of sliding up the bank.
+            cont._slack = Math.max(0, room - Math.abs(off));
+
+            // Singles are turned to any angle; a clump is placed as drawn — its
+            // pads are already arranged, and spinning the group reads as the
+            // whole raft having been rotated.
+            const pad = this.add.image(0, 0, tex)
+                .setDisplaySize(w, w * (src.height / src.width))
+                .setAngle(combo ? 0 : rnd(0, 360));
+            cont.add(pad);
+            pad._base = { sx: pad.scaleX, sy: pad.scaleY, x: 0, y: 0 };
+            return cont;
+        };
+
+        const out = [];
+
+        // ── Main canal ───────────────────────────────────────────────────────
+        // Both main tiles are water on the side facing their shared seam, so the
+        // open band is MAIN_WATER of a tile either side of that seam.
+        const seamX  = g.left + g.mainRightCol * g.tile;
+        const halfCh = g.tile * (L.MAIN_WATER !== undefined ? L.MAIN_WATER : 0.72);
+        // Cluster positions along the stretch, measured like every other water
+        // number: distance UP from the mouth the dig started at. Spread out by
+        // MIN_GAP so two clumps never land on top of each other.
+        const span = L.SPAN || [0.08, 0.9];
+        const n    = Math.round(rnd(L.CLUSTERS_MIN || 2, L.CLUSTERS_MAX || 3));
+        const gap  = (L.MIN_GAP || 0.12) * tn.len;
+        const dists = [];
+        for (let i = 0, guard = 0; i < n && guard < 60; guard++) {
+            const d = rnd(span[0], span[1]) * tn.len;
+            if (dists.some((o) => Math.abs(o - d) < gap)) continue;
+            dists.push(d); i++;
+        }
+        for (const dist of dists) {
+            const combo = Math.random() < (L.COMBO_CHANCE !== undefined ? L.COMBO_CHANCE : 0.45);
+            const cont  = cluster(seamX, tn.entryY - dist,
+                                  g.tile * (L.SIZE || 0.48), halfCh, true, combo);
+            // The main canal runs up the screen, so its give-and-take is on y.
+            out.push({ cont, dist, shown: false, flowV: true });
+        }
+
+        // ── Branches ─────────────────────────────────────────────────────────
+        // One cluster per branch — a branch being a connected run of branch
+        // cells, however it turns. Its channel is a narrow strip down the middle
+        // of a single tile, so the offset goes ACROSS that strip: sideways in a
+        // cell the water runs through east-west, up-down in one it runs north-
+        // south. These wait on their own cell filling, not on the main waterline.
+        if (L.BRANCH !== false && tn.flood) {
+            const halfBr = g.tile * (L.BRANCH_WATER !== undefined ? L.BRANCH_WATER : 0.32) / 2;
+            const brSize = g.tile * (L.BRANCH_SIZE || 0.24);
+            for (const run of this._branchRuns(tn.flood)) {
+                const cell = pick(run);
+                // A cell open east or west carries the water sideways; the lily
+                // shifts perpendicular to that, i.e. up or down the tile.
+                const acrossX = !(cell.conn.e || cell.conn.w);
+                // Clumps are only used here if the branch is wide enough to hold
+                // one — by default it is not, so branches get single pads.
+                const combo = L.BRANCH_COMBO === true
+                            && Math.random() < (L.COMBO_CHANCE !== undefined ? L.COMBO_CHANCE : 0.45);
+                const cont = cluster(g.left + (cell.col + 0.5) * g.tile,
+                                     tn.exitY + (cell.row + 0.5) * g.tile,
+                                     brSize, halfBr, acrossX, combo);
+                // Same test that chose the bank axis: across-x means the water
+                // runs up-down through this cell, so that is the flow axis too.
+                out.push({ cont, cell, shown: false, flowV: acrossX });
+            }
+        }
+        return out;
+    }
+
+    // Group the flood's branch cells into runs: each run is one branch, found by
+    // walking neighbours, so a branch that turns a corner still counts as one.
+    _branchRuns(F) {
+        const seen = new Set(), runs = [];
+        for (const [key, cell] of F.cells) {
+            if (cell.isMain || seen.has(key)) continue;
+            const run = [], queue = [[key, cell]];
+            seen.add(key);
+            while (queue.length) {
+                const [, c] = queue.pop();
+                run.push(c);
+                for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                    const k = (c.col + dc) + ',' + (c.row + dr);
+                    const nb = F.cells.get(k);
+                    if (nb && !nb.isMain && !seen.has(k)) { seen.add(k); queue.push([k, nb]); }
+                }
+            }
+            runs.push(run);
+        }
+        return runs;
+    }
+
+    // Reveal any cluster the water has passed, then leave it breathing forever.
+    _updateLilies(tn) {
+        const L = CONFIG.ROAD.LILY;
+        if (!tn.lilies || !this.tileGrid) return;
+        const lag = (L.REVEAL_LAG !== undefined ? L.REVEAL_LAG : 1.2) * this.tileGrid.tile;
+        // Once the canal is full there is no more waterline to wait for, so any
+        // cluster near the top — whose lag would reach past the far mouth — is
+        // released here rather than never appearing.
+        const full = tn.wet >= tn.len - 0.5;
+        for (const c of tn.lilies) {
+            // A branch cluster waits on its own cell's water, which arrives on
+            // the flood cascade's schedule, not the main waterline's.
+            const ready = c.cell ? c.cell.filled
+                                 : (full || tn.wet >= c.dist + lag);
+            if (c.shown || !ready) continue;
+            c.shown = true;
+            // Pop in rather than appear: the pad surfaces, overshoots a touch and
+            // settles. Scaled on the CONTAINER, so it composes with the per-pad
+            // size pulse below instead of fighting it.
+            const from = L.POP_FROM !== undefined ? L.POP_FROM : 0.55;
+            c.cont.setVisible(true).setScale(from);
+            this.tweens.add({ targets: c.cont, alpha: 1,
+                              duration: L.FADE_MS || 520, ease: 'Quad.easeOut' });
+            this.tweens.add({ targets: c.cont, scaleX: 1, scaleY: 1,
+                              duration: L.POP_MS || 620,
+                              ease: L.POP_EASE || 'Back.easeOut',
+                              onComplete: () => {
+                                  for (const pad of c.cont.list)
+                                      this._breatheLily(pad, c.flowV, c.cont._slack);
+                              } });
+        }
+    }
+
+    // One pad's idle life. Water that looks still is water nothing sits on, so a
+    // pad has to keep working: it wanders back and forth ALONG the channel — the
+    // give and take of the current — with a smaller sway across it, a slow rock
+    // about its own centre, and a faint size pulse for the swell passing under.
+    // Every tween gets its own duration and start delay, and the two wander axes
+    // are deliberately out of step, so the path never repeats and no two pads
+    // ever move together. A clump breathing in unison reads as a tweened sprite;
+    // this reads as water.
+    _breatheLily(pad, flowV, slack) {
+        const L = CONFIG.ROAD.LILY;
+        const b = pad._base;
+        const rnd = (a, bb) => a + Math.random() * (bb - a);
+        const ms  = (r, d) => rnd((r && r[0]) || d, (r && r[1]) || d * 1.5);
+        const common = { yoyo: true, repeat: -1, ease: 'Sine.easeInOut' };
+        const tile = this.tileGrid.tile;
+
+        if (L.ROCK_DEG) {
+            this.tweens.add({ targets: pad, angle: pad.angle + rnd(-L.ROCK_DEG, L.ROCK_DEG),
+                duration: ms(L.ROCK_MS, 2600), delay: rnd(0, 1200), ...common });
+        }
+        if (L.DRIFT) {
+            // With and against the flow. flowV = the channel runs up-down here,
+            // so the give-and-take is on y and the smaller sway on x.
+            const along = L.DRIFT * tile * rnd(0.7, 1);
+            // Across the channel there is only ever as much room as the bank
+            // leaves — a branch pad has almost none, a main-canal one has some.
+            const cross = Math.min(slack !== undefined ? slack : Infinity,
+                (L.DRIFT_CROSS !== undefined ? L.DRIFT_CROSS : L.DRIFT * 0.35)
+                * tile * rnd(0.7, 1));
+            const dx = flowV ? cross : along, dy = flowV ? along : cross;
+            this.tweens.add({ targets: pad, x: b.x + rnd(-dx, dx),
+                duration: ms(L.DRIFT_MS, 2400), delay: rnd(0, 1400), ...common });
+            this.tweens.add({ targets: pad, y: b.y + rnd(-dy, dy),
+                duration: ms(L.DRIFT_MS, 2400) * rnd(1.15, 1.5), delay: rnd(0, 1400), ...common });
+        }
+        if (L.SCALE_AMP) {
+            this.tweens.add({ targets: pad,
+                scaleX: b.sx * (1 + L.SCALE_AMP), scaleY: b.sy * (1 + L.SCALE_AMP),
+                duration: ms(L.SCALE_MS, 1900), delay: rnd(0, 1600), ...common });
+        }
     }
 
     // The two trencher loops, built once and shared by every segment's rig.
@@ -2306,6 +2528,9 @@ console.log(
             if (seg === survivor) continue;
             for (const o of seg.objects) {
                 this.tweens.killTweensOf(o);
+                // Containers (lily clusters) tween their CHILDREN, which are not
+                // in the registry — kill those too or they outlive the destroy.
+                if (o.list) for (const ch of o.list) this.tweens.killTweensOf(ch);
                 o.destroy();
             }
         }
