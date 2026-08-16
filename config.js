@@ -25,8 +25,11 @@ var CONFIG = {
     },
 
     RESET_PROGRESS: false,
-    DEBUG_HALF_LINE: true,   // draw a line splitting partA / partB (vertical in
+    DEBUG_HALF_LINE: false,  // draw a line splitting partA / partB (vertical in
                              // landscape, horizontal in portrait)
+    DEBUG_PERF: true,        // log object / tween / timer / texture counts each
+                             // time the world rebases (once per level). Climbing
+                             // numbers = something is outliving its band
     BATTERY_START_LEVEL: 1,
     BATTERY_IMAGE_EXTENSIONS: ['svg', 'png', 'jpg', 'webp'],
 
@@ -124,6 +127,25 @@ var CONFIG = {
         FILLED_BG_COLOR: "#eaf0f6",
         INSET_SHADOW_COLOR: "#364549",
         INSET_BORDER_WIDTH: 3.5,
+        // Grain over the flat cell colour. graphics/cell_noise.png is neutral
+        // grey with blurred noise, blended over the fill when the cell faces are
+        // baked — so this is the same composite you would build in an image
+        // editor, except the colour underneath stays a config value and one
+        // grain file serves every face. A change here needs a reload.
+        NOISE: {
+            ENABLED:  true,
+            BLEND:    'overlay',       // 'overlay' | 'soft-light' | 'multiply'
+            CONTRAST: 2,               // stretch the tile before blending. The
+                                       // file is blurred noise spanning only
+                                       // ±18% around neutral grey, so without
+                                       // this an editor-style 7% alpha lands
+                                       // under a level of 255 — invisible
+            ALPHA:    0.25,            // strength of the blend, AFTER contrast.
+                                       // Felt rather than seen: ~2 levels of 255
+                                       // on a light cell
+            TILE:     1,               // 1 = tile stretched to the cell.
+                                       // 0.5 = blown up 2× → coarser grain
+        },
         BATTERY_DISPLAY_SIZE: 64,
         BATTERY_SCALE: 1.0,
         BATTERY_Y_OFFSET: 5,
@@ -219,14 +241,39 @@ var CONFIG = {
         // width less the icon and the gaps, capped at ONE GRID CELL — a battery
         // in a slot should look like a battery in a cell. With the row running
         // edge to edge that cap is what binds, so the slots and the cells match.
-        SLOT_ROW_EDGE_PAD: 12,         // screen edge → first slot (px @ design)
-        TRENCHER_ICON_W: 0.62,         // icon width as a fraction of a grid cell.
-                                       // The icon sits directly after the last
-                                       // slot, so growing this eats the space to
-                                       // its right, not the slots
-        TRENCHER_GAP:   0.18,          // gap from the last slot, in cells
-        TRENCHER_EDGE_PAD: 12,         // hard stop: icon's right edge never gets
-                                       // closer than this to the farm-half boundary
+        // The three slots are not three things: they are ONE BATTERY. A rounded
+        // case holds all three, two dividers mark the cells inside it (stopping
+        // short of the walls, so they read as divisions rather than bars), and a
+        // small terminal node sits off the right end — the universal battery
+        // glyph. The case is sized around three grid cells, so a battery dropped
+        // in a division is exactly the size it was in the grid.
+        BATTERY_CASE: {
+            ENABLED: true,
+            PAD:      8,               // case wall → cell (px @ design)
+            STROKE:   4,               // case outline thickness
+            RADIUS:   14,              // case corner radius
+            DIVIDER_W: 3,
+            DIVIDER_INSET: 0.14,       // how far short of each wall a divider
+                                       // stops, as a fraction of case height.
+                                       // Long enough to divide, never touching —
+                                       // a divider that meets the wall reads as
+                                       // three boxes instead of one battery
+            NODE_W:   14,              // the terminal sticking out on the right
+            NODE_H:   0.38,            // as a fraction of the case height
+            NODE_GAP: 4,               // gap between the case and its terminal, so
+                                       // the node reads as a separate piece
+            NODE_RADIUS: 5,
+            COLOR:      "#364549",     // outline, dividers and terminal
+            FILL_COLOR: "#c2d1e0",     // inside the case
+            FILL_ALPHA: 0,             // 0 = the case is an outline only. A wash
+                                       // across all three divisions reads as one
+                                       // slab; leaving it clear lets an OCCUPIED
+                                       // division be the only thing with a
+                                       // background, which is the signal
+        },
+
+        SLOT_ROW_EDGE_PAD: 12,         // least margin each side of the battery,
+                                       // which is centred on the half (px @ design)
         SLOT_RADIUS: 15,               // corner radius (px)
         SLOT_ABOVE_STRIPE: 14,         // gap (px) between slot bottom and stripe top
         CHARGE_RATE_GAP: 10,           // gap (px) between charge-rate label bottom and slot top
@@ -500,6 +547,29 @@ var CONFIG = {
             CROP_STAGES:  5,
             CROP_GROW_MS: 2000,     // time between growth stages
             CROP_WET:     0.15,     // canal-cell fill fraction that counts as "watered"
+
+            // ── Per-plant variation ──────────────────────────────────────
+            // One crop sheet stamped across a field reads as wallpaper. These
+            // break that up WITHOUT moving anything: a plant stays dead centre
+            // in its cell, so the rows stay ruler-straight. Every value is drawn
+            // from a hash of the cell, not Math.random(), so the field looks
+            // identical each time the scene is rebuilt (it rebuilds on every
+            // window resize).
+            CROP_VARY: {
+                FLIP:      true,    // mirror half the plants. Safe for this art —
+                                    // its shadow is centred under the stem, so a
+                                    // flip does not light it from the wrong side.
+                                    // Re-check that before swapping the art
+                SCALE_VAR: 0.04,    // ± size spread. Applied to the plant's CACHED
+                                    // scale, so the stage-change spring settles
+                                    // back to this plant's size, not a shared one
+                GROW_VAR:  0.18,    // ± spread on how long each stage takes. The
+                                    // strongest of the three: a patch that hits
+                                    // every stage in lockstep is what really
+                                    // reads as stamped
+                ROT_DEG:   0,       // ± tilt about the stem base. 2-3 is plenty
+                                    // if the field still looks too regular
+            },
             // Each new stage after the seed springs up instead of popping in:
             // the frame swaps, then y-scale eases from CROP_POP_FROM to full.
             // Sprites are bottom-anchored, so this reads as growing upward.

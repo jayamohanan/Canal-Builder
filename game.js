@@ -200,27 +200,31 @@ class GameScene extends Phaser.Scene {
         // (it keeps its right-aligned x, clear of the slots). Stacked above, it
         // would eat the band and cap the slots near 95 — the band is only ~175
         // design px tall.
+        // The battery case wraps the three cells, so its walls, outline and
+        // terminal all come out of the row's width and height budget.
+        const CS              = P.BATTERY_CASE || {};
+        const designCasePad   = CS.ENABLED === false ? 0 : (CS.PAD || 0);
+        const designCaseExtra = CS.ENABLED === false ? 0
+                              : 2 * designCasePad + (CS.STROKE || 0)
+                                + (CS.NODE_GAP || 0) + (CS.NODE_W || 0);
         const designSlotLabel = P.CHARGE_RATE_GAP + 14;                    // gap + text
-        const designRowTop    = 6 + designSlotLabel;                       // under the label
-        const designRowBot    = designPanelCY - designPanH / 2 - 8;        // just over the panel
-        const designEdgePad   = P.SLOT_ROW_EDGE_PAD  || 12;                // screen edge → slot 1
-        const designIconPad   = P.TRENCHER_EDGE_PAD  || 12;                // icon → half boundary
-        const designIconW     = BASE * (P.TRENCHER_ICON_W || 0.31);
-        const designIconGap   = BASE * (P.TRENCHER_GAP || 0.18);
+        const designRowTop    = 6 + designSlotLabel + designCasePad;       // under the label
+        const designRowBot    = designPanelCY - designPanH / 2 - 8 - designCasePad;
+        const designEdgePad   = P.SLOT_ROW_EDGE_PAD  || 12;                // margin each side
         const designSlotSize  = Math.min(
             BASE,                                           // never bigger than a cell
             designRowBot - designRowTop,                    // the band's height
-            (REF_W - designEdgePad - designIconPad - designIconW - designIconGap
-                   - 2 * CONFIG.CELL.GAP) / 3);             // what the width leaves
+            (REF_W - 2 * designEdgePad
+                   - 2 * CONFIG.CELL.GAP - designCaseExtra) / 3);   // what the width leaves
         const designSlotCY    = designRowTop + designSlotSize / 2;
         const slotRowCenterY  = partA.y + designSlotCY * sH;
         const slotSize        = designSlotSize * scale;
         if (!isP) {
             // Coin counter goes back above the grid, centred in the band the
-            // dropped panel opened up between the slot row and the panel's top
-            // edge. Derived from the row's actual bottom, so it keeps its place
-            // whatever the slots and PANEL_DROP work out to.
-            const designRowEnd = designRowTop + designSlotSize;
+            // dropped panel opened up between the battery case and the panel's
+            // top edge. Derived from the row's actual bottom, so it keeps its
+            // place whatever the slots, the case and PANEL_DROP work out to.
+            const designRowEnd = designRowTop + designSlotSize + designCasePad;
             coinCenterY = partA.y
                         + (designRowEnd + (designPanelCY - designPanH / 2)) / 2 * sH;
         }
@@ -331,6 +335,9 @@ class GameScene extends Phaser.Scene {
         this.load.image('point',         'graphics/point.png');
         this.load.image('button',        'graphics/spawn_button3.png');
         // (grid_panel.png retired — the panel is drawn in createGrid)
+        // Grain for the cell faces: neutral grey + blurred noise, blended over
+        // the flat colour at bake time (see _makeCellTextures).
+        this.load.image('cell_noise',    'graphics/cell_noise.png');
         this.load.image('battery_crown', 'graphics/battery_crown.png');
         this.load.image('bolt',          'graphics/bolt_64.png');
         this.load.image('gadget_socket',   'graphics/connection/socket.png');
@@ -357,8 +364,9 @@ class GameScene extends Phaser.Scene {
             // One shadow for the whole rig — it never animates, it just rides
             // along under both parts.
             this.load.image('trencher_shadow', 'graphics/trencher/shadow.png');
-            // A side-on view of the machine, for the battery-slot row. The field
-            // art is top-down, which reads as nothing at icon size.
+            // A side-on view of the machine. Not placed anywhere at the moment —
+            // it sat beside the battery slots until the battery case took that
+            // row — but kept loaded for the next attempt at linking the two.
             this.load.image('trencher_icon', 'graphics/trencher/trencher_icon.png');
         }
 
@@ -611,9 +619,17 @@ console.log(
         // spaced by the grid's own cell gap — same size, same spacing as the grid
         // below, so the two blocks read as one system.
         // PORTRAIT: the old centred row, spaced by half a slot.
-        const rowLeft  = B.x + (P.SLOT_ROW_EDGE_PAD || 12) * L.sW;
+        const CS       = P.BATTERY_CASE || {};
+        const caseOn   = land && CS.ENABLED !== false;
+        const casePad  = caseOn ? (CS.PAD || 0) * scale : 0;
         const slotGap  = land ? L.cellGap : Math.round(ssz * 0.5);
         const spacing  = ssz + slotGap;
+        // The whole battery — case walls and terminal included — is centred on
+        // the half, which is where the grid panel is centred too, so the two
+        // blocks line up on one axis.
+        const nodeW    = caseOn ? ((CS.NODE_GAP || 0) + (CS.NODE_W || 14)) * scale : 0;
+        const batteryW = 3 * ssz + 2 * slotGap + 2 * casePad + nodeW;
+        const rowLeft  = B.x + B.width / 2 - batteryW / 2 + casePad;   // first cell's left edge
         const centerX  = land ? rowLeft + ssz / 2 + spacing   // centre slot of the three
                               : B.x + B.width / 2;
 
@@ -631,37 +647,67 @@ console.log(
         this.junctionX = centerX;
         this.junctionY = slotY - ssz / 2 - Math.round(46 * scale);
 
-        // The trencher icon: the machine these batteries are charging. It follows
-        // straight on from the last slot — the three batteries and the machine
-        // they feed as one run — rather than being parked out at the boundary
-        // with a hole between. Sized by WIDTH (it is a side-on view), centred on
-        // the row, and never allowed past the edge of the half.
-        this.trencherIcon = null;
-        if (land && this.textures.exists('trencher_icon')) {
-            const iconW = L.cellSize * (P.TRENCHER_ICON_W || 0.62);
-            const iconH = iconW / this._texAspect('trencher_icon');
-            const limit = B.x + B.width - (P.TRENCHER_EDGE_PAD || 12) * L.sW - iconW / 2;
-            const after = centerX + spacing + ssz / 2                  // last slot's edge
-                        + L.cellSize * (P.TRENCHER_GAP || 0.18) + iconW / 2;
-            this.trencherIcon = this.add.image(Math.min(after, limit), slotY, 'trencher_icon')
-                .setDisplaySize(iconW, iconH).setDepth(3.6);
+        // ── The battery case ──────────────────────────────────────────────────
+        // One battery holding three cells: a rounded outline around all three, a
+        // divider between each pair — stopped short of the walls, so it reads as
+        // a division and not a bar — and the terminal node off the right end.
+        this.batteryCase = null;
+        if (caseOn) {
+            const sp   = (v) => (v || 0) * scale;
+            const left = slotXs[0] - ssz / 2 - casePad;
+            const top  = slotY - ssz / 2 - casePad;
+            const w    = (slotXs[2] + ssz / 2 + casePad) - left;
+            const h    = ssz + casePad * 2;
+            const col  = hexColor(CS.COLOR || '#364549');
+            const g    = this.add.graphics().setDepth(2.8);
+
+            g.fillStyle(hexColor(CS.FILL_COLOR || '#c2d1e0'),
+                        CS.FILL_ALPHA !== undefined ? CS.FILL_ALPHA : 0.55);
+            g.fillRoundedRect(left, top, w, h, sp(CS.RADIUS || 14));
+            g.lineStyle(Math.max(1, sp(CS.STROKE || 4)), col, 1);
+            g.strokeRoundedRect(left, top, w, h, sp(CS.RADIUS || 14));
+
+            const inset = h * (CS.DIVIDER_INSET !== undefined ? CS.DIVIDER_INSET : 0.22);
+            g.lineStyle(Math.max(1, sp(CS.DIVIDER_W || 3)), col, 1);
+            for (let i = 0; i < 2; i++) {
+                const dx = (slotXs[i] + slotXs[i + 1]) / 2;
+                g.lineBetween(dx, top + inset, dx, top + h - inset);
+            }
+
+            const nodeW = sp(CS.NODE_W || 14);
+            const nodeH = h * (CS.NODE_H !== undefined ? CS.NODE_H : 0.38);
+            g.fillStyle(col, 1);
+            g.fillRoundedRect(left + w + sp(CS.NODE_GAP || 0), slotY - nodeH / 2,
+                              nodeW, nodeH, sp(CS.NODE_RADIUS || 5));
+            this.batteryCase = g;
         }
 
         for (let i = 0; i < 3; i++) {
             const slotX = slotXs[i];
 
-            // Slot backgrounds (empty + filled variants)
-            const slotBg = this.add.graphics();
-            this._drawSlot(slotBg, slotX, slotY, ssz, false);
-            slotBg.setDepth(3);
+            // Slot backgrounds. Inside the battery case an EMPTY division draws
+            // nothing (the case's outline already bounds it) and an occupied one
+            // gets the same grained face as a grid cell, minus the bevel — the
+            // case supplies the edges.
+            let slotBg, slotBgFilled;
+            if (caseOn) {
+                this._makeCellTextures(L.cellSize);
+                const face = Math.round(ssz - 2 * Math.max(2, ssz * 4 / CONFIG.CELL.SIZE));
+                slotBg = this.add.graphics().setDepth(3);         // empty: nothing drawn
+                slotBgFilled = this.add.image(slotX, slotY, 'cell_face')
+                    .setDisplaySize(face, face).setDepth(3).setVisible(false);
+            } else {
+                slotBg = this.add.graphics();
+                this._drawSlot(slotBg, slotX, slotY, ssz, false);
+                slotBg.setDepth(3);
+                slotBgFilled = this.add.graphics();
+                this._drawSlot(slotBgFilled, slotX, slotY, ssz, true);
+                slotBgFilled.setDepth(3);
+                slotBgFilled.setVisible(false);
+            }
 
-            const slotBgFilled = this.add.graphics();
-            this._drawSlot(slotBgFilled, slotX, slotY, ssz, true);
-            slotBgFilled.setDepth(3);
-            slotBgFilled.setVisible(false);
-
-            // Charge-rate label above slot
-            const rateTextY = slotY - ssz / 2 - chargeGap;
+            // Charge-rate label, clear of the case wall
+            const rateTextY = slotY - ssz / 2 - casePad - chargeGap;
             const chargeRateText = this.add.text(slotX - 2, rateTextY, '', {
                 fontSize, fontFamily: CONFIG.FONT_FAMILY,
                 color: '#000000', fontStyle: 'bold',
@@ -710,6 +756,85 @@ console.log(
         gfx.strokePath();
     }
 
+    // ── Cell faces ───────────────────────────────────────────────────────────
+    // The grid cell, its filled twin and the battery case's occupied division
+    // are baked ONCE into textures rather than drawn per cell: a rounded square
+    // in the flat colour, the noise tile blended over it (the same overlay-at-
+    // low-alpha composite you would build in an image editor, done here so the
+    // COLOUR stays a config value — one grain file serves every face), then the
+    // inset bevel ring. Nine cells then cost nine images sharing two textures,
+    // where they used to cost eighteen graphics objects.
+    //
+    // Baked at the cell's true pixel size (the canvas runs at device pixels), and
+    // rebaked only when that size changes — i.e. on a resize, which restarts the
+    // scene anyway.
+    _makeCellTextures(px) {
+        const C = CONFIG.CELL;
+        const N = C.NOISE || {};
+        px = Math.max(8, Math.round(px));
+        if (this._cellTexPx === px) return;
+        this._cellTexPx = px;
+
+        const inset = Math.max(1, Math.round(C.INSET_BORDER_WIDTH * px / C.SIZE));
+        const rad   = Math.max(1, Math.round(C.RADIUS * px / C.SIZE));
+        const noise = (N.ENABLED !== false && this.textures.exists('cell_noise'))
+                    ? this.textures.get('cell_noise').getSourceImage() : null;
+        // Canvas wants CSS colours; the config already uses them, but tolerate a
+        // hex number in case one slips in.
+        const hexStr = (c) => typeof c === 'number'
+            ? '#' + (c >>> 0).toString(16).padStart(6, '0') : c;
+        // Rounded-rect path by hand: roundRect() is too new to rely on.
+        const path = (ctx, x, y, w, h, r) => {
+            r = Math.min(r, w / 2, h / 2);
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.arcTo(x + w, y,     x + w, y + h, r);
+            ctx.arcTo(x + w, y + h, x,     y + h, r);
+            ctx.arcTo(x,     y + h, x,     y,     r);
+            ctx.arcTo(x,     y,     x + w, y,     r);
+            ctx.closePath();
+        };
+        const bake = (key, faceColor, bevel) => {
+            if (this.textures.exists(key)) this.textures.remove(key);
+            const canvas = this.textures.createCanvas(key, px, px);
+            const ctx = canvas.getContext();
+            ctx.clearRect(0, 0, px, px);
+            if (bevel) {                       // the ring that fakes a recessed edge
+                path(ctx, 0, 0, px, px, rad);
+                ctx.fillStyle = C.INSET_SHADOW_COLOR;
+                ctx.fill();
+            }
+            const o = bevel ? inset : 0;
+            path(ctx, o, o, px - 2 * o, px - 2 * o, rad - o);
+            ctx.fillStyle = faceColor;
+            ctx.fill();
+            if (noise) {
+                // Clipped to the face just drawn, so the grain never crosses the
+                // rounded edge or tints the bevel.
+                ctx.save();
+                ctx.clip();
+                // CONTRAST first: the tile is blurred noise on neutral grey and
+                // only spans about ±18% around mid — at a few percent alpha that
+                // works out to a level or two of 255, i.e. nothing. Stretching it
+                // before the blend is what an image editor's "noise layer at 100%,
+                // group at 7%" actually gives you.
+                const k = N.CONTRAST || 1;
+                if (k !== 1 && typeof ctx.filter === 'string') ctx.filter = `contrast(${k})`;
+                ctx.globalCompositeOperation = N.BLEND || 'overlay';
+                ctx.globalAlpha = N.ALPHA !== undefined ? N.ALPHA : 0.6;
+                const z = N.TILE || 1;         // <1 = coarser grain (tile blown up)
+                ctx.drawImage(noise, o, o, (px - 2 * o) / z, (px - 2 * o) / z);
+                ctx.restore();
+            }
+            canvas.refresh();
+        };
+        bake('cell_empty',  hexStr(C.EMPTY_BG_COLOR),  true);
+        bake('cell_filled', hexStr(C.FILLED_BG_COLOR), true);
+        bake('cell_face',   hexStr(C.FILLED_BG_COLOR), false);   // no bevel: inside the battery case
+    }
+
+    // The stand-alone slot face (portrait only — inside the battery case the
+    // divisions use the baked cell texture instead).
     _drawSlot(gfx, x, y, size, filled) {
         const shadow = hexColor(CONFIG.CELL.INSET_SHADOW_COLOR);
         const fill   = filled ? hexColor(CONFIG.CELL.FILLED_BG_COLOR) : hexColor(CONFIG.CELL.EMPTY_BG_COLOR);
@@ -980,6 +1105,16 @@ console.log(
         this._buildCrops(seg, band);
     }
 
+    // A stable pseudo-random value in [0,1) for a cell, per `salt`. Same cell,
+    // same number, every rebuild — which is the point: the scene restarts on
+    // every window resize, so anything drawn from Math.random() would reshuffle
+    // the whole field as the player drags a window edge.
+    _cellHash(col, row, salt) {
+        let h = (col * 374761393) ^ (row * 668265263) ^ ((salt || 0) * 2147483647);
+        h = Math.imul(h ^ (h >>> 13), 1274126177);
+        return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+    }
+
     // The crop art rotation, in level order. Falls back to the single CROP so
     // a config with no cycle still behaves exactly as before.
     _cropCycle() {
@@ -1046,9 +1181,24 @@ console.log(
                     if (d < bd) { bd = d; best = cc; }
                 }
                 if (!best) continue;
+                // Per-plant variation, so a field is not the same stamp repeated.
+                // Every value comes from a HASH OF THE CELL, never Math.random():
+                // the scene is rebuilt from scratch on every resize, and true
+                // randomness would reshuffle the whole field each time. The plant
+                // stays exactly where the grid puts it — only its facing, its
+                // size and how fast it grows drift.
+                const V     = TM.CROP_VARY || {};
+                const h1    = this._cellHash(c, r, 1), h2 = this._cellHash(c, r, 2);
+                const h3    = this._cellHash(c, r, 3);
+                const jit   = 1 + (h1 - 0.5) * 2 * (V.SCALE_VAR || 0);
+                const psc   = sc * jit;               // the spring settles back to THIS
                 const spr = this._addB(this.add.image(
                         g.left + (c + 0.5) * g.tile, gTop + (r + 0.5) * g.tile, key, 0)
-                    .setOrigin(0.5, stemY).setScale(sc).setDepth(3 + r * 0.001), seg);
+                    .setOrigin(0.5, stemY).setScale(psc).setDepth(3 + r * 0.001), seg);
+                // Mirroring is safe here: the art's shadow sits centred under the
+                // stem, so a flipped plant is not lit from the wrong side.
+                if (V.FLIP !== false && h2 < 0.5) spr.setFlipX(true);
+                if (V.ROT_DEG) spr.setAngle((h3 - 0.5) * 2 * V.ROT_DEG);
                 // Which sides of this cell face bare ground, as an N/E/S/W
                 // bitmask — the growth overlays draw a ragged edge on those and
                 // a straight one where a crop neighbour continues the patch.
@@ -1061,7 +1211,11 @@ console.log(
                 // full y-scale to settle back to. Stage 1 spawns hard, unscaled.
                 // `ground` is this cell's ground tile — never changed itself, but
                 // the anchor the growth overlays are laid on. `ovl` counts them.
-                crops.push({ watch: best, stage: 1, timer: 0, sprite: spr, sc, crop, edge,
+                // growMul: this plant's own pace. A patch that reaches each stage
+                // in lockstep is what really reads as stamped — more than any
+                // silhouette repeat — so every plant runs a little fast or slow.
+                crops.push({ watch: best, stage: 1, timer: 0, sprite: spr, sc: psc, crop, edge,
+                             growMul: 1 + (this._cellHash(c, r, 4) - 0.5) * 2 * (V.GROW_VAR || 0),
                              ground: (seg.groundSprites || [])[r * g.cols + c] || null,
                              ovl: 0, done: false });
             }
@@ -1151,7 +1305,9 @@ console.log(
                     this._startCropOverlay(seg, cr, cr.stage + 1, ovl[cr.stage + 1], growMs);
                 }
                 cr.timer += dt;
-                const st = Math.min(stages, 1 + Math.floor(cr.timer / growS));
+                // Each plant keeps its own pace (growMul), so a patch arrives at
+                // each stage staggered instead of all at once.
+                const st = Math.min(stages, 1 + Math.floor(cr.timer / (growS * (cr.growMul || 1))));
                 if (st !== cr.stage) {
                     const from = cr.stage;
                     cr.stage = st;
@@ -2610,6 +2766,17 @@ console.log(
                     .fillRect(0, tn.exitY - 2, this.scale.width, tn.len + 4);
             }
         }
+        // Watch for drift across levels: if these climb level after level,
+        // something built per band is outliving its teardown. Flat numbers mean
+        // the cost is per-band load, not a leak.
+        if (CONFIG.DEBUG_PERF) {
+            console.log(`[perf] level=${E.segIndex} objects=${this.children.list.length} ` +
+                `tweens=${this.tweens.getTweens().length} ` +
+                `timers=${this.time.getActiveEvents ? this.time.getActiveEvents().length : '?'} ` +
+                `textures=${this.textures.list ? Object.keys(this.textures.list).length : '?'} ` +
+                `segments=${this.segments.length}`);
+        }
+
         // 3. Camera home and stationary — NOW the new site opens for work:
         // the parked machine accepts charge from the next battery tick.
         this.camB.scrollY = E.baseScrollY;
@@ -5102,29 +5269,24 @@ console.log(
             panel.strokeRoundedRect(cx - panW / 2, cy - panH / 2, panW, panH, radius);
         }
 
-        const inset = this.cellInset;
+        this._makeCellTextures(this.CELL_SIZE);
         for (let row = 0; row < this.GRID_ROWS; row++) {
             this.gridCells[row] = [];
             for (let col = 0; col < this.GRID_COLS; col++) {
                 const x = gridStartX + col * (this.CELL_SIZE + this.CELL_GAP);
                 const y = gridStartY + row * (this.CELL_SIZE + this.CELL_GAP);
 
-                const emptyCell = this.add.graphics().setDepth(2);
-                emptyCell.fillStyle(hexColor(CONFIG.CELL.INSET_SHADOW_COLOR), 1);
-                emptyCell.fillRoundedRect(x - this.CELL_SIZE / 2, y - this.CELL_SIZE / 2,
-                    this.CELL_SIZE, this.CELL_SIZE, this.CELL_RADIUS);
-                emptyCell.fillStyle(hexColor(CONFIG.CELL.EMPTY_BG_COLOR), 1);
-                emptyCell.fillRoundedRect(x - this.CELL_SIZE / 2 + inset, y - this.CELL_SIZE / 2 + inset,
-                    this.CELL_SIZE - inset * 2, this.CELL_SIZE - inset * 2, this.CELL_RADIUS - inset);
-
-                const filledBg = this.add.graphics().setDepth(2);
-                filledBg.fillStyle(hexColor(CONFIG.CELL.INSET_SHADOW_COLOR), 1);
-                filledBg.fillRoundedRect(x - this.CELL_SIZE / 2, y - this.CELL_SIZE / 2,
-                    this.CELL_SIZE, this.CELL_SIZE, this.CELL_RADIUS);
-                filledBg.fillStyle(hexColor(CONFIG.CELL.FILLED_BG_COLOR), 1);
-                filledBg.fillRoundedRect(x - this.CELL_SIZE / 2 + inset, y - this.CELL_SIZE / 2 + inset,
-                    this.CELL_SIZE - inset * 2, this.CELL_SIZE - inset * 2, this.CELL_RADIUS - inset);
-                filledBg.setVisible(false);
+                // Both states are the baked textures. The grain is mirrored per
+                // cell — from the cell's own hash, so it survives a rebuild —
+                // otherwise the same speckle pattern repeats nine times over.
+                const fx = this._cellHash(col, row, 9) < 0.5;
+                const fy = this._cellHash(col, row, 10) < 0.5;
+                const face = (key, visible) => this.add.image(x, y, key)
+                    .setDisplaySize(this.CELL_SIZE, this.CELL_SIZE)
+                    .setFlipX(fx).setFlipY(fy)
+                    .setDepth(2).setVisible(visible);
+                const emptyCell = face('cell_empty',  true);
+                const filledBg  = face('cell_filled', false);
 
                 this.gridCells[row][col] = { x, y, row, col, isEmpty: true, cell: emptyCell, filledBg };
             }
