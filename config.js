@@ -548,6 +548,17 @@ var CONFIG = {
             CROP_GROW_MS: 2000,     // time between growth stages
             CROP_WET:     0.15,     // canal-cell fill fraction that counts as "watered"
 
+            // A patch of worked soil under each plant (graphics/plant-base.png),
+            // centred on the stem base and drawn UNDER the plant — and under
+            // every other plant too, so a base can never cover the crop in front
+            // of it.
+            CROP_BASE: {
+                ENABLED: true,
+                SIZE:    0.8,       // width as a fraction of a tile
+                ALPHA:   1,
+                Y:       0,         // nudge down (+) or up (-), in tiles
+            },
+
             // ── Per-plant variation ──────────────────────────────────────
             // One crop sheet stamped across a field reads as wallpaper. These
             // break that up WITHOUT moving anything: a plant stays dead centre
@@ -712,6 +723,13 @@ var CONFIG = {
             // the machine read THROUGH the water rolling over it. Applied when
             // a pooled sprite is first created — like FOAM_ABOVE, a change
             // takes a reload, so the display list is never dirtied per frame.
+            // Where the MAIN canal's water sits in the stack. Above the crops
+            // (~3.02) so the trencher can be drawn over the whole field and
+            // still run under its own water. Branch water is unaffected — it
+            // stays down in the ground layers, where a leaf overhanging a ditch
+            // is meant to cover it.
+            MAIN_WATER_DEPTH: 3.10,
+
             HEAD_ALPHA:  0.75,      // the head — the water tongue at the front
             CREST_ALPHA: 0.75,      // the foam crest blobs (white + water copy)
             FOAM_ABOVE: false,      // draw the crest ABOVE the revealed tile
@@ -878,7 +896,7 @@ var CONFIG = {
                 SHADOW_OFF_Y: 15,
                 SHADOW_ALPHA: 1,   // the art carries its own softness; this is
                                    // just a global knock-back if it reads heavy
-                DEPTH_SHADOW: 1.522,  // under both parts, over the trench tile
+                DEPTH_SHADOW: 3.05,   // under both parts, over the crops
 
                 // ── Water vs. the machine ─────────────────────────────────
                 // The canal water follows the trencher and washes OVER the
@@ -891,15 +909,15 @@ var CONFIG = {
                                    // stops at the belt's back edge; (1 -
                                    // AHEAD_FRAC) = water right up to the
                                    // reveal line
-                // Draw order. Both parts sit above the dry trench tile (1.52)
-                // and below EVERYTHING the water brings with it — the crest
-                // foam that leads the waterline (1.525 / 1.53 when
-                // TILEMAP.FOAM_ABOVE is off), the revealed water (1.55) and the
-                // head (1.56). So the machine is down in the ditch and the
-                // water rolls over it, crest first. The belt stays above the
-                // control unit.
-                DEPTH_BELT: 1.524,
-                DEPTH_CTRL: 1.523,
+                // Draw order: the machine sits ABOVE every ground element — the
+                // canal tiles, the crops and their soil patches (which reach
+                // ~3.02) — and BELOW the main canal's water, which was raised to
+                // TILEMAP.MAIN_WATER_DEPTH to make both true at once. So the
+                // whole rig travels over the field, and the water it lets in
+                // still washes over the belt behind it. Both parts sit in the
+                // same band; the belt stays just above the control unit.
+                DEPTH_BELT: 3.07,
+                DEPTH_CTRL: 3.06,
             },
 
             // (the last dry stretch is flooded by the water's own flow — see

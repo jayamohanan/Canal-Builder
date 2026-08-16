@@ -399,6 +399,8 @@ class GameScene extends Phaser.Scene {
             // height). Every crop in the level rotation is loaded up front —
             // they are a few hundred KB each and a level can start at any
             // point in the cycle after a rebase.
+            // The patch of worked soil each plant stands in, drawn under it.
+            this.load.image('plant_base', 'graphics/plant-base.png');
             for (const c of this._cropCycle()) {
                 this.load.image(`${c}_src`, `graphics/crops/${c}.png`);
             }
@@ -1181,6 +1183,23 @@ console.log(
                     if (d < bd) { bd = d; best = cc; }
                 }
                 if (!best) continue;
+                // The soil patch the plant stands in. The crop sprite's origin
+                // IS its stem base and sits at the cell centre, so the base goes
+                // at the same point. Depth keeps the row ordering the crops use
+                // but stays below all of them, so no plant is ever covered by
+                // the base of the plant behind it.
+                const BS = TM.CROP_BASE || {};
+                if (BS.ENABLED !== false && this.textures.exists('plant_base')) {
+                    const bw = g.tile * (BS.SIZE || 0.8);
+                    const bs = this.textures.get('plant_base').getSourceImage();
+                    this._addB(this.add.image(
+                            g.left + (c + 0.5) * g.tile,
+                            gTop + (r + 0.5) * g.tile + g.tile * (BS.Y || 0),
+                            'plant_base')
+                        .setDisplaySize(bw, bw * (bs.height / bs.width))
+                        .setAlpha(BS.ALPHA !== undefined ? BS.ALPHA : 1)
+                        .setDepth(2.9 + r * 0.001), seg);
+                }
                 // Per-plant variation, so a field is not the same stamp repeated.
                 // Every value comes from a HASH OF THE CELL, never Math.random():
                 // the scene is rebuilt from scratch on every resize, and true
@@ -1385,8 +1404,14 @@ console.log(
                     cells.set(c + ',' + r, {
                         col: c, row: r, conn: mConn, progress: 0, dryP: 0,
                         entryDir: 's', filling: false, filled: false, isMain: true,
+                        // The dry trench stays down in the ground layers; the
+                        // WATER rides above the crops so the machine can sit on
+                        // top of the field and still be under its own canal.
+                        // Nothing green ever overlaps a main-canal cell — crop
+                        // art is one tile wide and the canal's neighbours above
+                        // are canal too — so raising it costs nothing.
                         dry:  sprite(mainGid,       c, r, 1.52),  // above ground + branch
-                        flow: sprite(mainGid + off, c, r, 1.55),
+                        flow: sprite(mainGid + off, c, r, this._mainDepth()),
                     });
                     continue;
                 }
@@ -1419,8 +1444,21 @@ console.log(
                  foamMask, blobMask: foamMask.createGeometryMask(), marks: [],
                  channelW: this.road.canalW, seg,
                  heads: [], foamBlobs: [], foamWhite: [],
+                 // The main canal's front has its own sprites: same behaviour,
+                 // different depth band (see _mainDepth).
+                 headM: null, foamBlobsM: [], foamWhiteM: [],
                  headFrame: CONFIG.ROAD.TILEMAP.TERRAIN_WATER !== undefined
                           ? CONFIG.ROAD.TILEMAP.TERRAIN_WATER : 1 };
+    }
+
+    // Depth of the MAIN canal's water. It sits above the crops (which reach
+    // ~3.02) so the trencher can be drawn over the whole field — nothing green
+    // should hide the biggest machine on screen — and still be under the water
+    // it is letting in. Branch water stays in the ground layers, where a leaf
+    // growing over a ditch is meant to cover it.
+    _mainDepth() {
+        const d = CONFIG.ROAD.TILEMAP.MAIN_WATER_DEPTH;
+        return d !== undefined ? d : 3.10;
     }
 
     // Bake the foam textures: a water-texture soft ellipse ('foam_blob') and a
@@ -1545,7 +1583,9 @@ console.log(
                 const y = b.vert ? cy + along : cy + off;
                 const spr = this._addB(this.add.image(x, y, 'mark_px')
                     .setDisplaySize(b.vert ? thkP : lenP, b.vert ? lenP : thkP)
-                    .setDepth(1.556)          // on the water (1.55), under the head
+                    // On its own water, under its own head — main canal high,
+                    // branch down in the ground layers.
+                    .setDepth(cell.isMain ? this._mainDepth() + 0.006 : 1.556)
                     .setAlpha(0), F.seg);
                 F.marks.push({
                     spr, t0: time, x, y, vert: b.vert, drift,
@@ -1719,29 +1759,36 @@ console.log(
         const branchW = g.tile * cf * fit;
         const mainChW = g.tile * (g.mainW - 1 + cf) * fit;   // sits inside the banks
         const MOT = { w: [1, 0], e: [-1, 0], n: [0, 1], s: [0, -1] };
-        let hi = 0, fbi = 0;
+        let hi = 0, fbi = 0, fbiM = 0, mainHead = false;
         const hLen    = CONFIG.ROAD.TILEMAP.HEAD_LEN !== undefined
                       ? CONFIG.ROAD.TILEMAP.HEAD_LEN : 0.35;
-        const putHead = (x, y, mx, my, chW) => {
+        const MD      = this._mainDepth();
+        // `main` splits the pools: the main canal's water sits ABOVE the crops
+        // (so the machine can sit above them too and still be under its water),
+        // while a branch's stays in the ground layers where crop leaves growing
+        // over a ditch still cover it.
+        const putHead = (x, y, mx, my, chW, main) => {
             const horiz = mx !== 0;
             // Full channel width across the flow, HEAD_LEN of it along the flow.
             const ew = horiz ? chW * hLen : chW, eh = horiz ? chW : chW * hLen;
-            let spr = F.heads[hi];
+            let spr = main ? F.headM : F.heads[hi];
             if (!spr) {
                 const ha = CONFIG.ROAD.TILEMAP.HEAD_ALPHA;
                 spr = this._addB(this.add.image(0, 0, 'terrain', F.headFrame)
-                    .setDepth(1.56).setAlpha(ha !== undefined ? ha : 1)
+                    .setDepth(main ? MD + 0.01 : 1.56)
+                    .setAlpha(ha !== undefined ? ha : 1)
                     .setVisible(false), F.seg);
                 spr._noRebase = true;                // repositioned every frame
-                F.heads.push(spr);
+                if (main) F.headM = spr; else F.heads.push(spr);
             }
             spr.setVisible(true).setPosition(x, y).setDisplaySize(ew, eh);
-            hi++;
+            if (main) mainHead = true; else hi++;
             // Mask strip: channel-wide across, long along the flow (so the
             // forward foam bulge isn't clipped, only the sides).
             if (horiz) F.foamMask.fillRect(x - chW, y - chW / 2, 2 * chW, chW);
             else       F.foamMask.fillRect(x - chW / 2, y - chW, chW, 2 * chW);
-            fbi = this._placeFoamBlobs(F, fbi, x, y, mx, my, chW, time);
+            if (main) fbiM = this._placeFoamBlobs(F, fbiM, x, y, mx, my, chW, time, true);
+            else      fbi  = this._placeFoamBlobs(F, fbi,  x, y, mx, my, chW, time, false);
         };
 
         for (const cell of F.active) {
@@ -1760,25 +1807,28 @@ console.log(
                 case 's': fy = cy + half - p * g.tile; break;
             }
             const m = MOT[cell.entryDir] || [0, 0];
-            putHead(fx, fy, m[0], m[1], branchW);
+            putHead(fx, fy, m[0], m[1], branchW, false);
         }
         // Main-canal head: one wide front across the 2-wide channel, riding the
         // waterline up.
         if (tn.wet > 1 && tn.wet < tn.len - 1) {
             const cx = g.left + F.mainRightCol * g.tile;
             const wy = tn.exitY + tn.len - tn.wet;
-            putHead(cx, wy, 0, -1, mainChW);
+            putHead(cx, wy, 0, -1, mainChW, true);
         }
         for (let k = hi; k < F.heads.length; k++) F.heads[k].setVisible(false);
         for (let k = fbi; k < F.foamBlobs.length; k++) F.foamBlobs[k].setVisible(false);
         for (let k = fbi; k < F.foamWhite.length; k++) F.foamWhite[k].setVisible(false);
+        if (!mainHead && F.headM) F.headM.setVisible(false);
+        for (let k = fbiM; k < F.foamBlobsM.length; k++) F.foamBlobsM[k].setVisible(false);
+        for (let k = fbiM; k < F.foamWhiteM.length; k++) F.foamWhiteM[k].setVisible(false);
     }
 
     // Foam: a few big overlapping textured blobs (long axis along the flow)
     // laid across the channel in a forward-bowed cluster — deepest at the
     // centre — so they merge into a forward-bulging crest. Pooled sprites of
     // the baked foam texture, below the water. Returns the next pool index.
-    _placeFoamBlobs(F, fbi, x, y, mx, my, chW, time) {
+    _placeFoamBlobs(F, fbi, x, y, mx, my, chW, time, main) {
         const WA = CONFIG.ROAD.WATER;
         const horiz = mx !== 0;             // flow runs left-right?
         const px = -my, py = mx;            // across-channel axis
@@ -1804,8 +1854,14 @@ console.log(
         // flipping it takes a reload — deliberate: writing depth every frame
         // would dirty the display list and force a full re-sort each frame.
         const above     = cfg('FOAM_ABOVE', false);
-        const dWhite    = above ? 1.56  : 1.525;
-        const dBlob     = above ? 1.565 : 1.53;
+        // The main canal's crest rides with its water, up above the crops; a
+        // branch's stays down in the ground layers. Same relationship to its own
+        // water tile either way — just measured off a different base.
+        const wd        = main ? this._mainDepth() : 1.55;
+        const dWhite    = above ? wd + 0.01  : wd - 0.025;
+        const dBlob     = above ? wd + 0.015 : wd - 0.02;
+        const whitePool = main ? F.foamWhiteM : F.foamWhite;
+        const blobPool  = main ? F.foamBlobsM : F.foamBlobs;
         // Same one-shot treatment as the depth: the crest is see-through so the
         // machine under it still reads.
         const crestA    = cfg('CREST_ALPHA', 1);
@@ -1839,10 +1895,10 @@ console.log(
             // (1.55) they sit on: BELOW, the tile cuts them and only what runs
             // past its straight edge shows; ABOVE, the whole blob is visible
             // and rides over the revealed water, tails included.
-            grab(F.foamWhite, 'foam_white', dWhite).setVisible(true)
+            grab(whitePool, 'foam_white', dWhite).setVisible(true)
                 .setPosition(cx, cy).setDisplaySize(ew * RIM, eh * RIM);
             if (foamWater) {
-                grab(F.foamBlobs, 'foam_blob', dBlob).setVisible(true)
+                grab(blobPool, 'foam_blob', dBlob).setVisible(true)
                     .setPosition(cx - mx * back, cy - my * back)
                     .setDisplaySize(ew, eh);
             }
@@ -2596,7 +2652,7 @@ console.log(
             // Squared so the middle colour dominates and the end tint only shows
             // out at the two extremes of the spray.
             const tint = this._lerpColor(midCol, endCol, frac * frac);
-            const chip = grab('debris_chip', 2.3)
+            const chip = grab('debris_chip', 3.12)      // airborne: over the rig and its water
                 .setTint(tint)
                 .setAngle(Math.random() * 90)          // varied square orientation
                 .setPosition(b.x + off * rigW * 0.9,
@@ -2616,7 +2672,7 @@ console.log(
         }
 
         if (Math.random() < 0.8) {
-            const puff = grab('dust_puff', 2.35)
+            const puff = grab('dust_puff', 3.13)        // over the chips it kicks up
                 .setTint(TN.DUST_COLOR)
                 .setPosition(b.x + (Math.random() - 0.5) * rigW * 0.7,
                              faceY + Math.random() * tn.bodyH * 0.4)
