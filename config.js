@@ -73,10 +73,6 @@ var CONFIG = {
         TIMER_TEXT_COLOR: '#FFFFFF',
     },
 
-    GADGET_LOAD: {
-        DELAY_BEFORE_CHARGING: 0,  // Delay in ms after all gadget popup animations complete before charging starts
-    },
-
     MERGE_GRID: {
         PADDING_FROM_BUTTON_TOP: 50,
         // Drop the whole grid block (panel, cells and — in portrait — the coin
@@ -214,39 +210,20 @@ var CONFIG = {
         EASE: 'Power2',
     },
 
-    LEVEL_COMPLETION: {
-        BUFFER_TIME: 500,              // ms buffer after all coins collected before next level loads
-    },
-
         // Platform stripes (top half) with battery slot on left, gadget on right
+    // ── Battery slots ─────────────────────────────────────────────────────────
+    // Three slots in one battery-shaped case. In LANDSCAPE they sit in the UI
+    // half above the grid; in portrait they stay at the foot of the farm half.
+    // The slot SIZE is derived, not set: the three take the row's full width
+    // less the gaps, capped at ONE GRID CELL — a battery in a slot should look
+    // like a battery in a cell. (See createSlots / calculateLayout.)
     PLATFORM: {
-        Y_POSITIONS: [200, 390, 580],  // vertical centre Y of each platform stripe
-        STRIPE_X: 20,                  // left edge of stripe (px)
-        STRIPE_WIDTH: 680,             // full stripe width (px)
-        STRIPE_HEIGHT: 18,             // stripe height (px)
-        STRIPE_COLOR: "#1e3a4a",
-        STRIPE_ALPHA: 0.9,
+        SLOT_SIZE: 130,                // reference slot square (px) — the ratio
+                                       // every slot-derived size is measured in
+        SLOT_RADIUS: 15,               // corner radius (px)
+        CHARGE_RATE_GAP: 10,           // gap (px) between charge-rate label bottom and slot top
+        CHARGE_RATE_BOLT_SIZE: 18,     // bolt icon display size (px)
 
-        // ── Battery slot ──────────────────────────────────────────────────────
-        SLOT_PADDING_FROM_LEFT: 40,    // padding from stripe left edge to slot left edge (px)
-        SLOT_SIZE: 130,                // slot square size (px)
-
-        // In LANDSCAPE the three slots sit in the UI half above the grid, packed
-        // to the LEFT from the grid panel's edge and spaced by the grid's own
-        // cell gap, with the trencher icon filling the space left on the right —
-        // "these batteries drive that machine". Drop SLOT_SIZE_FRAC first if the
-        // column ever overflows on a short window.
-        // (Portrait keeps the slots in the farm half — see createSlots.)
-        // The slot SIZE is derived, not set: the three slots take the row's full
-        // width less the icon and the gaps, capped at ONE GRID CELL — a battery
-        // in a slot should look like a battery in a cell. With the row running
-        // edge to edge that cap is what binds, so the slots and the cells match.
-        // The three slots are not three things: they are ONE BATTERY. A rounded
-        // case holds all three, two dividers mark the cells inside it (stopping
-        // short of the walls, so they read as divisions rather than bars), and a
-        // small terminal node sits off the right end — the universal battery
-        // glyph. The case is sized around three grid cells, so a battery dropped
-        // in a division is exactly the size it was in the grid.
         BATTERY_CASE: {
             ENABLED: true,
             PAD:      8,               // case wall → cell (px @ design)
@@ -274,204 +251,11 @@ var CONFIG = {
 
         SLOT_ROW_EDGE_PAD: 12,         // least margin each side of the battery,
                                        // which is centred on the half (px @ design)
-        SLOT_RADIUS: 15,               // corner radius (px)
-        SLOT_ABOVE_STRIPE: 14,         // gap (px) between slot bottom and stripe top
-        CHARGE_RATE_GAP: 10,           // gap (px) between charge-rate label bottom and slot top
-        CHARGE_RATE_BOLT_SIZE: 18,     // bolt icon display size (px)
 
-        // ── Wire connection (socket) ──────────────────────────────────────────
-        SOCKET_GAP_FROM_SLOT: 25,      // gap (px) from slot right edge to socket centre
-        SOCKET_SIZE: 40,               // socket sprite display size (px)
-        PLUG_SIZE: 28,                 // plug sprite display size (px)
-        WIRE_SAG_PERCENT: 130,         // wire length as % of straight-line distance (>100 = sag)
-        WIRE_RIGID_LENGTH: 6,          // px of vertical rigid segment at plug/socket end before sag
-        WIRE_THICKNESS: 5,             // wire line thickness (px)
-        WIRE_COLOR: 0x46464a,          // wire color
-
-        // ── Debug rect (max gadget area) ──────────────────────────────────────
-        DEBUG_RECT_PADDING_FROM_SLOT: 110, // padding from slot right edge to debug rect left edge (px)
-        DEBUG_RECT_PADDING_FROM_STRIPE: 14, // padding from stripe top to debug rect bottom (px)
-        DEBUG_RECT_WIDTH: 170,         // max width for gadget display area (px)
-        DEBUG_RECT_ASPECT_RATIO: 3/2,  // width:height ratio — height = WIDTH / RATIO (3:2 = 170×113)
-        DEBUG_RECT_SHOW: false,        // show semi-transparent rect for max gadget area
-        DEBUG_RECT_COLOR: 0xFF00FF,    // debug rect color (magenta)
-        DEBUG_RECT_ALPHA: 0.1,         // debug rect transparency (0-1)
-
-        // ── Tooth-cleaning display (toothbrush level only) ────────────────────
-        // Shown to the right of the gadget; tooth_after wipes over tooth_before
-        // left→right as the gadget charges 0 → capacity.
-        TOOTH_GADGET_NAME: 'brush',    // which gadget name triggers the tooth display
-        TOOTH_AREA_WIDTH: 200,         // max width for tooth display area (px)
-        TOOTH_AREA_ASPECT_RATIO: 2.5,  // width:height ratio — height = WIDTH / RATIO
-        TOOTH_PADDING_FROM_GADGET: 30, // gap from gadget right edge to tooth left edge (px)
-        TOOTH_Y_OFFSET: 0,             // vertical nudge for tooth area centre (px)
-
-        // ── Music notes (bluetooth speaker level only) ────────────────────────
-        // Notes drift up-right from the speaker; both size and emission rate
-        // scale with charge progress (small/few → big/many).
-        SPEAKER_GADGET_NAME: 'bluetooth_speaker',
-        SPEAKER_NOTE_INTERVAL: 300,    // ms between emission ticks
-        SPEAKER_NOTE_BASE_SIZE: 16,    // px note size at full charge (before platform scale)
-        SPEAKER_NOTE_MIN_RATE: 0.4,    // avg notes per tick at 0% charge
-        SPEAKER_NOTE_MAX_RATE: 3.0,    // avg notes per tick at 100% charge
-
-        // ── Chicken cooking (induction cooktop level only) ────────────────────
-        // 8-frame sprite sheet shown centred over the cooktop; the frame steps
-        // raw → cooked (frame 0 → 7) as the gadget charges 0 → capacity.
-        COOKTOP_GADGET_NAME: 'cooktop',
-        CHICKEN_FRAME_COUNT: 8,        // frames in chicken_cooking sheet
-        CHICKEN_SIZE_SCALE: 0.7,       // chicken display width = cooktop width * this
-        CHICKEN_Y_OFFSET: -25,         // vertical nudge from cooktop centre (px; negative = up, positive = down)
-
-        // ── Sewing machine (animated gadget) ──────────────────────────────────
-        // 8-frame sprite sheet (4x2, 176x192 each) used as the gadget itself.
-        // Idle = first frame; loop speed ramps from MIN → MAX fps as it charges.
-        SEWING_GADGET_NAME: 'sewing_machine',
-        SEWING_FRAME_W: 143,
-        SEWING_FRAME_H: 122,
-        SEWING_FRAME_COUNT: 8,
-        SEWING_BASE_FPS: 12,           // animation's base frame rate (timeScale multiplies this)
-        SEWING_MIN_FPS: 3,             // loop speed just after charging begins (~0% → slow stitching)
-        SEWING_MAX_FPS: 28,            // loop speed at full charge (fast stitching)
-
-        // ── Washing machine (animated gadget) ─────────────────────────────────
-        // 6-frame sprite sheet (2 rows x 3 cols, 279x336 each) used as the gadget.
-        // Frame 0 = idle (clothes sitting still) shown before any rotation; once
-        // charging starts the drum spins by looping frames 1..5, and the loop speed
-        // ramps from MIN → MAX fps as it charges 0 → 1.
-        WASHING_GADGET_NAME: 'washing_machine',
-        WASHING_FRAME_W: 279,
-        WASHING_FRAME_H: 336,
-        WASHING_LOOP_START: 1,         // first spin frame (frame 0 is idle, excluded)
-        WASHING_LOOP_END: 5,           // last spin frame
-        WASHING_BASE_FPS: 12,          // base frame rate (timeScale multiplies this)
-        WASHING_MIN_FPS: 4,            // loop speed just after charging begins (slow tumble)
-        WASHING_MAX_FPS: 24,           // loop speed at full charge (fast spin)
-
-        // Reciprocating saw: handle.png is the base gadget (fit into the standard
-        // max-area rect like every other gadget). The blade (blade.png) is layered by
-        // the "reciprocating_saw" charge effect and slides in/out of the handle as it
-        // charges.
-        RECIP_SAW_GADGET_NAME: 'reciprocating_saw',
-
-        // T-shirt cloth shown to the LEFT of the machine; revealed with an organic
-        // wavy stitching front as the gadget charges 0 → 1 (a needle glint + running
-        // stitch trail ride the reveal front).
-        TSHIRT_AREA_WIDTH: 120,        // max width for the cloth display area (px)
-        TSHIRT_AREA_ASPECT_RATIO: 1.0, // width:height of the cloth area (height = WIDTH / RATIO)
-        TSHIRT_PADDING_FROM_GADGET: 6, // gap (px) from machine left edge to cloth right edge
-        TSHIRT_Y_OFFSET: 0,            // vertical nudge from machine centre (px, +down)
-
-        // ── Single-gadget display area ─────────────────────────────────────────
-        // The gadget is aspect-fit into a box bounded by these three values, so it
-        // can never clip off-screen. Shrink WIDTH_FRAC or raise TOP_RESERVE to make
-        // the gadget smaller / lower.
-        GADGET_AREA_WIDTH_FRAC: 0.45,  // gadget max width as a fraction of partB width
-        GADGET_AREA_TOP_RESERVE: 0.42, // top fraction of partB kept empty for the character
-        GADGET_AREA_BOTTOM_GAP: 46,    // px (pre-scale) gap between gadget bottom and junction plug
-        GADGET_AREA_SCALE: 0.71,       // overall scale of the max-area box (0.71 ≈ half area vs 1.0)
-
-        // ── Capacity text (above gadget) ───────────────────────────────────────
-        CAPACITY_TEXT_GAP: 8,          // gap (px) between capacity text bottom and gadget top
-        CAPACITY_TEXT_SIZE: '20px',    // font size for capacity remaining text
-
-        // ── Analog meter ──────────────────────────────────────────────────────
-        SHOW_ANALOG_METER: false,       // toggle analog meter display on/off
-        METER_PADDING_FROM_GADGET: 40,  // padding from gadget display right edge to meter arc (px)
-        METER_Y_OFFSET: 0,             // meter pivot Y offset from gadget bottom (positive = down)
-        METER_X: null,                 // override meter pivot X position (null = auto-calculate from gadget)
-        METER_Y: null,                 // override meter pivot Y position (null = auto-calculate from gadget)
-        METER_RADIUS: 62,              // arc radius (px) - drawn at full size, then scaled
-        METER_SCALE: 0.7,              // scale of entire meter (1.0 = normal size, 0.5 = half size)
-        METER_EXPLOSION_ANGLE: 170,    // needle angle (0-180) at full charge
-        METER_RED_ZONE_ANGLE: 150,     // needle angle where red zone begins
-        METER_OSCILLATION_OVERSHOOT: 12, // degrees of overshoot per tick
-
-        // ── Operating-capacity mark ────────────────────────────────────────────
-        // Progress (0-1) at which a gadget reaches its FULL operating capacity.
-        // Per-gadget charge effects (glow, spin, ...) ramp to MAX by this point and
-        // hold steady afterwards. The remaining range (mark → 1.0) is the "overload"
-        // zone where the gadget struggles/vibrates before exploding.
-        // Matches the meter's red-zone start (150/170 ≈ 0.882).
-        OPERATING_CAPACITY_MARK: 150 / 170,
-
-        // ── Smoke effect ──────────────────────────────────────────────────────
-        SMOKE_START_PROGRESS: 0.80,    // 0-1 charge fraction at which smoke begins
-        SMOKE_FREQUENCY_START_MS: 600,  // ms between puffs when smoke first appears (sparse)
-        SMOKE_FREQUENCY_MAX_MS: 50,     // ms between puffs at peak / just after explosion (dense, faster)
-        SMOKE_FREQUENCY_IDLE_MS: 450,   // ms between puffs after post-explosion burst (low idle)
-        SMOKE_MAX_AFTER_EXPLOSION_MS: 5000, // ms to sustain max smoke after burnout (longer)
-        SMOKE_LIFESPAN_MS: 1200,       // ms each puff lasts
-        SMOKE_RADIUS_MIN: 3,           // min puff radius (px)
-        SMOKE_RADIUS_MAX: 8,           // max puff radius (px)
-        SMOKE_SPREAD_X: 20,            // horizontal spawn spread around gadget centre (px)
-        SMOKE_DRIFT_Y: 55,             // how far upward each puff drifts (px)
-        SMOKE_COLOR: 0x999999,         // puff color
-
-        // ── Explosion ────────────────────────────────────────────────────────
-        EXPLODE_SHAKE_DURATION: 350,   // ms of camera shake on gadget burnout
-        EXPLODE_SHAKE_INTENSITY: 0.001, // shake magnitude (0–1 scale) - gentle shake at explosion
-        USE_CODE_EXPLOSION: false,       // toggle code-based explosion (rings and radial lines)
-        USE_SPRITE_EXPLOSION: true,    // toggle sprite-based explosion (animated frames)
-        SPRITE_EXPLOSION_SCALE: 2.0,    // scale of sprite explosion animation
-        SPRITE_EXPLOSION_DURATION: 400, // ms duration of sprite explosion animation
-        BURNEDOUT_DISPLAY_DURATION: 500, // ms to show burned out sprite before fading/removing it (0 = keep forever)
-        BURNEDOUT_FADE_DURATION: 500,  // ms for burned out sprite fade-out animation
-        // ── Charging effects ──────────────────────────────────────────────────
-        BATTERY_PULSE_SCALE: 0.6,     // scale multiplier when battery pulses during charging (1.04 = 4% larger)
-        BATTERY_PULSE_DURATION: 80,   // ms for battery pulse animation
-        
-        CHARGE_PARTICLE_SIZE: 2,       // radius of energy particle traveling through wire (px)
-        CHARGE_PARTICLE_SPEED: 450,    // ms for particle to travel from plug to gadget
-        
-        CHARGE_FLASH_INITIAL_SIZE: 16, // initial size of bolt flash at gadget (px)
-        CHARGE_FLASH_FINAL_SIZE: 32,   // final size of bolt flash before fade (px)
-        CHARGE_FLASH_DURATION: 250,    // ms for flash scale-up and fade animation
-        
-        // Energy beam effects
-        ENERGY_BEAM_ENABLED: true,     // toggle energy beam effect along wire
-        ENERGY_BEAM_THICKNESS: 8,      // thickness of energy beam along wire (px)
-        ENERGY_BEAM_COLOR: 0xFFFF00,   // color of energy beam
-        ENERGY_BEAM_ALPHA: 0.6,        // opacity of energy beam
-        ENERGY_BEAM_DURATION: 300,     // ms for beam to appear and fade
-        
-        // Advanced Arcing Wire Effect (Lightning-style)
-        USE_ARCING_WIRE: true,         // toggle advanced arcing wire effect (overrides simple beam)
-        ARCING_WIRE_ROUGHNESS: 1.2,    // roughness of lightning arc (0.5-2.0 for spiky effect)
-        ARCING_WIRE_SEGMENTS: 15,      // number of path segments (lower = more jagged)
-        ARCING_WIRE_DISPLACEMENT_SCALE: 0.8, // how far arcs drift from wire (0.3-1.5)
-        ARCING_WIRE_JITTER_PASSES: 2,  // number of displacement passes (1-3, more = spikier)
-        ARCING_WIRE_RANDOM_OFFSET: 8,  // random perpendicular offset per segment (px)
-        ARCING_WIRE_GLOW_THICKNESS: 6, // thick glow layer (px)
-        ARCING_WIRE_MEDIUM_THICKNESS: 3, // medium bright layer (px)
-        ARCING_WIRE_CORE_THICKNESS: 1, // thin white core (px)
-        ARCING_WIRE_GLOW_COLOR: 0x00CCFF, // cyan/blue glow color
-        ARCING_WIRE_BRIGHT_COLOR: 0x00EEFF, // bright blue color
-        ARCING_WIRE_CORE_COLOR: 0xFFFFFF, // white core color
-        ARCING_WIRE_PULSE_SPEED: 2.5,  // speed multiplier for animation (not used for travel, affects flicker rate)
-        ARCING_WIRE_PULSE_DURATION: 200, // total duration of arc effect (ms) - how long arc stays visible
-        
-        GADGET_ENERGY_GLOW_ENABLED: false, // toggle energy glow around gadget during pulse
-        GADGET_ENERGY_GLOW_SIZE: 20,   // size of glow halo around gadget (px)
-        GADGET_ENERGY_GLOW_COLOR: 0xFFFF00, // color of energy glow
-        GADGET_ENERGY_GLOW_ALPHA: 0.5, // opacity of energy glow
-        GADGET_ENERGY_GLOW_DURATION: 300, // ms for glow to appear and fade
-        
-        // Advanced Gadget Aura Effect
-        USE_GADGET_AURA: true,         // toggle advanced gadget aura effect (overrides simple glow)
-        GADGET_AURA_LAYERS: 3,         // number of concentric glow layers
-        GADGET_AURA_BASE_SIZE: 180,     // base size of innermost aura layer (px)
-        GADGET_AURA_COLOR: 0x00DDFF,   // aura color
-        GADGET_AURA_PULSE_SPEED: 2.0,  // breathing speed (cycles per second)
-        GADGET_AURA_SPARK_COUNT: 8,    // number of spark particles per pulse
-        GADGET_AURA_SPARK_DURATION_MIN: 100,  // min duration (ms) for sparks to reach gadget center
-        GADGET_AURA_SPARK_DURATION_MAX: 400, // max duration (ms) for sparks to reach gadget center
-        
-        // Gadget visual feedback on charge
-        GADGET_FLASH_ON_CHARGE_ENABLED: false, // toggle alpha flash effect when gadget receives charge
-        //Gadget tension color change
-        GADGET_TENSION_COLOR_CHANGE_ENABLED: false, // toggle color change effect based on tension level
-        GADGET_SPRITE_SWITCH_ON_TENSION_ENABLED: false, // toggle switching to alternate "tense" sprite when tension is high
+        // Battery icons pulse once per charge tick — the same tick that arms the
+        // machine's work burst, which is what makes the two read as one system.
+        BATTERY_PULSE_SCALE: 0.6,      // scale the icon springs to
+        BATTERY_PULSE_DURATION: 80,    // ms, one way
     },
 
     // ===================================================================
