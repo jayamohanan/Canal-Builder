@@ -340,17 +340,8 @@ class GameScene extends Phaser.Scene {
         this.load.image('cell_noise',    'graphics/cell_noise.png');
         this.load.image('battery_crown', 'graphics/battery_crown.png');
         this.load.image('bolt',          'graphics/bolt_64.png');
-        this.load.image('gadget_socket',   'graphics/connection/socket.png');
-        this.load.image('gadget_plug_in',  'graphics/connection/plug_in.png');
-        this.load.image('gadget_plug_out', 'graphics/connection/plug_out.png');
-        
-        // Load explosion sprite frames
-        for (let i = 1; i <= 8; i++) {
-            this.load.image(`explosion_${String(i).padStart(2, '0')}`, `graphics/explosion/explosion_${String(i).padStart(2, '0')}.png`);
-        }
-        
-        // Shared white glow texture used by charge effects (additive blend)
-        this.load.image('glow', 'graphics/gadgets/glow.png');
+        // (connection sockets/plugs, explosion frames and the gadget art are
+        //  gone with the pre-farm-mode gadget system — see graphics/)
 
         // The trencher's art: two parts, each its own 5-frame animation. They
         // are separate sprites (not one sheet) so each part's frames stay
@@ -406,49 +397,12 @@ class GameScene extends Phaser.Scene {
             }
         }
 
-        // Load gadget sprites from gadgetData.js
-        if (typeof GADGET_SPRITES !== 'undefined' && GADGET_SPRITES) {
-            GADGET_SPRITES.forEach(g => {
-                // The sewing machine has no single gadget sprite — it's driven by
-                // the 'sewing_machine' spritesheet (idle = first frame), so skip
-                // the static normal/burnedout image loads for it.
-                if (g.name === CONFIG.PLATFORM.SEWING_GADGET_NAME) return;
-
-                this.load.image(`gadget_${g.name}_normal`, `graphics/gadgets/${g.normal_sprite}`);
-                this.load.image(`gadget_${g.name}_burnedout`, `graphics/gadgets/${g.burnedout_sprite}`);
-
-                // Per-effect extra art (e.g. a fan's rotating leaf), if any
-                const fx = getChargeEffect(g.charge_effect);
-                const assets = fx.assets(g.charge_effect_params || {});
-                for (const [logical, file] of Object.entries(assets)) {
-                    this.load.image(`fx_${g.name}_${logical}`, `graphics/gadgets/${file}`);
-                }
-            });
-        }
-
-        // Tooth-cleaning art for the toothbrush level (not part of GADGET_SPRITES)
-        this.load.image('tooth_before', 'graphics/gadgets/tooth_before.png');
-        this.load.image('tooth_after',  'graphics/gadgets/tooth_after.png');
-
-        // Chicken-cooking sprite sheet for the cooktop level (8 frames, 2x4 grid)
-        this.load.spritesheet('chicken_cooking', 'graphics/gadgets/chicken_cooking.png', {
-            frameWidth: 364, frameHeight: 360,
-        });
-
-        // Sewing-machine animated gadget sheet (8 frames, 4x2 grid, 143x122)
-        this.load.spritesheet('sewing_machine', 'graphics/gadgets/sewing_machine.png', {
-            frameWidth: 143, frameHeight: 122,
-        });
-
-        // Washing-machine animated gadget sheet (6 frames, 2x3 grid, 279x336;
-        // frame 0 = idle, frames 1..5 = spin loop)
-        this.load.spritesheet('washing_machine_anim', 'graphics/gadgets/washing_machine_279_336.png', {
-            frameWidth: 279, frameHeight: 336,
-        });
-
-        // T-shirt cloth shown to the left of the sewing machine; revealed with an
-        // organic wavy front as it charges. Feature self-skips until the file exists.
-        this.load.image('tshirt', 'graphics/gadgets/t-shirt.png');
+        // The gadget art — one sprite per gadget plus the tooth, chicken, sewing,
+        // washing and t-shirt sheets — is gone with graphics/gadgets/. It was
+        // loaded unconditionally, so every player was downloading ~5MB of a mode
+        // this build never enters. The gadget CODE is still here but dormant
+        // (loadGadgets is skipped whenever ROAD.ENABLED); it goes when the
+        // pre-farm system is deleted for good.
     }
 
     // ================================================================
@@ -507,22 +461,8 @@ console.log(
         bgGfx.fillRect(0, 0, W, H);
         bgGfx.setDepth(0);
 
-        // Create explosion animation
-        this.anims.create({
-            key: 'explode',
-            frames: [
-                { key: 'explosion_01' },
-                { key: 'explosion_02' },
-                { key: 'explosion_03' },
-                { key: 'explosion_04' },
-                { key: 'explosion_05' },
-                { key: 'explosion_06' },
-                { key: 'explosion_07' },
-                { key: 'explosion_08' }
-            ],
-            frameRate: 20,
-            repeat: 0
-        });
+        // (the 'explode' animation is gone with graphics/explosion/ — it only
+        //  ever played when a gadget overcharged, which cannot happen in farm mode)
 
         // Load gadget data from gadgetData.js — level order comes from
         // GADGET_LEVEL_ORDER (names only); each name resolves to its sprite data.
