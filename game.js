@@ -76,6 +76,7 @@ class GameScene extends Phaser.Scene {
         this.unlockDisplayText       = null;
         this.unlockDisplayBatteryIcon= null;
         this.highestUnlockedBatteryLevel = 0;
+        this._taskIdx           = 0;    // which field (task) is being dug
         this.isWatchingAd = false;  // Flag to block interactions during ad
 
         this.CELL_SIZE  = CONFIG.CELL.SIZE;
@@ -433,6 +434,9 @@ console.log(
         // being cut through it.
         this.createSlots();
         this.createRoad();
+        // The job list, over the farm half — needs the farm camera, so it comes
+        // after createRoad and before the camera-ignore snapshot at the end.
+        this._buildTaskPanel();
 
         // Bottom half — merge grid
         this.createGrid();
@@ -2587,6 +2591,157 @@ console.log(
         }
     }
 
+    // ================================================================
+    // TASK LIST — the field you are digging, and the one after it
+    // ================================================================
+    // Two rows at the top-left of the farm half: the live job, and the next one
+    // greyed out. Finishing a field ticks the top row, drops it, promotes the
+    // second and brings a third in below.
+    //
+    // The panel is drawn by the FARM camera, not the UI one. Added cameras render
+    // ABOVE the main camera, so anything the main camera puts over the farm half
+    // is buried by the field. Registering it as world content and pinning its
+    // scroll factor to zero gets it drawn by the farm camera but held still while
+    // that camera pans. The catch is that a zero-scroll object's x is measured
+    // from the CAMERA VIEWPORT's edge, not the screen's — so these coordinates
+    // start at 0 for the left edge of the farm half.
+    _buildTaskPanel() {
+        const T = CONFIG.TASKS;
+        if (!T || T.ENABLED === false) return;
+        const L = this.layoutConfig, s = L.scale, B = L.partB;
+        const ui = this.taskUI = {
+            s,
+            x:    T.PAD * s,
+            y:    T.PAD * s,
+            w:    T.WIDTH * s,
+            rowH: T.ROW_H * s,
+            // With no farm camera (endless off) the panel is plain UI, so it uses
+            // real screen coordinates instead.
+            ox:   this.camB ? 0 : B.x,
+            rows: [],
+        };
+        ui.x += ui.ox;
+
+        const bg = this.add.graphics().setDepth(T.DEPTH - 1);
+        bg.fillStyle(hexColor(T.BG_COLOR), T.BG_ALPHA !== undefined ? T.BG_ALPHA : 0.42);
+        bg.fillRoundedRect(ui.x - 6 * s, ui.y - 6 * s,
+                           ui.w + 12 * s, ui.rowH * 2 + 12 * s, (T.BG_RADIUS || 10) * s);
+        this._pinToFarm(bg);
+        ui.bg = bg;
+
+        for (let i = 0; i < 2; i++) ui.rows.push(this._makeTaskRow(this._taskIdx + i, i));
+    }
+
+    // Hold a UI object still over the farm half — see _buildTaskPanel.
+    _pinToFarm(obj) {
+        obj.setScrollFactor(0);
+        if (this.camB) this._addB(obj, null);      // farm camera draws it, main ignores it
+        return obj;
+    }
+
+    // One row: "n/65", the field's name, and an empty tick ring.
+    _makeTaskRow(index, slot) {
+        const T = CONFIG.TASKS, ui = this.taskUI, s = ui.s;
+        const y = ui.y + slot * ui.rowH;
+        const c = this.add.container(0, 0).setDepth(T.DEPTH);
+        const label = (x, text, size, align) => this.add.text(x, y + ui.rowH / 2, text, {
+            fontFamily: CONFIG.FONT_FAMILY,
+            fontSize: Math.max(9, Math.round(size * s)) + 'px',
+            color: T.TEXT_COLOR || '#ffffff',
+            stroke: '#000000', strokeThickness: Math.max(1, 2 * s),
+        }).setOrigin(align, 0.5);
+
+        const name = CONFIG.TASKS.NAMES[index] || T.FALLBACK || '<no name>';
+        c.add(label(ui.x, `${index + 1}/${T.TOTAL || 65}`, T.COUNT_SIZE || 15, 0));
+        c.add(label(ui.x + (T.COUNT_W || 52) * s, name, T.NAME_SIZE || 17, 0));
+
+        // Tick: an empty ring on the right, and the check that springs into it
+        // when the field is done (hidden until then).
+        const tx = ui.x + ui.w, ty = y + ui.rowH / 2, r = (T.TICK_R || 11) * s;
+        const ring = this.add.circle(tx, ty, r).setStrokeStyle(
+            Math.max(1, (T.TICK_W || 2.5) * s), hexColor(T.TEXT_COLOR || '#ffffff'), 1);
+        const check = this.add.graphics();
+        check.lineStyle(Math.max(1.5, (T.TICK_W || 2.5) * 1.3 * s),
+                        hexColor(T.DONE_COLOR || '#8ce87a'), 1);
+        check.beginPath();
+        check.moveTo(tx - r * 0.45, ty);
+        check.lineTo(tx - r * 0.1,  ty + r * 0.42);
+        check.lineTo(tx + r * 0.52, ty - r * 0.45);
+        check.strokePath();
+        check.setVisible(false);
+        c.add(ring); c.add(check);
+
+        this._pinToFarm(c);
+        c.setAlpha(slot === 0 ? 1 : (T.DIM_ALPHA !== undefined ? T.DIM_ALPHA : 0.45));
+        return { cont: c, ring, check, index, slot };
+    }
+
+    // The level's closing beat: tick the top row, hold, then shift the list up
+    // and bring the next job in. `done` runs once the list has settled — the
+    // camera waits for it, so the tick is never cut short by the pan.
+    _completeTask(done) {
+        const T = CONFIG.TASKS, ui = this.taskUI;
+        if (!ui || !ui.rows.length) { done(); return; }
+        const s = ui.s, row = ui.rows[0];
+
+        row.ring.setStrokeStyle(Math.max(1, (T.TICK_W || 2.5) * s),
+                                hexColor(T.DONE_COLOR || '#8ce87a'), 1);
+        row.check.setVisible(true).setScale(0);
+        this.tweens.add({
+            targets: row.check, scale: 1,
+            duration: T.TICK_MS || 420, ease: 'Back.easeOut',
+        });
+        this.tweens.add({
+            targets: row.ring, scale: 1.25,
+            duration: (T.TICK_MS || 420) * 0.45, yoyo: true, ease: 'Quad.easeOut',
+        });
+
+        this.time.delayedCall((T.TICK_MS || 420) + (T.HOLD_MS || 320), () => {
+            // Three steps, strictly one after another — each starts only when the
+            // one before it has finished. Overlapping them reads as the list
+            // rearranging itself; in sequence it reads as a job being crossed off,
+            // the next taking its place, and another arriving behind it.
+            //
+            // A row's text is laid out at the slot it was BORN in and the
+            // container's y carries it from there, so every move is relative to
+            // where the row already sits, never to a fixed slot.
+            const ms = T.SHIFT_MS || 380;
+            const up = ui.rows[1];
+            this._taskIdx++;
+
+            // 1. the finished job leaves.
+            this.tweens.add({
+                targets: row.cont, alpha: 0, y: row.cont.y - ui.rowH * 0.5,
+                duration: ms, ease: 'Quad.easeIn',
+                onComplete: () => {
+                    row.cont.destroy();
+                    if (!up) { ui.rows = []; done(); return; }
+
+                    // 2. only now does the next job move up into the empty slot.
+                    up.slot = 0;
+                    this.tweens.add({
+                        targets: up.cont, y: up.cont.y - ui.rowH, alpha: 1,
+                        duration: ms, ease: 'Quad.easeOut',
+                        onComplete: () => {
+
+                            // 3. and only once it has arrived does a new one show
+                            //    up underneath it.
+                            const next = this._makeTaskRow(this._taskIdx + 1, 1);
+                            next.cont.setAlpha(0);
+                            this.tweens.add({
+                                targets: next.cont,
+                                alpha: T.DIM_ALPHA !== undefined ? T.DIM_ALPHA : 0.45,
+                                duration: ms, ease: 'Quad.easeOut',
+                                onComplete: done,
+                            });
+                            ui.rows = [up, next];
+                        },
+                    });
+                },
+            });
+        });
+    }
+
     // ── Endless progression ──────────────────────────────────────────────────
     // Stack the next band above the world: fresh land, a fresh stretch of
     // built canal at its foot and a machine parked at that head. From here the
@@ -2619,16 +2774,21 @@ console.log(
         }
         E.panning  = true;
         E.nextReady = false;
-        this.tweens.add({
-            targets:  this.camB,
-            scrollY:  E.baseScrollY - E.segH,
-            duration: CONFIG.ROAD.ENDLESS.PAN_MS || 2500,
-            ease:     'Sine.easeInOut',
-            onComplete: () => {
-                // Small settle delay so transient tweens (debris, coins)
-                // mostly drain before coordinates shift under them.
-                this.time.delayedCall(400, () => this._rebaseWorld());
-            },
+        // The job is done: tick it off and let the list settle BEFORE the camera
+        // leaves. Panning while the tick is still playing would throw away the
+        // one moment that tells the player they finished something.
+        this._completeTask(() => {
+            this.tweens.add({
+                targets:  this.camB,
+                scrollY:  E.baseScrollY - E.segH,
+                duration: CONFIG.ROAD.ENDLESS.PAN_MS || 2500,
+                ease:     'Sine.easeInOut',
+                onComplete: () => {
+                    // Small settle delay so transient tweens (debris, coins)
+                    // mostly drain before coordinates shift under them.
+                    this.time.delayedCall(400, () => this._rebaseWorld());
+                },
+            });
         });
     }
 

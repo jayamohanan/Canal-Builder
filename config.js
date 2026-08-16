@@ -42,6 +42,49 @@ var CONFIG = {
         GRADIENT_END_COLOR: "#B6915c",
     },
 
+    // ── Task list ─────────────────────────────────────────────────────────────
+    // Every field is a job with a name and a number. A small list sits at the top
+    // left of the FARM half showing two of them: the one being dug, and the one
+    // after it greyed out. Finishing a field ticks its row, drops it, promotes the
+    // next one and brings a fresh one in below — so the player always sees where
+    // they are and what is coming, and the level ending gets a beat of its own
+    // before the camera moves on.
+    TASKS: {
+        ENABLED: false,            // hidden for now — the panel, the tick and the
+                                   // list shuffle all still work, they just are
+                                   // not built. Flip to true to bring it back
+                                   // (the level's ending beat comes back with it)
+        TOTAL:   65,               // shown as "1/65"; the run's length
+        NAMES: [
+            "Jenny's Tomatoes", 'Golden Grove', 'Grape Grove', 'Redberry Farm',
+            'Crimson Fields', 'Mango Haven', 'Vine Valley',
+        ],
+        FALLBACK: '<no name>',     // past the end of NAMES
+
+        // Geometry, px at design scale (they ride the layout's uniform scale).
+        PAD:      14,              // inset from the farm half's top-left corner
+        WIDTH:    250,             // panel width
+        ROW_H:    36,
+        COUNT_W:  52,              // the "1/65" column
+        COUNT_SIZE: 15,
+        NAME_SIZE:  17,
+        TICK_R:   11,              // tick ring radius
+        TICK_W:   2.5,             // ring thickness
+
+        BG_COLOR:  '#14200f',
+        BG_ALPHA:  0.42,
+        BG_RADIUS: 10,
+        TEXT_COLOR: '#ffffff',
+        DIM_ALPHA: 0.45,           // the not-yet-started row
+        DONE_COLOR: '#8ce87a',     // ring + check once the field is finished
+
+        // The ending beat, in order.
+        TICK_MS:  420,             // the check springing in
+        HOLD_MS:  320,             // beat before the list moves
+        SHIFT_MS: 380,             // row leaving / promoting / new row arriving
+        DEPTH:    20,              // over everything in the field
+    },
+
     BUTTON: {
         SPAWN_WIDTH: 250,
         SPAWN_HEIGHT: 90,
