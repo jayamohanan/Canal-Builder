@@ -563,6 +563,44 @@ console.log(
             g.fillRoundedRect(left + w + sp(CS.NODE_GAP || 0), slotY - nodeH / 2,
                               nodeW, nodeH, sp(CS.NODE_RADIUS || 5));
             this.batteryCase = g;
+
+            // ── The machine, ghosted inside the battery ───────────────────────
+            // A faint whole rig laid across the case: the batteries and the thing
+            // they drive as one image. It is the SAME two sprites as the field
+            // and the SAME spacing between them (TUNNEL.TRENCHER), just turned a
+            // quarter-turn right so the rig's length runs along the battery's
+            // width. In the field it travels north, control unit leading; turned
+            // right, that puts the control unit at the battery's east end and the
+            // belt at its west.
+            const D = P.TRENCHER_DECO || {};
+            if (D.ENABLED !== false && this.textures.exists('trencher_belt_1')) {
+                const TR    = CONFIG.ROAD.TUNNEL.TRENCHER;
+                const ahead = TR.AHEAD_FRAC !== undefined ? TR.AHEAD_FRAC : 0.4;
+                // Both parts' offsets from the dig line, in the art's own pixels.
+                const beltDY = (0.5 - ahead) * TR.BELT_H;
+                const ctrlDY = beltDY - TR.CTRL_GAP;
+                const rear   = beltDY + TR.BELT_H / 2;      // belt's trailing edge
+                const front  = ctrlDY - TR.CTRL_H / 2;      // control unit's nose
+                const mid    = (rear + front) / 2;          // the rig's own centre
+                // One factor fits the rig's whole length to the case's width.
+                const k  = w * (D.LEN_FRAC !== undefined ? D.LEN_FRAC : 1) / (rear - front);
+                const cx = left + w / 2;
+                // Lay the parts along the rotated axis rather than hard-coding a
+                // side: the rig travels north, so its heading (0,-1) turned by
+                // ANGLE gives the direction the control unit points. Change ANGLE
+                // alone and both the sprites and their order follow — 90 puts the
+                // control unit at the terminal end, -90 at the far end.
+                const a  = (D.ANGLE !== undefined ? D.ANGLE : 90) * Math.PI / 180;
+                const ux = Math.sin(a), uy = -Math.cos(a);
+                const put = (tex, dy, sw, sh) => this.add.image(
+                        cx + ux * (mid - dy) * k, slotY + uy * (mid - dy) * k, tex)
+                    .setDisplaySize(sw * k, sh * k)
+                    .setAngle(D.ANGLE !== undefined ? D.ANGLE : 90)
+                    .setAlpha(D.ALPHA !== undefined ? D.ALPHA : 0.2)
+                    .setDepth(D.DEPTH !== undefined ? D.DEPTH : 2.7);
+                this.trencherGhost = [put('trencher_ctrl_1', ctrlDY, TR.CTRL_W, TR.CTRL_H),
+                                      put('trencher_belt_1', beltDY, TR.BELT_W, TR.BELT_H)];
+            }
         }
 
         for (let i = 0; i < 3; i++) {

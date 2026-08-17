@@ -295,6 +295,23 @@ var CONFIG = {
         SLOT_ROW_EDGE_PAD: 12,         // least margin each side of the battery,
                                        // which is centred on the half (px @ design)
 
+        // A ghost of the trencher laid inside the battery case — the batteries
+        // and the machine they drive read as one object. Same two sprites and
+        // same spacing as the field rig (ROAD.TUNNEL.TRENCHER), turned a quarter
+        // turn right and scaled so the whole rig spans the case's width.
+        TRENCHER_DECO: {
+            ENABLED:  true,
+            ALPHA:    0.4,
+            ANGLE:    -90,             // quarter-turn LEFT: the rig's nose (north
+                                       // in the field) points away from the
+                                       // terminal, so the belt sits at the
+                                       // terminal end. Both the sprites and which
+                                       // part is where follow this one number
+            LEN_FRAC: 0.64,            // rig length as a fraction of the case width
+            DEPTH:    2.7,             // under the case outline (2.8) and the
+                                       // occupied divisions (3)
+        },
+
         // Battery icons pulse once per charge tick — the same tick that arms the
         // machine's work burst, which is what makes the two read as one system.
         BATTERY_PULSE_SCALE: 0.6,      // scale the icon springs to
