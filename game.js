@@ -360,7 +360,14 @@ class GameScene extends Phaser.Scene {
         // The .tmj only carries the grid + tile names; the PNGs live here.
         const TM = CONFIG.ROAD && CONFIG.ROAD.TILEMAP;
         if (TM && TM.ENABLED) {
-            this.load.json('level_map', TM.FILE);
+            // Every level's map, and the pond art any of them names. Maps are a
+            // few KB of JSON, so loading the rotation up front costs nothing and
+            // means a level change never waits on a fetch.
+            this._levels().forEach((lv, i) => this.load.json(`level_map_${i}`, lv.FILE));
+            const pondDir = TM.POND_DIR || 'graphics/pond/';
+            for (const name of this._pondArt()) {
+                this.load.image(`pond_${name}`, `${pondDir}${name}.png`);
+            }
             // One spritesheet of 128px frames — dry AND water-filled tiles are
             // all frames in it; TILES maps gids to meaning + filled frame.
             this.load.spritesheet('canal_sheet', TM.SHEET,
@@ -776,46 +783,14 @@ console.log(
         let   top    = B.y;
         const canalW = s(RC.CANAL.WIDTH);
 
-        // ── Tile map: fit the authored grid into the landscape band ────────
-        // Rows are fixed by the level; the tile SIZE is derived so the grid is
-        // square and fills the space available (width-limited on a wide half,
-        // otherwise height-limited). The grid is anchored to the BOTTOM of the
-        // band and centred horizontally.
+        // Every band is the WHOLE farm half, whatever its map's row count. That
+        // uniformity is what lets the endless stack work: each new band sits
+        // exactly one band-height above the last and the world shifts back by
+        // the same amount, so nothing drifts. A map with fewer rows anchors to
+        // the bottom of its band and _buildTileBand fills the strip left above.
         this.tileGrid = null;
         const TM = RC.TILEMAP;
-        if (TM && TM.ENABLED) {
-            const map  = this.cache.json.get('level_map');
-            const cols = map.width, rows = map.height;
-            const tile = Math.min((bottom - top) / rows, B.width / cols);
-            const gw   = cols * tile, gh = rows * tile;
-            // The BAND becomes exactly the grid: endless stacks each new band a
-            // band-height above the last, so a band taller than its own tiles
-            // would leave a seam of bare background between levels. Any slack
-            // sits above the band instead, which is where the next one arrives.
-            top = bottom - gh;
-            // The two centre columns are the 2-wide main canal.
-            const mainW = TM.MAIN_TILES || 2;
-            const mainRightCol = Math.floor(cols / 2);
-            const mainLeftCol  = mainRightCol - (mainW - 1);
-            const layer = (name) => {
-                const L = map.layers.find((l) => l.name === name);
-                return L ? L.data : null;
-            };
-            this.tileGrid = {
-                cols, rows, tile,
-                left: B.x + (B.width - gw) / 2,   // centred horizontally
-                w: gw, h: gh,
-                groundData: layer(TM.GROUND_LAYER) || [],   // plain land
-                branchData: layer(TM.BRANCH_LAYER) || [],   // dry branches
-                mainData: layer(TM.MAIN_LAYER) || [],       // dug main canal
-                cropsData: layer(TM.CROPS_LAYER) || [],     // crop markers (not drawn)
-                mainLeftCol, mainRightCol, mainW,
-            };
-            // The spritesheet frame for a gid is (gid - firstgid); TILES gives
-            // each gid its meaning. The water-filled twin is FLOW_OFFSET later.
-            this.tileFirstGid = map.tilesets[0].firstgid;
-            this.tileMeta = TM.TILES || {};
-        }
+        if (TM && TM.ENABLED) this.tileGrid = this._makeGrid(0, bottom, bottom - top);
 
         this.road = {
             top, bottom, canalW,
@@ -847,6 +822,44 @@ console.log(
         }
 
         this._buildSegment(top, bottom);
+    }
+
+    // Build the tile grid for a level, fitted to a band of `bandH` whose bottom
+    // edge is `bandBot`. The tile SIZE is derived so the grid is square and
+    // fills what it can (width-limited on a wide half, otherwise height-limited),
+    // anchored to the band's bottom and centred horizontally.
+    _makeGrid(levelIndex, bandBot, bandH) {
+        const TM  = CONFIG.ROAD.TILEMAP;
+        const B   = this.layoutConfig.partB;
+        const map = this._levelMap(levelIndex);
+        if (!map) return null;
+        const cols = map.width, rows = map.height;
+        const tile = Math.min(bandH / rows, B.width / cols);
+        const gw   = cols * tile, gh = rows * tile;
+        const mainW = TM.MAIN_TILES || 2;                  // the 2 centre columns
+        const mainRightCol = Math.floor(cols / 2);
+        const layer = (name) => {
+            const l = map.layers.find((x) => x.name === name);
+            return l ? l.data : null;
+        };
+        // The spritesheet frame for a gid is (gid - firstgid); TILES gives each
+        // gid its meaning. The water-filled twin is FLOW_OFFSET later.
+        this.tileFirstGid = map.tilesets[0].firstgid;
+        this.tileMeta = TM.TILES || {};
+        return {
+            cols, rows, tile,
+            left: B.x + (B.width - gw) / 2,   // centred horizontally
+            w: gw, h: gh,
+            top: bandBot - gh,                // anchored to the band's bottom
+            groundData: layer(TM.GROUND_LAYER) || [],   // plain land
+            branchData: layer(TM.BRANCH_LAYER) || [],   // dry branches
+            mainData:   layer(TM.MAIN_LAYER)   || [],   // dug main canal
+            cropsData:  layer(TM.CROPS_LAYER)  || [],   // crop markers (not drawn)
+            pondData:   layer(TM.POND_LAYER)   || [],   // pond markers (not drawn)
+            markerBase: this._markerBase(map),          // where markers.tsx starts here
+            ponds:      (this._levelDef(levelIndex) || {}).PONDS || {},
+            mainLeftCol: mainRightCol - (mainW - 1), mainRightCol, mainW,
+        };
     }
 
     // Register a display object as pannable WORLD content: hidden from the
@@ -892,6 +905,13 @@ console.log(
 
         const seg = { objects: [], band: null, tunnel: null };
         this.segments.push(seg);
+
+        // This band's own level: the rotation advances per band, so the grid is
+        // rebuilt here rather than once at startup.
+        if (this.tileGrid) {
+            const idx = this.endless ? this.endless.segIndex : 0;
+            this.tileGrid = this._makeGrid(idx, bandBot, bandBot - bandTop) || this.tileGrid;
+        }
 
         // Tile-map mode: draw the authored grid and stop. No procedural land,
         // no dug canal, no auger — just the level's tiles filling the band.
@@ -955,6 +975,25 @@ console.log(
     _buildTileBand(bandTop, bandBot, seg) {
         const g    = this.tileGrid;
         const gTop = bandBot - g.h;            // anchor grid to the band's bottom
+        const TMc  = CONFIG.ROAD.TILEMAP;
+
+        // A map with fewer rows than the band leaves a strip above it. Fill that
+        // with plain ground so a short level reads as a field with open land
+        // beyond it, rather than a hole between this band and the next.
+        if (gTop > bandTop + 0.5 && this.textures.exists('terrain')) {
+            const gFrame = TMc.TERRAIN_GROUND !== undefined ? TMc.TERRAIN_GROUND : 0;
+            const rows = Math.ceil((gTop - bandTop) / g.tile);
+            for (let row = 0; row < rows; row++) {
+                for (let col = 0; col < g.cols; col++) {
+                    this._addB(this.add.image(
+                            g.left + (col + 0.5) * g.tile,
+                            gTop - (row + 0.5) * g.tile,
+                            'terrain', gFrame)
+                        .setDisplaySize(g.tile + 1, g.tile + 1)
+                        .setDepth(1.4), seg);
+                }
+            }
+        }
 
         // GROUND (plain land) then BRANCH (the pre-built dry branches on top
         // of it) are drawn statically and always visible, each cell one
@@ -1005,6 +1044,117 @@ console.log(
         this.road.canalW = g.mainW * g.tile;
         this.createTunnel(band, seg);
         this._buildCrops(seg, band);
+        this._buildPonds(seg, band);
+    }
+
+    // ── Ponds ────────────────────────────────────────────────────────────────
+    // A pond is ONE image, not a tileset: the map marks the cells it covers with
+    // a marker tile, and the block those cells form gives the pond its position
+    // and size. Which pond art a marker stands for is the LEVEL's business — the
+    // same two markers mean different ponds in different levels — so the mapping
+    // lives on the level entry, keyed by the marker's position in markers.tsx.
+    _buildPonds(seg, band) {
+        const g = this.tileGrid;
+        if (!g || !g.pondData.length || g.markerBase === null) return;
+        const gTop = band.bandTop;
+
+        // Group the marked cells: same marker, touching each other, one pond.
+        const seen = new Set();
+        for (let r = 0; r < g.rows; r++) {
+            for (let c = 0; c < g.cols; c++) {
+                const i = r * g.cols + c;
+                if (seen.has(i) || !g.pondData[i]) continue;
+                const gid = g.pondData[i];
+                // Bounding box of this block, found by walking neighbours that
+                // carry the SAME marker — two ponds of different kinds can touch
+                // without merging.
+                let c0 = c, c1 = c, r0 = r, r1 = r;
+                const queue = [i];
+                seen.add(i);
+                while (queue.length) {
+                    const k = queue.pop();
+                    const kc = k % g.cols, kr = (k - kc) / g.cols;
+                    c0 = Math.min(c0, kc); c1 = Math.max(c1, kc);
+                    r0 = Math.min(r0, kr); r1 = Math.max(r1, kr);
+                    for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                        const nc = kc + dc, nr = kr + dr;
+                        if (nc < 0 || nc >= g.cols || nr < 0 || nr >= g.rows) continue;
+                        const n = nr * g.cols + nc;
+                        if (seen.has(n) || g.pondData[n] !== gid) continue;
+                        seen.add(n); queue.push(n);
+                    }
+                }
+                // Marker → this level's art. The gid is only ever used here, to
+                // subtract the sheet's base; config never sees it.
+                const art = g.ponds[gid - g.markerBase];
+                if (!art || !this.textures.exists(`pond_${art}`)) continue;
+                const w = (c1 - c0 + 1) * g.tile, h = (r1 - r0 + 1) * g.tile;
+                const px = g.left + (c0 * g.tile) + w / 2;
+                const py = gTop + (r0 * g.tile) + h / 2;
+                this._addB(this.add.image(px, py, `pond_${art}`)
+                    .setDisplaySize(w, h)
+                    .setDepth(1.45), seg);          // over the ground, under the canal
+
+                // The filled version sits on top of the dry bed, hidden until the
+                // canal draws level with the pond. It is the SAME rectangle, so
+                // the water lands exactly inside its own banks; only its scale
+                // changes as it fills.
+                const wet = this._pondWaterName(art);
+                if (!this.textures.exists(`pond_${wet}`)) continue;
+                const PF = CONFIG.ROAD.TILEMAP.POND_FILL || {};
+                const water = this._addB(this.add.image(px, py, `pond_${wet}`)
+                    .setDisplaySize(w, h)
+                    .setDepth(PF.DEPTH !== undefined ? PF.DEPTH : 1.46)
+                    .setVisible(false), seg);
+                // The dig is measured up from the band's foot, so the pond's
+                // centre row converts to the distance the machine must have cut
+                // before the water starts arriving.
+                const midRow = (r0 + r1) / 2;
+                (seg.ponds || (seg.ponds = [])).push({
+                    water, step: 0, t: 0, filling: false, done: false,
+                    sx: water.scaleX, sy: water.scaleY,          // full size
+                    startPx: (g.rows - midRow - 0.5) * g.tile,
+                });
+            }
+        }
+    }
+
+    // ── Filling a pond ───────────────────────────────────────────────────────
+    // Once the trench draws level with a pond, its water appears at the centre
+    // and spreads outward until it meets the banks — one continuous motion, not
+    // steps.
+    //
+    // The curve is the physics rather than an easing preset. Water arrives at a
+    // steady rate, so it is the AREA that grows evenly; the edge therefore has to
+    // travel fast at first and slow as it goes, because each further ring of
+    // shoreline is bigger than the last and takes longer to cover. Tweening the
+    // area and taking its square root for the scale gives exactly that, and it is
+    // why a bounce felt wrong — an overshoot means water piling up past the bank
+    // and coming back, which is not what a filling basin does.
+    _updatePonds(tn, dt) {
+        const seg = tn.seg;
+        if (!seg || !seg.ponds) return;
+        const PF = CONFIG.ROAD.TILEMAP.POND_FILL || {};
+        for (const p of seg.ponds) {
+            if (p.filling || tn.progressPx < p.startPx) continue;   // not level yet
+            p.filling = true;
+
+            const from = PF.START !== undefined ? PF.START : 0.1;
+            p.water.setVisible(true).setScale(p.sx * from, p.sy * from);
+            // Tween the area from its starting share to full; the sprite's scale
+            // is the root of it, every frame.
+            const area = { v: from * from };
+            this.tweens.add({
+                targets: area, v: 1,
+                duration: PF.FILL_MS || 10000,
+                ease: PF.EASE || 'Linear',        // steady inflow
+                onUpdate: () => {
+                    const k = Math.sqrt(area.v);
+                    p.water.setScale(p.sx * k, p.sy * k);
+                },
+                onComplete: () => { p.done = true; },
+            });
+        }
     }
 
     // A stable pseudo-random value in [0,1) for a cell, per `salt`. Same cell,
@@ -1019,6 +1169,58 @@ console.log(
 
     // The crop art rotation, in level order. Falls back to the single CROP so
     // a config with no cycle still behaves exactly as before.
+    // The level rotation as typed in config: one entry per level, in play order.
+    // Falls back to the single FILE so a config without LEVELS still runs.
+    _levels() {
+        const TM = CONFIG.ROAD && CONFIG.ROAD.TILEMAP;
+        if (!TM) return [];
+        if (Array.isArray(TM.LEVELS) && TM.LEVELS.length) return TM.LEVELS;
+        return TM.FILE ? [{ FILE: TM.FILE }] : [];
+    }
+
+    // The level being built now — the rotation wraps, so level 4 is level 1's
+    // map again with whatever crop the crop cycle has reached.
+    _levelDef(index) {
+        const ls = this._levels();
+        return ls.length ? ls[index % ls.length] : null;
+    }
+
+    _levelMap(index) {
+        const ls = this._levels();
+        return ls.length ? this.cache.json.get(`level_map_${index % ls.length}`) : null;
+    }
+
+    // Every pond image any level names, plus its water twin: a level maps a
+    // marker to the DRY art, and the filled version is the same name with
+    // _water in place of _dry. One name in config, two files.
+    _pondArt() {
+        const out = new Set();
+        for (const lv of this._levels()) {
+            for (const name of Object.values(lv.PONDS || {})) {
+                out.add(name);
+                out.add(this._pondWaterName(name));
+            }
+        }
+        return [...out];
+    }
+
+    _pondWaterName(dryName) {
+        const P = CONFIG.ROAD.TILEMAP.POND_FILL || {};
+        return String(dryName).replace(P.DRY_SUFFIX || '_dry', P.WATER_SUFFIX || '_water');
+    }
+
+    // Where the marker sheet starts in THIS map. Markers mean what they mean by
+    // position in that sheet, so the gid a marker happens to have — which moves
+    // whenever any earlier tileset changes size — never reaches the config.
+    _markerBase(map) {
+        const want = (CONFIG.ROAD.TILEMAP.MARKER_TILESET || 'markers.tsx').toLowerCase();
+        for (const t of (map.tilesets || [])) {
+            const src = String(t.source || t.name || '').toLowerCase();
+            if (src.endsWith(want)) return t.firstgid;
+        }
+        return null;                   // this map paints no markers
+    }
+
     // The rotation exactly as typed in config: FILE NAMES, in play order. Add a
     // sheet to graphics/crops/ and its file name to that list — nothing else
     // needs to know. Put a new one first to see it on level 1.
@@ -1533,6 +1735,8 @@ console.log(
         // from the machine's update: branches keep filling long after the dig
         // finished, and this runs for every segment until they do.
         this._updateLilies(tn);
+        // Ponds fill on the same schedule, for the same reason.
+        this._updatePonds(tn, dt);
         // Smooth continuous speed — the branches flow at the main canal's pace.
         const speed = (CONFIG.ROAD.TILEMAP.FLOW_SPEED || CONFIG.ROAD.WATER.MIN_SPEED || 30)
                     * this.layoutConfig.platformScale;

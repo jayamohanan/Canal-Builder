@@ -359,7 +359,72 @@ var CONFIG = {
         // spritesheet carries no per-tile data.
         TILEMAP: {
             ENABLED: true,
-            FILE:    'level_maps/level_01.tmj',
+
+            // ── THE LEVEL ROTATION — edit this list ───────────────────────
+            // One entry per level, in PLAY ORDER; the run loops at the end.
+            // FILE is the Tiled map. Anything else on the entry is that level's
+            // own data — see PONDS below.
+            //
+            // Maps may have different row counts. A band is always the full
+            // height of the farm half; a map with fewer rows is anchored to the
+            // BOTTOM of its band and the strip left above it is filled with
+            // plain ground, so short levels read as a field with open land
+            // beyond it rather than leaving a hole between levels.
+            LEVELS: [
+                 {
+                    FILE: 'level_maps/level_03.tmj',
+                    // Which pond art this level's markers stand for. The KEY is
+                    // the marker's position in markers.tsx (see MARKERS), so the
+                    // same two markers mean different ponds in different levels
+                    // — paint pond A, decide here which pond it is.
+                    PONDS: { 1: 'pond1_dry', 2: 'pond2_dry' },
+                },
+                { FILE: 'level_maps/level_01.tmj' },
+                { FILE: 'level_maps/level_02.tmj' },
+               
+            ],
+            FILE:    'level_maps/level_01.tmj',   // fallback when LEVELS is empty
+
+            // ── Markers ──────────────────────────────────────────────────
+            // A map that references MARKER_TILESET is painting MARKERS: tiles
+            // that mean something to the code and are never drawn. What they
+            // mean comes from their POSITION in that sheet (0 = first tile,
+            // reading left to right, top to bottom), NOT from their gid — gids
+            // shift whenever any earlier tileset changes size, positions never
+            // do. The sheet is found by name in the map, so its firstgid is
+            // whatever Tiled made it.
+            //
+            // APPEND ONLY: add new markers at the end of markers.tsx. Inserting
+            // or reordering re-numbers everything after it.
+            MARKER_TILESET: 'markers.tsx',
+            MARKERS: [
+                'crop',        // 0
+                'pond_a',      // 1
+                'pond_b',      // 2
+            ],
+            POND_LAYER: 'pond',            // marker layer the ponds are painted on
+            POND_DIR:   'graphics/pond/',  // where the pond art lives
+
+            // ── Filling a pond ───────────────────────────────────────────
+            // A level names the DRY art (PONDS above); the filled version is the
+            // same file with WATER_SUFFIX in place of DRY_SUFFIX, so one name
+            // covers both. The water appears when the trench draws level with
+            // the pond's middle row, starts at START of full size and grows one
+            // step per STEP_MS until it fills the bed.
+            POND_FILL: {
+                DRY_SUFFIX:   '_dry',
+                WATER_SUFFIX: '_water',
+                START:    0.1,     // size it appears at, as a fraction of full
+                FILL_MS:  10000,   // centre to banks, one continuous spread
+                // The water arrives at a steady rate, so the AREA grows evenly
+                // and the shoreline is its square root — fast at first, slowing
+                // as each further ring of bank takes longer to reach. That is
+                // what makes it read as water rather than a growing picture, and
+                // why there is no bounce here: an overshoot would be the pond
+                // spilling past its banks and sucking back.
+                EASE:     'Linear',   // applied to the AREA, not the scale
+                DEPTH:    1.46,    // on the dry bed (1.45), under the canal
+            },
             SHEET:   'graphics/tilesheets/canals.webp',
             FRAME:   128,           // frame size in the sheet
             MAIN_TILES: 2,          // the main canal is this many tiles wide
