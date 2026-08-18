@@ -386,8 +386,25 @@ var CONFIG = {
             // All levels share the one level_01 layout, so the crop is what
             // makes each field read as a different farm. Add a sheet to
             // graphics/crops/ and its name here to extend the rotation.
-            CROP_CYCLE:   ['tomato', 'mango', 'grape'],
-            CROP:         'tomato',  // fallback when CROP_CYCLE is empty
+            // ── THE CROP ROTATION — edit this list, nothing else ──────────
+            // File names in graphics/crops/, in PLAY ORDER: entry 1 is level 1,
+            // entry 2 is level 2, and it wraps at the end. Any image type works;
+            // a bare name with no extension is read as .png.
+            //
+            // Adding a crop:   drop the sheet in graphics/crops/, add its file
+            //                  name here.
+            // Testing a crop:  move it to the FRONT — it plays on level 1 instead
+            //                  of waiting for the rotation to come round.
+            // Every sheet is one row of CROP_STAGES frames of equal width.
+            CROP_CYCLE: [
+                'grass2.webp',
+                'grass.webp',
+                'tomato.png',
+                'mango.png',
+                'grape.png',
+                
+            ],
+            CROP:         'tomato.png',  // fallback when CROP_CYCLE is empty
             CROP_STAGES:  5,
             CROP_GROW_MS: 2000,     // time between growth stages
             CROP_WET:     0.15,     // canal-cell fill fraction that counts as "watered"
@@ -680,6 +697,28 @@ var CONFIG = {
             ADVANCE_PER_CHARGE: 2, // px of digging banked per unit of battery charge
             MARGIN: 9,             // loose ground the bore takes beyond the channel
                                    // on each side (px @ platformScale)
+
+            // ── The torn lip at the dig line ──────────────────────────────
+            // graphics/cut-edge.png: flat along the bottom, broken along the top.
+            // Its foot rides the reveal line and its ragged top overhangs the
+            // ground still to be dug, so the cut never reads as a ruled edge —
+            // while the reveal underneath stays a straight crop, which is what
+            // the machine's whole position is measured from.
+            CUT_EDGE: {
+                ENABLED: true,
+                SWAP_MS: 125,       // how often the lip changes shape WHILE the
+                                    // machine is cutting. It freezes on its last
+                                    // shape the moment the machine stops, so a
+                                    // stalled dig has a still edge
+                WIDTH_TILES: 2,     // the main canal's full 2-tile width
+                HEIGHT_TILES: 0.52, // its OWN number, in tiles — otherwise
+                                    // narrowing the lip flattens it to a line.
+                                    // 0.52 is the thickness it had at full width.
+                                    // Remove it to follow the art's aspect
+                ALPHA:   1,
+                Y_OFFSET: 0,       // nudge along the line, in tiles (+ = down)
+                DEPTH:   2.16,     // over the ground and its cracks, under the rig
+            },
 
             // ── The trencher ──────────────────────────────────────────────
             // A heavy trenching machine, drawn as TWO sprites that move as one

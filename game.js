@@ -333,6 +333,13 @@ class GameScene extends Phaser.Scene {
             // One shadow for the whole rig — it never animates, it just rides
             // along under both parts.
             this.load.image('trencher_shadow', 'graphics/trencher/shadow.png');
+            // The torn lip of ground at the dig line: flat along the bottom (it
+            // sits ON the line), ragged along the top, so the cut never reads as
+            // a ruled edge. Two versions, alternated while the machine cuts, so
+            // the broken edge keeps changing shape instead of sliding along as
+            // one fixed silhouette.
+            this.load.image('cut_edge_1', 'graphics/cut-edge/cut-edge1.png');
+            this.load.image('cut_edge_2', 'graphics/cut-edge/cut-edge2.png');
             // A side-on view of the machine. Not placed anywhere at the moment —
             // it sat beside the battery slots until the battery case took that
             // row — but kept loaded for the next attempt at linking the two.
@@ -370,8 +377,8 @@ class GameScene extends Phaser.Scene {
             // point in the cycle after a rebase.
             // The patch of worked soil each plant stands in, drawn under it.
             this.load.image('plant_base', 'graphics/plant-base.png');
-            for (const c of this._cropCycle()) {
-                this.load.image(`${c}_src`, `graphics/crops/${c}.png`);
+            for (const f of this._cropList()) {
+                this.load.image(`${String(f).replace(/\.[^.]+$/, '')}_src`, this._cropFile(f));
             }
         }
 
@@ -1012,12 +1019,27 @@ console.log(
 
     // The crop art rotation, in level order. Falls back to the single CROP so
     // a config with no cycle still behaves exactly as before.
-    _cropCycle() {
+    // The rotation exactly as typed in config: FILE NAMES, in play order. Add a
+    // sheet to graphics/crops/ and its file name to that list — nothing else
+    // needs to know. Put a new one first to see it on level 1.
+    _cropList() {
         const TM = CONFIG.ROAD && CONFIG.ROAD.TILEMAP;
         if (!TM) return [];
         const cy = TM.CROP_CYCLE;
         if (Array.isArray(cy) && cy.length) return cy;
         return TM.CROP ? [TM.CROP] : [];
+    }
+
+    // The same list as texture keys — the file name without its extension. A
+    // bare name (no extension) is taken as a .png, so old entries still work.
+    _cropCycle() {
+        return this._cropList().map((f) => String(f).replace(/\.[^.]+$/, ''));
+    }
+
+    // Where a crop's sheet lives.
+    _cropFile(entry) {
+        const f = String(entry);
+        return `graphics/crops/${/\.[^.]+$/.test(f) ? f : f + '.png'}`;
     }
 
     // Which crop the level being built right now grows. segIndex is the
@@ -2002,7 +2024,36 @@ console.log(
             .setDepth(TR.DEPTH_CTRL !== undefined ? TR.DEPTH_CTRL : 1.523), seg);
         belt.play('trencher_belt'); belt.anims.pause();
         ctrl.play('trencher_ctrl'); ctrl.anims.pause();
-        const bore = { x, cut, belt, ctrl, shadow, beltDY, ctrlDY, shdDY, rigW: beltW };
+
+        // ── The torn lip at the dig line ──────────────────────────────────────
+        // The reveal itself is a straight crop — it has to be, the machine's
+        // whole position hangs off that one line — so the raggedness is drawn on
+        // top instead of cut into the tiles. The art is flat along its bottom,
+        // which sits ON the line, and broken along its top, which overhangs the
+        // ground still to be dug. Spans the main canal's full width.
+        const CE = TN.CUT_EDGE || {};
+        let cutEdge = null;
+        if (CE.ENABLED !== false && this.textures.exists('cut_edge_1')) {
+            const tile = this.tileGrid ? this.tileGrid.tile
+                       : r.canalW / (CONFIG.ROAD.TILEMAP.MAIN_TILES || 2);
+            const src  = this.textures.get('cut_edge_1').getSourceImage();
+            const ew   = tile * (CE.WIDTH_TILES !== undefined ? CE.WIDTH_TILES : 2);
+            // Height is its OWN number, not the width's aspect: narrowing the lip
+            // should not also flatten it out of existence. Unset falls back to the
+            // art's proportions at full canal width.
+            const eh   = CE.HEIGHT_TILES !== undefined
+                       ? tile * CE.HEIGHT_TILES
+                       : ew * (src.height / src.width);
+            cutEdge = this._addB(this.add.image(band.cx, entryY, 'cut_edge_1')
+                .setDisplaySize(ew, eh)
+                .setOrigin(0.5, 1)                       // its foot rides the line
+                .setAlpha(CE.ALPHA !== undefined ? CE.ALPHA : 1)
+                .setDepth(CE.DEPTH !== undefined ? CE.DEPTH : 2.16)
+                .setVisible(false), seg);                // shown once digging starts
+        }
+        const bore = { x, cut, belt, ctrl, shadow, cutEdge, edgeFrame: 0,
+                       beltDY, ctrlDY, shdDY, rigW: beltW,
+                       edgeDY: (CE.Y_OFFSET || 0) * (this.tileGrid ? this.tileGrid.tile : 1) };
 
         // No grass overlay in tile-map mode — the base layer already shows
         // grass down the centre, and the flood reveals the dug main-canal tiles
@@ -2430,6 +2481,19 @@ console.log(
         b.belt.y = faceY + b.beltDY;
         b.ctrl.y = faceY + b.ctrlDY;
         if (b.shadow) b.shadow.y = faceY + b.shdDY;
+        // The torn lip rides the same line the reveal is cropped at, and swaps
+        // between its two shapes while the machine is actually cutting — the
+        // ground breaking differently, rather than one fixed silhouette sliding
+        // up the field. It holds its last shape whenever the machine stops.
+        if (b.cutEdge) {
+            b.cutEdge.setVisible(true).y = faceY + b.edgeDY;
+            const swap = CONFIG.ROAD.TUNNEL.CUT_EDGE.SWAP_MS || 500;
+            const n = Math.floor(time / swap) & 1;
+            if (n !== b.edgeFrame) {
+                b.edgeFrame = n;
+                b.cutEdge.setTexture(n ? 'cut_edge_2' : 'cut_edge_1');
+            }
+        }
         this._setTrencherRunning(tn, true, step > 0.01);
         // The soil strip in the wake is no longer shown — the ditch sprite is
         // what gets uncovered as the grass recedes. (The cut sprite is kept only
@@ -2595,7 +2659,8 @@ console.log(
         tn.open = true;
 
         this._setTrencherRunning(tn, false, false);
-        const parts = [tn.bore.belt, tn.bore.ctrl, tn.bore.shadow].filter(Boolean);
+        const parts = [tn.bore.belt, tn.bore.ctrl, tn.bore.shadow,
+                       tn.bore.cutEdge].filter(Boolean);
         this.tweens.add({
             targets: parts,
             alpha: 0, duration: 700,
