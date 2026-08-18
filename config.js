@@ -423,7 +423,41 @@ var CONFIG = {
                 // why there is no bounce here: an overshoot would be the pond
                 // spilling past its banks and sucking back.
                 EASE:     'Linear',   // applied to the AREA, not the scale
+
+                // Shallow to deep. SHALLOW_COLOR is the colour the water ART is
+                // painted at — a tint can only darken, so the art has to start
+                // as the lightest state it will ever have. The code multiplies it
+                // down toward DEEP_COLOR as the pond fills; red falls fastest,
+                // which is what depth does to light.
+                SHALLOW_COLOR: '#85C0B2',   // what pondN_water.png was exported at
+                DEEP_COLOR:    '#2B8C9E',   // where it lands, full
+                TINT_RATE:     3,     // how sharply it gets there. Absorption is
+                                      // exponential, so the shift is quick early
+                                      // and asymptotic late — higher = deep sooner
                 DEPTH:    1.46,    // on the dry bed (1.45), under the canal
+
+                // ── The flow over it ─────────────────────────────────────
+                // <pond>_flow.png, run outward from the centre on a loop while
+                // the pond is filling: water still arriving. Greyscale art, so
+                // it takes the water's colour. It stops when the pond is full —
+                // a still pond should be still.
+                FLOW: {
+                    ENABLED:  true,
+                    SUFFIX:   '_flow',
+                    RINGS:    2,       // copies, evenly spread around the cycle,
+                                       // so one leaves the centre as another
+                                       // reaches the bank
+                    CYCLE_MS: 3200,    // centre to bank, one ring
+                    START:    0.05,    // size it leaves the centre at
+                    ALPHA:    0.5,     // at mid-journey; it swells from nothing
+                                       // and is spent by the time it arrives
+                                       // Once the pond is full, rings already on
+                                       // their way finish the journey and are not
+                                       // sent out again — their own alpha curve
+                                       // takes them to nothing at the bank, so
+                                       // nothing is ever cut off mid-water.
+                    DEPTH_OFFSET: 0.005,   // just over the water
+                },
             },
             SHEET:   'graphics/tilesheets/canals.webp',
             FRAME:   128,           // frame size in the sheet

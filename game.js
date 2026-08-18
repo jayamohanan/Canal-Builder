@@ -1110,8 +1110,33 @@ console.log(
                 // centre row converts to the distance the machine must have cut
                 // before the water starts arriving.
                 const midRow = (r0 + r1) / 2;
+                // The flow art, riding over the water: a couple of copies of the
+                // same picture, each running centre-to-bank a fraction of a cycle
+                // apart, so water is always seen to be arriving.
+                const FL = PF.FLOW || {};
+                const rings = [];
+                const flowKey = `pond_${this._pondFlowName(art)}`;
+                if (FL.ENABLED !== false && this.textures.exists(flowKey)) {
+                    for (let n = 0; n < (FL.RINGS || 2); n++) {
+                        rings.push(this._addB(this.add.image(px, py, flowKey)
+                            .setDisplaySize(w, h)
+                            .setDepth((PF.DEPTH !== undefined ? PF.DEPTH : 1.46)
+                                    + (FL.DEPTH_OFFSET || 0.005))
+                            .setVisible(false), seg));
+                    }
+                }
                 (seg.ponds || (seg.ponds = [])).push({
-                    water, step: 0, t: 0, filling: false, done: false,
+                    water, rings,
+                    // A tint MULTIPLIES the art, so the value it ends on is not
+                    // the deep colour — it is deep ÷ shallow, per channel. Work
+                    // that out once here from the two colours in config, so the
+                    // config stays readable: the colour the art was painted at,
+                    // and the colour it should reach.
+                    tintTo: this._tintRatio(PF.SHALLOW_COLOR, PF.DEEP_COLOR),
+                    // Each ring keeps its own phase, staggered around the cycle,
+                    // so they can retire one at a time as each finishes its run.
+                    ringPhase: rings.map((_, n) => n / Math.max(1, rings.length)),
+                    filling: false, done: false, spent: false,
                     sx: water.scaleX, sy: water.scaleY,          // full size
                     startPx: (g.rows - midRow - 0.5) * g.tile,
                 });
@@ -1131,29 +1156,78 @@ console.log(
     // area and taking its square root for the scale gives exactly that, and it is
     // why a bounce felt wrong — an overshoot means water piling up past the bank
     // and coming back, which is not what a filling basin does.
+    //
+    // Over the top of it, the flow art runs outward from the centre on a loop —
+    // water still arriving. Each ring carries its OWN phase, so when the pond
+    // fills the rings already travelling are allowed to finish their journey and
+    // simply are not sent out again. Cutting one off halfway would be a wave
+    // stopping in open water.
     _updatePonds(tn, dt) {
         const seg = tn.seg;
         if (!seg || !seg.ponds) return;
         const PF = CONFIG.ROAD.TILEMAP.POND_FILL || {};
+        const FL = PF.FLOW || {};
         for (const p of seg.ponds) {
-            if (p.filling || tn.progressPx < p.startPx) continue;   // not level yet
-            p.filling = true;
+            if (!p.filling) {
+                if (tn.progressPx < p.startPx) continue;      // not level yet
+                p.filling = true;
+                const from = PF.START !== undefined ? PF.START : 0.1;
+                p.water.setVisible(true).setScale(p.sx * from, p.sy * from);
+                // Tween the area from its starting share to full; the sprite's
+                // scale is the root of it, every frame.
+                const area = { v: from * from };
+                this.tweens.add({
+                    targets: area, v: 1,
+                    duration: PF.FILL_MS || 10000,
+                    ease: PF.EASE || 'Linear',        // steady inflow
+                    onUpdate: () => {
+                        const k = Math.sqrt(area.v);
+                        p.water.setScale(p.sx * k, p.sy * k);
+                        // Shallow to deep. The art is painted at its SHALLOW
+                        // colour, because a tint can only ever darken — so the
+                        // pond starts untinted and is multiplied down toward
+                        // DEEP_COLOR as it fills. Red falls fastest of the three,
+                        // which is what depth does to light: the warmth a shallow
+                        // pond borrows from its bed is the first thing to go.
+                        // Absorption is exponential, so the shift is quick early
+                        // and asymptotic late — it settles as the spread does.
+                        if (p.tintTo) {
+                            const t = 1 - Math.exp(-(PF.TINT_RATE || 3) * area.v);
+                            p.water.setTint(this._lerpColor(0xffffff, p.tintTo, t));
+                        }
+                    },
+                    onComplete: () => { p.done = true; },
+                });
+            }
+            if (!p.rings || !p.rings.length || p.spent) continue;
 
-            const from = PF.START !== undefined ? PF.START : 0.1;
-            p.water.setVisible(true).setScale(p.sx * from, p.sy * from);
-            // Tween the area from its starting share to full; the sprite's scale
-            // is the root of it, every frame.
-            const area = { v: from * from };
-            this.tweens.add({
-                targets: area, v: 1,
-                duration: PF.FILL_MS || 10000,
-                ease: PF.EASE || 'Linear',        // steady inflow
-                onUpdate: () => {
-                    const k = Math.sqrt(area.v);
-                    p.water.setScale(p.sx * k, p.sy * k);
-                },
-                onComplete: () => { p.done = true; },
+            // The rings ride the water's CURRENT extent, so they always run out
+            // to wherever the shoreline has reached and never overshoot it.
+            const reach = p.water.scaleX / p.sx;
+            const cycle = (FL.CYCLE_MS || 1600) / 1000;
+            const from  = FL.START !== undefined ? FL.START : 0.05;
+            const peak  = FL.ALPHA !== undefined ? FL.ALPHA : 0.5;
+            let alive = 0;
+            p.rings.forEach((r, i) => {
+                let ph = p.ringPhase[i];
+                if (ph < 0) return;                           // this one has landed
+                ph += dt / cycle;
+                if (ph >= 1) {
+                    // Reached the bank. Send it out again unless the pond has
+                    // finished filling, in which case this was its last run.
+                    if (p.done) { p.ringPhase[i] = -1; r.setVisible(false); return; }
+                    ph -= 1;
+                }
+                p.ringPhase[i] = ph;
+                alive++;
+                r.setVisible(true)
+                 .setScale(p.sx * reach * (from + (1 - from) * ph), 
+                           p.sy * reach * (from + (1 - from) * ph))
+                 // Swells on the way out and is spent by the time it arrives — a
+                 // ring that simply vanished at the edge would read as a hoop.
+                 .setAlpha(peak * Math.sin(Math.PI * ph));
             });
+            if (!alive) p.spent = true;                       // still water from here
         }
     }
 
@@ -1199,6 +1273,7 @@ console.log(
             for (const name of Object.values(lv.PONDS || {})) {
                 out.add(name);
                 out.add(this._pondWaterName(name));
+                out.add(this._pondFlowName(name));
             }
         }
         return [...out];
@@ -1207,6 +1282,12 @@ console.log(
     _pondWaterName(dryName) {
         const P = CONFIG.ROAD.TILEMAP.POND_FILL || {};
         return String(dryName).replace(P.DRY_SUFFIX || '_dry', P.WATER_SUFFIX || '_water');
+    }
+
+    _pondFlowName(dryName) {
+        const P = CONFIG.ROAD.TILEMAP.POND_FILL || {};
+        const F = P.FLOW || {};
+        return String(dryName).replace(P.DRY_SUFFIX || '_dry', F.SUFFIX || '_flow');
     }
 
     // Where the marker sheet starts in THIS map. Markers mean what they mean by
@@ -3164,6 +3245,19 @@ console.log(
 
 
     // ── Color lerp helper ────────────────────────────────────────────────────
+    // The tint that turns `from` into `to` when multiplied over it. Any channel
+    // that would need to brighten is clamped — a tint cannot lighten, so if this
+    // clamps, the art needs repainting lighter in that channel rather than the
+    // number being fudged.
+    _tintRatio(from, to) {
+        if (from === undefined || to === undefined) return null;
+        const a = hexColor(from), b = hexColor(to);
+        const ch = (sh) => Math.min(1, (((b >> sh) & 255) || 0) / Math.max(1, (a >> sh) & 255));
+        return (Math.round(ch(16) * 255) << 16)
+             | (Math.round(ch(8)  * 255) << 8)
+             |  Math.round(ch(0)  * 255);
+    }
+
     _lerpColor(c1, c2, t) {
         const r1 = (c1 >> 16) & 0xFF, g1 = (c1 >> 8) & 0xFF, b1 = c1 & 0xFF;
         const r2 = (c2 >> 16) & 0xFF, g2 = (c2 >> 8) & 0xFF, b2 = c2 & 0xFF;
