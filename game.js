@@ -1133,6 +1133,7 @@ console.log(
                     // config stays readable: the colour the art was painted at,
                     // and the colour it should reach.
                     tintTo: this._tintRatio(PF.SHALLOW_COLOR, PF.DEEP_COLOR),
+                    alphaFrom: PF.ALPHA_FROM !== undefined ? PF.ALPHA_FROM : 1,
                     // Each ring keeps its own phase, staggered around the cycle,
                     // so they can retire one at a time as each finishes its run.
                     ringPhase: rings.map((_, n) => n / Math.max(1, rings.length)),
@@ -1172,14 +1173,25 @@ console.log(
                 if (tn.progressPx < p.startPx) continue;      // not level yet
                 p.filling = true;
                 const from = PF.START !== undefined ? PF.START : 0.1;
-                p.water.setVisible(true).setScale(p.sx * from, p.sy * from);
+                p.water.setVisible(true).setScale(p.sx * from, p.sy * from)
+                       .setAlpha(p.alphaFrom);
                 // Tween the area from its starting share to full; the sprite's
                 // scale is the root of it, every frame.
                 const area = { v: from * from };
                 this.tweens.add({
                     targets: area, v: 1,
                     duration: PF.FILL_MS || 10000,
-                    ease: PF.EASE || 'Linear',        // steady inflow
+                    // Thin water runs across a bed easily, so the pool covers most
+                    // of the floor at a steady clip; after that the banks are
+                    // already met and the water has nowhere to go but UP, so the
+                    // last of the area comes slowly while the depth builds. Hence
+                    // a constant rate to AREA_KNEE, then a decelerating tail.
+                    //
+                    // The knee's TIME is derived, not set: it is placed where the
+                    // tail's opening speed equals the constant rate, so the change
+                    // of pace has no jolt in it — the water eases off rather than
+                    // hitting a wall.
+                    ease: this._pondFillEase(PF),
                     onUpdate: () => {
                         const k = Math.sqrt(area.v);
                         p.water.setScale(p.sx * k, p.sy * k);
@@ -1194,6 +1206,15 @@ console.log(
                         if (p.tintTo) {
                             const t = 1 - Math.exp(-(PF.TINT_RATE || 3) * area.v);
                             p.water.setTint(this._lerpColor(0xffffff, p.tintTo, t));
+                        }
+                        // Thin water is see-through, so the bed shows at first and
+                        // is buried as the pond deepens. Ease-out: most of the
+                        // opacity is gained early, then it creeps — the same shape
+                        // as light being absorbed, and it means the pond stops
+                        // visibly changing well before the spread ends.
+                        if (p.alphaFrom < 1) {
+                            const e = 1 - Math.pow(1 - area.v, PF.ALPHA_POWER || 3);
+                            p.water.setAlpha(p.alphaFrom + (1 - p.alphaFrom) * e);
                         }
                     },
                     onComplete: () => { p.done = true; },
@@ -3245,6 +3266,22 @@ console.log(
 
 
     // ── Color lerp helper ────────────────────────────────────────────────────
+    // The fill curve for a pond: a constant spread across the bed, then a slow
+    // tail as the water starts gaining depth instead of ground. See the comment
+    // at the call site for why the knee's position in TIME is computed from its
+    // position in AREA rather than being a second number to tune.
+    _pondFillEase(PF) {
+        const k = PF.AREA_KNEE !== undefined ? PF.AREA_KNEE : 0.8;   // area at the knee
+        const p = PF.TAIL_POWER || 2;                                // how hard the tail slows
+        if (k <= 0 || k >= 1) return 'Linear';
+        const f = k / (k + p * (1 - k));      // the knee's moment: slopes match here
+        return (t) => {
+            if (t <= f) return k * (t / f);                          // steady spread
+            const u = (t - f) / (1 - f);
+            return k + (1 - k) * (1 - Math.pow(1 - u, p));           // gaining depth
+        };
+    }
+
     // The tint that turns `from` into `to` when multiplied over it. Any channel
     // that would need to brighten is clamped — a tint cannot lighten, so if this
     // clamps, the art needs repainting lighter in that channel rather than the

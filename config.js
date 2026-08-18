@@ -422,7 +422,15 @@ var CONFIG = {
                 // what makes it read as water rather than a growing picture, and
                 // why there is no bounce here: an overshoot would be the pond
                 // spilling past its banks and sucking back.
-                EASE:     'Linear',   // applied to the AREA, not the scale
+                // The inflow's shape. Thin water spreads across the bed easily,
+                // so the area grows at a steady rate up to AREA_KNEE; past that
+                // the banks are met and further water adds DEPTH rather than
+                // ground, so the last of the area arrives slowly.
+                AREA_KNEE:  0.8,      // area covered before it starts to slow
+                TAIL_POWER: 2,        // how hard the tail slows (2 = quadratic).
+                                      // The knee's moment in time is derived from
+                                      // these two so the pace changes smoothly —
+                                      // there is no third number to keep in sync
 
                 // Shallow to deep. SHALLOW_COLOR is the colour the water ART is
                 // painted at — a tint can only darken, so the art has to start
@@ -434,6 +442,14 @@ var CONFIG = {
                 TINT_RATE:     3,     // how sharply it gets there. Absorption is
                                       // exponential, so the shift is quick early
                                       // and asymptotic late — higher = deep sooner
+
+                // Thin water is see-through: the bed shows through the first
+                // shallow spread and is buried as the pond deepens. Ease-out, so
+                // most of the opacity arrives early and the last of it creeps —
+                // the pond has settled visually before it stops spreading.
+                ALPHA_FROM:  0.05,    // opacity when the water first appears
+                ALPHA_POWER: 3,       // 1 = linear, 3 = ease-out cubic, higher =
+                                      // opaque sooner
                 DEPTH:    1.46,    // on the dry bed (1.45), under the canal
 
                 // ── The flow over it ─────────────────────────────────────
