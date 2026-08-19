@@ -925,6 +925,50 @@ var CONFIG = {
             // (machine look comes from graphics/trencher/)
             CUT_COLOR:     0x84694a,  // raw soil exposed in the cut under the
                                       // machine, before the water reaches it
+            // ── Spoil thrown clear ────────────────────────────────────────
+            // The belt carries what it digs up out of the hole and flings it to
+            // both sides. Two flat fans from the belt's lower end, each grain
+            // gone before it lands — no heap, because a growing ridge would
+            // either bury the canal it frames or need authoring per tile.
+            // ── Spoil thrown clear ────────────────────────────────────────
+            // The belt carries what it digs out of the hole and flings it to both
+            // sides. Two PARTICLE EMITTERS, one per side — not a sprite per grain:
+            // at this density the emitter is the difference between a smooth frame
+            // and a stuttering one on a budget phone.
+            //
+            // What makes it read as sand rather than smoke: it is thrown (speed +
+            // gravity, so it arcs), it barely shrinks, it holds opacity until it
+            // lands, and it never grows. Only DUST grows — see FACE below.
+            SPRAY: {
+                ENABLED:  true,
+                QUANTITY: 3,       // grains per side, per emission
+                EVERY_MS: 60,      // and how often — density is these two
+                SPEED_MIN: 90,     // how hard it is thrown (px/s @ platformScale)
+                SPEED_MAX: 260,
+                GRAVITY:  420,     // the drop that turns a throw into an arc
+                LIFE_MIN: 320,     // ms in the air
+                LIFE_MAX: 620,
+                OFFSET_Y: -12,     // from the CUT LINE, in the direction the rig
+                                   // travels (negative = toward uncut ground)
+                OFFSET_X: 0.22,    // out from centre, in rig widths
+                SIZE:     2.0,     // grain scale against the debris texture
+                SHRINK:   0.85,    // barely: sand does not shrink in flight
+                DEPTH:    3.04,    // UNDER the machine (3.05–3.07), over the crops
+            },
+
+            // Grit and haze at the cutting face itself, falling back into the
+            // trench rather than being thrown clear of it.
+            FACE: {
+                QUANTITY: 2,
+                EVERY_MS: 45,
+                SPEED_MIN: 20,
+                SPEED_MAX: 90,
+                GRAVITY:  260,
+                SIZE:     1.1,
+                DUST_EVERY_MS: 110,
+                DUST_ALPHA: 0.45,
+            },
+
             DEBRIS_COLORS: [0x6e4a21, 0xa97537],
                                       // spoil chip tints across the spray: the
                                       // first (dominant) fills the middle, the

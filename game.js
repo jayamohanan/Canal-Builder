@@ -2357,7 +2357,8 @@ console.log(
                 .setDepth(CE.DEPTH !== undefined ? CE.DEPTH : 2.16)
                 .setVisible(false), seg);                // shown once digging starts
         }
-        const bore = { x, cut, belt, ctrl, shadow, cutEdge, edgeFrame: 0,
+        const spoil = this._makeSpoilEmitters(seg);
+        const bore = { x, cut, belt, ctrl, shadow, cutEdge, edgeFrame: 0, spoil,
                        beltDY, ctrlDY, shdDY, rigW: beltW,
                        edgeDY: (CE.Y_OFFSET || 0) * (this.tileGrid ? this.tileGrid.tile : 1) };
 
@@ -2377,7 +2378,7 @@ console.log(
             entryY, exitY, len, bladeLen, bodyH,
             progressPx: 0, earnedPx: 0, open: false, lastTime: 0, pulseT: 0,
             wet: 0,                          // how far the water has actually come
-            bore, maskShape, foam: foamGfx, crack, crackW: beltW, chips: [], debrisAcc: 0,
+            bore, maskShape, foam: foamGfx, crack, crackW: beltW,
             flood: this._buildFlood(seg, band),   // canal water (tilemap only)
             seg: seg || null,
             // A dig site built ahead (endless: the NEXT band, while the
@@ -2766,6 +2767,7 @@ console.log(
         // it sits completely dead: belt stopped, tracks stopped, no advance.
         if (remaining <= 0.01 || tn.pulseT <= 0) {
             this._setTrencherRunning(tn, false, false);
+            this._runSpoil(tn.bore, tn.entryY - tn.progressPx, false);
             return;
         }
 
@@ -2806,11 +2808,8 @@ console.log(
         // so its width still feeds the foam-finger layout.)
 
         // Soil chips off the face while cutting.
-        tn.debrisAcc += dt;
-        if (tn.debrisAcc > 0.04) {
-            tn.debrisAcc = 0;
-            this._spawnTunnelChip(b, faceY);
-        }
+        // Spoil: the emitters follow the cut line and run only while cutting.
+        this._runSpoil(b, faceY, true);
 
         if (tn.progressPx >= tn.len - 0.5) this._breakthrough();
     }
@@ -2890,68 +2889,101 @@ console.log(
         }
     }
 
-    // Spoil at the blade: soil augered off the face falls BEHIND the machine,
-    // down-screen against the direction of the dig — it can't spread sideways,
-    // the sides of the cut are right there. Chips rain from the blade onto the
-    // raw cut behind it, plus soft dust puffs sinking the same way. Everything
-    // is pooled — chips and puffs share one pool and just swap texture/tint.
-    _spawnTunnelChip(b, faceY) {
-        const tn   = this.tunnel;
-        const TN   = CONFIG.ROAD.TUNNEL;
-        const rigW = b.rigW;
-        const grab = (tex, depth) => {
-            const o = tn.chips.pop() ||
-                this._addB(this.add.image(0, 0, tex), tn.seg);
-            return o.setTexture(tex).setDepth(depth).setVisible(true);
+
+
+    // ── Spoil ────────────────────────────────────────────────────────────────
+    // Everything the machine throws off, as four PARTICLE EMITTERS rather than a
+    // sprite-and-tween per grain. At this density that distinction is the whole
+    // performance story: an emitter keeps its particles in a pre-allocated pool
+    // and steps them in one loop, where a tween each meant hundreds of objects a
+    // second being created and collected — the churn that costs frames on a
+    // low-end phone. Four emitters replace what was ~700 tweens per second.
+    //
+    //   sprayL / sprayR — the trench being emptied: soil flung clear to both
+    //                     sides at the cut line, arcing down under gravity
+    //   chips           — grit off the face itself, falling back into the cut
+    //   dust            — the haze that hangs at the face. The ONLY one that
+    //                     grows as it travels, because that is what dust does
+    //                     and what sand must not do
+    //
+    // They are created stopped and only run while the machine is actually
+    // cutting, so an idle or finished band emits nothing.
+    _makeSpoilEmitters(seg) {
+        const S  = CONFIG.ROAD.TUNNEL.SPRAY || {};
+        const TN = CONFIG.ROAD.TUNNEL;
+        const sc = this.layoutConfig.platformScale;
+        const px = (v) => v * sc;
+        const cols = TN.DEBRIS_COLORS || [0x6e4a21];
+
+        // One fan per side. Two emitters rather than one with a split angle: the
+        // sides need to be independently aimed, and it keeps each one's spread
+        // readable as a fan instead of a starburst.
+        const fan = (dir) => this._addB(this.add.particles(0, 0, 'debris_chip', {
+            // Aimed outward, with enough spread to read as a scatter.
+            angle:    dir > 0 ? { min: -28, max: 28 } : { min: 152, max: 208 },
+            speed:    { min: px(S.SPEED_MIN || 90), max: px(S.SPEED_MAX || 260) },
+            // Thrown, not floating: it slows sideways and accelerates downward.
+            gravityY: px(S.GRAVITY || 420),
+            lifespan: { min: S.LIFE_MIN || 320, max: S.LIFE_MAX || 620 },
+            // Barely shrinks — a grain does not get smaller in flight.
+            scale:    { start: S.SIZE || 2, end: (S.SIZE || 2) * (S.SHRINK || 0.85) },
+            // Holds its opacity, then goes: it lands rather than evaporating.
+            alpha:    { start: 1, end: 0, ease: 'Quart.easeIn' },
+            rotate:   { min: 0, max: 90 },        // varied square orientation
+            tint:     cols,
+            quantity: S.QUANTITY || 3,
+            frequency: S.EVERY_MS || 60,
+            emitting: false,
+        }).setDepth(S.DEPTH !== undefined ? S.DEPTH : 3.04), seg);
+
+        const D = TN.FACE || {};
+        return {
+            sprayL: fan(-1),
+            sprayR: fan(1),
+            // Grit off the cutting face, dropping back into the trench behind it.
+            chips: this._addB(this.add.particles(0, 0, 'debris_chip', {
+                angle:    { min: 60, max: 120 },
+                speed:    { min: px(D.SPEED_MIN || 20), max: px(D.SPEED_MAX || 90) },
+                gravityY: px(D.GRAVITY || 260),
+                lifespan: { min: 380, max: 760 },
+                scale:    { start: D.SIZE || 1.1, end: (D.SIZE || 1.1) * 0.5 },
+                alpha:    { start: 1, end: 0 },
+                rotate:   { min: 0, max: 90 },
+                tint:     cols,
+                quantity: D.QUANTITY || 2,
+                frequency: D.EVERY_MS || 45,
+                emitting: false,
+            }).setDepth(3.12), seg),
+            // The one thing that should billow.
+            dust: this._addB(this.add.particles(0, 0, 'dust_puff', {
+                angle:    { min: 55, max: 125 },
+                speed:    { min: px(10), max: px(45) },
+                lifespan: { min: 420, max: 780 },
+                scale:    { start: 0.5, end: 1.6 },      // dust grows; sand does not
+                alpha:    { start: D.DUST_ALPHA !== undefined ? D.DUST_ALPHA : 0.45, end: 0 },
+                tint:     TN.DUST_COLOR,
+                quantity: 1,
+                frequency: D.DUST_EVERY_MS || 110,
+                emitting: false,
+            }).setDepth(3.13), seg),
         };
-        const done = (o) => () => { o.setVisible(false); tn.chips.push(o); };
+    }
 
-        const cols = TN.DEBRIS_COLORS;
-        const midCol = cols[0], endCol = cols[cols.length - 1];
-        const n = 10 + Math.floor(Math.random() * 7);
-        for (let i = 0; i < n; i++) {
-            const off  = Math.random() - 0.5;          // -0.5..0.5 across the blade
-            const frac = Math.abs(off) * 2;            // 0 centre .. 1 at either end
-            // Squared so the middle colour dominates and the end tint only shows
-            // out at the two extremes of the spray.
-            const tint = this._lerpColor(midCol, endCol, frac * frac);
-            const chip = grab('debris_chip', 3.12)      // airborne: over the rig and its water
-                .setTint(tint)
-                .setAngle(Math.random() * 90)          // varied square orientation
-                .setPosition(b.x + off * rigW * 0.9,
-                             faceY + Math.random() * tn.bodyH * 0.5)
-                .setScale(0.8 + Math.random() * 0.8)
-                .setAlpha(1);
-            this.tweens.add({
-                targets:  chip,
-                x:        chip.x + (Math.random() - 0.5) * 4,
-                y:        chip.y + (14 + Math.random() * 26),
-                scale:    chip.scale * 0.5,
-                alpha:    0,
-                duration: 450 + Math.random() * 350,
-                ease:     'Quad.easeOut',
-                onComplete: done(chip),
-            });
-        }
-
-        if (Math.random() < 0.8) {
-            const puff = grab('dust_puff', 3.13)        // over the chips it kicks up
-                .setTint(TN.DUST_COLOR)
-                .setPosition(b.x + (Math.random() - 0.5) * rigW * 0.7,
-                             faceY + Math.random() * tn.bodyH * 0.4)
-                .setScale(0.6 + Math.random() * 0.4)
-                .setAlpha(0.55);
-            this.tweens.add({
-                targets:  puff,
-                x:        puff.x + (Math.random() - 0.5) * 5,
-                y:        puff.y + (10 + Math.random() * 12),
-                scale:    puff.scale * (2.2 + Math.random()),
-                alpha:    0,
-                duration: 450 + Math.random() * 300,
-                ease:     'Quad.easeOut',
-                onComplete: done(puff),
-            });
-        }
+    // Point the emitters at the machine and switch them on only while it cuts.
+    _runSpoil(b, faceY, cutting) {
+        const sp = b.spoil;
+        if (!sp) return;
+        const S  = CONFIG.ROAD.TUNNEL.SPRAY || {};
+        const sc = this.layoutConfig.platformScale;
+        // Thrown from the cut line, nudged the way the rig travels, and from just
+        // inside each flank — the rig itself hides where it leaves the belt.
+        const y = faceY + (S.OFFSET_Y || 0) * sc;
+        const x = b.rigW * (S.OFFSET_X !== undefined ? S.OFFSET_X : 0.22);
+        sp.sprayL.setPosition(b.x - x, y);
+        sp.sprayR.setPosition(b.x + x, y);
+        sp.chips.setPosition(b.x, faceY);
+        sp.dust.setPosition(b.x, faceY);
+        for (const e of [sp.sprayL, sp.sprayR, sp.chips, sp.dust]) e.emitting = cutting;
     }
 
     // The blade exits the far edge: retire the machines, then flood the last
@@ -2965,6 +2997,7 @@ console.log(
         tn.open = true;
 
         this._setTrencherRunning(tn, false, false);
+        this._runSpoil(tn.bore, tn.entryY - tn.progressPx, false);
         const parts = [tn.bore.belt, tn.bore.ctrl, tn.bore.shadow,
                        tn.bore.cutEdge].filter(Boolean);
         this.tweens.add({
