@@ -999,6 +999,10 @@ var CONFIG = {
         },
 
         WATER: {
+            AFTER_DIG:  true,      // hold the water until the dig is FINISHED,
+                                   // then flood the whole level in one run from
+                                   // the mouth. False = water chases the machine,
+                                   // LAG behind the belt, as it used to
             COLOR:      0x2f8fd0,  // the canal surface
             EDGE_COLOR: 0x7fd4f0,  // brighter shallows along each bank — a lit
                                    // rim that separates water from the earth wall

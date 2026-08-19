@@ -326,10 +326,13 @@ class GameScene extends Phaser.Scene {
         // coherent on their own — see TUNNEL.TRENCHER.
         if (CONFIG.ROAD && CONFIG.ROAD.ENABLED) {
             const TR = CONFIG.ROAD.TUNNEL.TRENCHER;
-            for (let i = 1; i <= (TR.FRAMES || 5); i++) {
-                this.load.image(`trencher_belt_${i}`, `graphics/trencher/belt/belt${i}.png`);
-                this.load.image(`trencher_ctrl_${i}`, `graphics/trencher/control_unit/control_unit${i}.png`);
-            }
+            // Each part's frames come from ONE sheet — a row of cells the size of
+            // that part, sliced by Phaser on load — so a loop is a single texture
+            // and a single request instead of five of each.
+            this.load.spritesheet('trencher_belt', 'graphics/trencher/belts.webp',
+                { frameWidth: TR.BELT_W, frameHeight: TR.BELT_H });
+            this.load.spritesheet('trencher_ctrl', 'graphics/trencher/control_units.webp',
+                { frameWidth: TR.CTRL_W, frameHeight: TR.CTRL_H });
             // One shadow for the whole rig — it never animates, it just rides
             // along under both parts.
             this.load.image('trencher_shadow', 'graphics/trencher/shadow.png');
@@ -340,10 +343,9 @@ class GameScene extends Phaser.Scene {
             // one fixed silhouette.
             this.load.image('cut_edge_1', 'graphics/cut-edge/cut-edge1.png');
             this.load.image('cut_edge_2', 'graphics/cut-edge/cut-edge2.png');
-            // A side-on view of the machine. Not placed anywhere at the moment —
-            // it sat beside the battery slots until the battery case took that
-            // row — but kept loaded for the next attempt at linking the two.
-            this.load.image('trencher_icon', 'graphics/trencher/trencher_icon.png');
+            // (the side-on trencher icon is gone — it sat beside the battery
+            //  slots until the battery case took that row, and the ghost rig
+            //  inside the case says the same thing from the machine's own art)
         }
 
         // Lily pads: 1 and 2 are single pads, 3 and 4 are ready-made clumps.
@@ -587,7 +589,7 @@ console.log(
             // right, that puts the control unit at the battery's east end and the
             // belt at its west.
             const D = P.TRENCHER_DECO || {};
-            if (D.ENABLED !== false && this.textures.exists('trencher_belt_1')) {
+            if (D.ENABLED !== false && this.textures.exists('trencher_belt')) {
                 const TR    = CONFIG.ROAD.TUNNEL.TRENCHER;
                 const ahead = TR.AHEAD_FRAC !== undefined ? TR.AHEAD_FRAC : 0.4;
                 // Both parts' offsets from the dig line, in the art's own pixels.
@@ -606,14 +608,14 @@ console.log(
                 // control unit at the terminal end, -90 at the far end.
                 const a  = (D.ANGLE !== undefined ? D.ANGLE : 90) * Math.PI / 180;
                 const ux = Math.sin(a), uy = -Math.cos(a);
-                const put = (tex, dy, sw, sh) => this.add.image(
-                        cx + ux * (mid - dy) * k, slotY + uy * (mid - dy) * k, tex)
+                const put = (tex, dy, sw, sh, frame) => this.add.image(
+                        cx + ux * (mid - dy) * k, slotY + uy * (mid - dy) * k, tex, frame)
                     .setDisplaySize(sw * k, sh * k)
                     .setAngle(D.ANGLE !== undefined ? D.ANGLE : 90)
                     .setAlpha(D.ALPHA !== undefined ? D.ALPHA : 0.2)
                     .setDepth(D.DEPTH !== undefined ? D.DEPTH : 2.7);
-                this.trencherGhost = [put('trencher_ctrl_1', ctrlDY, TR.CTRL_W, TR.CTRL_H),
-                                      put('trencher_belt_1', beltDY, TR.BELT_W, TR.BELT_H)];
+                this.trencherGhost = [put('trencher_ctrl', ctrlDY, TR.CTRL_W, TR.CTRL_H, 0),
+                                      put('trencher_belt', beltDY, TR.BELT_W, TR.BELT_H, 0)];
             }
         }
 
@@ -2329,14 +2331,14 @@ console.log(
             .setScale(tsc).setFlipY(flip)
             .setAlpha(TR.SHADOW_ALPHA !== undefined ? TR.SHADOW_ALPHA : 1)
             .setDepth(TR.DEPTH_SHADOW !== undefined ? TR.DEPTH_SHADOW : 1.522), seg);
-        const belt = this._addB(this.add.sprite(x, entryY + beltDY, 'trencher_belt_1')
+        const belt = this._addB(this.add.sprite(x, entryY + beltDY, 'trencher_belt', 0)
             .setDisplaySize(beltW, beltH).setFlipY(flip)
             .setDepth(TR.DEPTH_BELT !== undefined ? TR.DEPTH_BELT : 1.524), seg);
-        const ctrl = this._addB(this.add.sprite(x, entryY + ctrlDY, 'trencher_ctrl_1')
+        const ctrl = this._addB(this.add.sprite(x, entryY + ctrlDY, 'trencher_ctrl', 0)
             .setDisplaySize(ctrlW, ctrlH).setFlipY(flip)
             .setDepth(TR.DEPTH_CTRL !== undefined ? TR.DEPTH_CTRL : 1.523), seg);
-        belt.play('trencher_belt'); belt.anims.pause();
-        ctrl.play('trencher_ctrl'); ctrl.anims.pause();
+        belt.play('trencher_belt_run'); belt.anims.pause();
+        ctrl.play('trencher_ctrl_run'); ctrl.anims.pause();
 
         // ── The torn lip at the dig line ──────────────────────────────────────
         // The reveal itself is a straight crop — it has to be, the machine's
@@ -2607,24 +2609,25 @@ console.log(
         }
     }
 
-    // The two trencher loops, built once and shared by every segment's rig.
-    // Each part's frames are separate images (not a sheet), so the animation is
-    // an explicit frame list. Both loop forever; the machine drives them by
-    // pausing/resuming, never by restarting — a resumed loop carries on from
-    // the frame it stopped on, which is what makes a stall read as a stall.
+    // The two trencher loops, built once and shared by every segment's rig. Each
+    // is a row of frames in its own sheet, so an animation is just that texture's
+    // frame numbers. Both loop forever; the machine drives them by pausing and
+    // resuming, never by restarting — a resumed loop carries on from the frame it
+    // stopped on, which is what makes a stall read as a stall.
+    //
+    // The animation keys carry `_run` because a texture and an animation cannot
+    // share a name, and the textures own the plain ones.
     _makeTrencherAnims() {
-        if (this.anims.exists('trencher_belt')) return;
+        if (this.anims.exists('trencher_belt_run')) return;
         const TR = CONFIG.ROAD.TUNNEL.TRENCHER;
-        const n  = TR.FRAMES || 5;
-        const list = (prefix) => {
-            const f = [];
-            for (let i = 1; i <= n; i++) f.push({ key: `${prefix}${i}` });
-            return f;
-        };
-        this.anims.create({ key: 'trencher_belt', frames: list('trencher_belt_'),
-                            frameRate: TR.BELT_FPS || 12, repeat: -1 });
-        this.anims.create({ key: 'trencher_ctrl', frames: list('trencher_ctrl_'),
-                            frameRate: TR.CTRL_FPS || 12, repeat: -1 });
+        const last = (TR.FRAMES || 5) - 1;
+        const loop = (key, tex, fps) => this.anims.create({
+            key,
+            frames: this.anims.generateFrameNumbers(tex, { start: 0, end: last }),
+            frameRate: fps, repeat: -1,
+        });
+        loop('trencher_belt_run', 'trencher_belt', TR.BELT_FPS || 12);
+        loop('trencher_ctrl_run', 'trencher_ctrl', TR.CTRL_FPS || 12);
     }
 
     // Belt runs only while the machine is actually cutting; the control unit
@@ -2833,6 +2836,12 @@ console.log(
     // passes the full length); by default it's the blade's position less LAG.
     _advanceWater(tn, dt, time, limit) {
         const WA  = CONFIG.ROAD.WATER;
+        // AFTER_DIG holds the water back until the trench is finished, so the
+        // level is cut dry and then flooded in one run from the mouth.
+        // `flooding` is set at breakthrough and is the only thing that lifts the
+        // hold. Everything downstream — branches, crops, ponds, foam, the bank
+        // streaks — keys off the waterline, so freezing it here is all it takes.
+        if (WA.AFTER_DIG && !tn.flooding) return;
         const lag = tn.bladeLen * (WA.LAG !== undefined ? WA.LAG : 1);
         const target = limit !== undefined
             ? limit
