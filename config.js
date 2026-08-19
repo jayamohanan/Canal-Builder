@@ -881,17 +881,17 @@ var CONFIG = {
                                    //  measured from the reveal line either way)
 
                 // ── Shadow ────────────────────────────────────────────────
-                // graphics/trencher/shadow.png is ONE shadow for the whole rig
-                // (454×1266 in the same source-px space as the two parts), so
-                // it needs no size of its own — it rides the same ratio as
+                // graphics/trencher/shadow.png is ONE shadow for the whole rig,
+                // authored in the same source-px space as the two parts, so it
+                // needs no size of its own — it rides the same ratio as
                 // everything else. It never animates; it just travels with the
                 // machine.
-                // Placed in two steps, exactly as it was authored: put the
-                // image's CENTRE on the dig line + SHADOW_Y, then slide it by
-                // the offset. Both steps are source px on the same ratio.
-                SHADOW_Y:     -80, // step 1: centre, +y from the dig line
-                SHADOW_OFF_X: 40,  // step 2: the authored 46,31 offset
-                SHADOW_OFF_Y: 15,
+                // The shadow is pinned by its TOP-LEFT corner to the control
+                // unit's top-left corner. Its lean is drawn into the art, so no
+                // offset is needed — these two are a correction to the art if it
+                // ever sits a pixel out, not part of the placement.
+                SHADOW_OFF_X: 0,
+                SHADOW_OFF_Y: 0,
                 SHADOW_ALPHA: 1,   // the art carries its own softness; this is
                                    // just a global knock-back if it reads heavy
                 DEPTH_SHADOW: 3.05,   // under both parts, over the crops

@@ -2312,13 +2312,20 @@ console.log(
         const flip = !!TR.FLIP_Y;
         // The rig's shadow: one still image for both parts, sized by the same
         // ratio (its art is authored in the same source-px space, so a plain
-        // scale is all it needs) and hung off the dig line like everything
-        // else. Drawn under both parts, still over the trench tile.
-        // Two steps, as authored: centre it SHADOW_Y past the dig line, then
-        // slide it by the offset.
+        // scale is all it needs) and hung off the dig line like everything else.
+        //
+        // It is pinned by its TOP-LEFT CORNER to the control unit's top-left
+        // corner. The lean of the shadow is drawn into the art, so there is no
+        // offset to tune here — anchoring both by the same corner is what keeps
+        // the art's own geometry intact. Any nudge is a correction to the art,
+        // not part of the placement.
         const shdDX = (TR.SHADOW_OFF_X || 0) * tsc;
-        const shdDY = ((TR.SHADOW_Y || 0) + (TR.SHADOW_OFF_Y || 0)) * tsc;
-        const shadow = this._addB(this.add.image(x + shdDX, entryY + shdDY, 'trencher_shadow')
+        const shdDY = (TR.SHADOW_OFF_Y || 0) * tsc;
+        const shadow = this._addB(this.add.image(
+                x - ctrlW / 2 + shdDX,                     // control unit's left edge
+                entryY + ctrlDY - ctrlH / 2 + shdDY,       // and its top edge
+                'trencher_shadow')
+            .setOrigin(0, 0)                               // measured from that corner
             .setScale(tsc).setFlipY(flip)
             .setAlpha(TR.SHADOW_ALPHA !== undefined ? TR.SHADOW_ALPHA : 1)
             .setDepth(TR.DEPTH_SHADOW !== undefined ? TR.DEPTH_SHADOW : 1.522), seg);
@@ -2359,7 +2366,9 @@ console.log(
         }
         const spoil = this._makeSpoilEmitters(seg);
         const bore = { x, cut, belt, ctrl, shadow, cutEdge, edgeFrame: 0, spoil,
-                       beltDY, ctrlDY, shdDY, rigW: beltW,
+                       beltDY, ctrlDY, rigW: beltW,
+                       // the shadow rides the control unit's top edge
+                       shdDY: ctrlDY - ctrlH / 2 + shdDY,
                        edgeDY: (CE.Y_OFFSET || 0) * (this.tileGrid ? this.tileGrid.tile : 1) };
 
         // No grass overlay in tile-map mode — the base layer already shows
