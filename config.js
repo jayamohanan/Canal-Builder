@@ -371,6 +371,9 @@ var CONFIG = {
             // plain ground, so short levels read as a field with open land
             // beyond it rather than leaving a hole between levels.
             LEVELS: [
+                { FILE: 'level_maps/new_level.tmj' },
+                 { FILE: 'level_maps/level_01.tmj' },
+                { FILE: 'level_maps/level_02.tmj' },
                  {
                     FILE: 'level_maps/level_03.tmj',
                     // Which pond art this level's markers stand for. The KEY is
@@ -379,8 +382,7 @@ var CONFIG = {
                     // — paint pond A, decide here which pond it is.
                     PONDS: { 1: 'pond1_dry', 2: 'pond2_dry' },
                 },
-                { FILE: 'level_maps/level_01.tmj' },
-                { FILE: 'level_maps/level_02.tmj' },
+               
                
             ],
             FILE:    'level_maps/level_01.tmj',   // fallback when LEVELS is empty
@@ -476,6 +478,33 @@ var CONFIG = {
                 },
             },
             SHEET:   'graphics/tilesheets/canals.webp',
+
+            // ── Which Tiled tileset is which texture ──────────────────────
+            // A map records its tilesets by FILE NAME and firstgid; the .tsx
+            // itself is never loaded, so this table is how the game learns what
+            // art a tileset stands for. Keyed by the .tsx's file name.
+            //
+            //   IMAGE — load this sheet under KEY. Omit it to reuse a sheet some
+            //           other entry already loaded (two tilesets, same art).
+            //   KEY   — the texture to draw that tileset's tiles from.
+            //   CANAL — true if its tiles carry canal MEANINGS (see TILES).
+            //
+            // A tileset with NO entry here is never drawn: markers, decor sheets
+            // used only in the editor, and anything left over. That is why a
+            // redundant tileset costs nothing — it simply is not listed.
+            //
+            // Order does not matter, here or in Tiled: a gid is resolved against
+            // whichever tileset's range contains it, in that map, by name.
+            TILESETS: {
+                'canal.tsx':   { IMAGE: 'graphics/tilesheets/canals.webp',
+                                 KEY: 'canal_sheet', CANAL: true },
+                // Same art as canal.tsx (byte-identical file), so it reuses that
+                // texture rather than costing a second 6.8 MB upload. Give it its
+                // own IMAGE the day the two sheets actually differ.
+                'copy.tsx':    { KEY: 'canal_sheet', CANAL: true },
+                'terrain.tsx': { IMAGE: 'graphics/tilesheets/terrain.webp',
+                                 KEY: 'terrain' },
+            },
             FRAME:   128,           // frame size in the sheet
             MAIN_TILES: 2,          // the main canal is this many tiles wide
 
@@ -502,23 +531,31 @@ var CONFIG = {
             // makes each field read as a different farm. Add a sheet to
             // graphics/crops/ and its name here to extend the rotation.
             // ── THE CROP ROTATION — edit this list, nothing else ──────────
-            // File names in graphics/crops/, in PLAY ORDER: entry 1 is level 1,
-            // entry 2 is level 2, and it wraps at the end. Any image type works;
-            // a bare name with no extension is read as .png.
+            // Crop NAMES, in PLAY ORDER: entry 1 is level 1, entry 2 is level 2,
+            // and it wraps at the end. Each name is a sheet in CROP_DIR with the
+            // CROP_EXT extension — every crop is a webp, so the extension is not
+            // repeated eight times here.
             //
-            // Adding a crop:   drop the sheet in graphics/crops/, add its file
-            //                  name here.
+            // Adding a crop:   drop <name>.webp in graphics/crops/, add <name>.
             // Testing a crop:  move it to the FRONT — it plays on level 1 instead
             //                  of waiting for the rotation to come round.
-            // Every sheet is one row of CROP_STAGES frames of equal width.
+            // Every sheet is one row of CROP_STAGES frames of equal width
+            // (640x256 = five 128x256 stages, as they all are today).
             CROP_CYCLE: [
-                'grass2.webp',
-                'grass.webp',
-                'tomato.png',
-                'mango.png',
-                'grape.png',
+                'green_bean',
+                'hops',
+                'grape_vine',
+                'grass2',
+                'grass',
+                'tomato',
+                'mango',
+                'grape',
                 
             ],
+            CROP_DIR: 'graphics/crops/',
+            CROP_EXT: '.webp',   // every crop sheet is a webp, so the list above
+                                 // is plain NAMES. An entry may still spell out
+                                 // its own extension if one ever differs.
             CROP:         'tomato.png',  // fallback when CROP_CYCLE is empty
             CROP_STAGES:  5,
             CROP_GROW_MS: 2000,     // time between growth stages
@@ -776,21 +813,78 @@ var CONFIG = {
             // the 2-wide main canal (main-canal tiles only). Tiles with no entry
             // (e.g. grass 55) are treated as non-canal.
             TILES: {
-                // main canal (on the main_canal_dry layer)
-                33: { conn: 'ns',  main: 'L' },   // main-left straight
-                51: { conn: 'ns',  main: 'R' },   // main-right straight
-                35: { conn: 'nsw', main: 'L' },   // main-left + west branch
-                49: { conn: 'nse', main: 'R' },   // main-right + east branch
-                // branches (on the base layer)
-                3:  { conn: 'ews' },              // T, branch down
-                5:  { conn: 'ew'  },              // horizontal
-                13: { conn: 'enw' },              // T, branch up
-                15: { conn: 'ns'  },              // vertical
-                19: { conn: 'nw'  },              // corner
-                23: { conn: 'e'   },              // west end (opens E)
-                25: { conn: 'n'   },              // vertical end (opens N)
-                27: { conn: 's'   },              // vertical end (opens S)
-                29: { conn: 'w'   },              // east end (opens W)
+                // gid → what that canal piece IS. The key is the tile's position
+                // in the canal sheet counting from 1 — which is also the gid Tiled
+                // shows when that sheet is first in a map — so the same entry
+                // serves any sheet holding this art, wherever its gids start.
+                //
+                // conn = the edges the channel opens onto, so the flood knows
+                // where water can leave. main = which half of the two-cell main
+                // canal: L is the west half, R the east.
+                //
+                // Taken from the sheet's own tile names: the letters after the
+                // last underscore ARE the openings, which is why every entry here
+                // matches its comment. Only DRY tiles are listed — each one's
+                // water twin is the very next frame (FLOW_OFFSET), so it needs no
+                // entry of its own.
+                //
+                // Sizes: main is two cells across, branch one, minor one with a
+                // half-width channel. The flood treats branch and minor alike;
+                // only main is special, because the dig runs down it.
+                // ── branch — one cell wide ──────────────────────────────
+                1:  { conn: 'es' },              // branch_es
+                3:  { conn: 'esw' },             // branch_esw
+                5:  { conn: 'ew' },              // branch_ew
+                7:  { conn: 'ne' },              // branch_ne
+                9:  { conn: 'nes' },             // branch_nes
+                11: { conn: 'nesw' },            // branch_nesw
+                13: { conn: 'new' },             // branch_new
+                15: { conn: 'ns' },              // branch_ns
+                17: { conn: 'nsw' },             // branch_nsw
+                19: { conn: 'nw' },              // branch_nw
+                21: { conn: 'sw' },              // branch_sw
+                23: { conn: 'e' },               // branch_e
+                25: { conn: 'n' },               // branch_n
+                27: { conn: 's' },               // branch_s
+                29: { conn: 'w' },               // branch_w
+                // ── main — two cells wide, L is the west half and R the east 
+                31: { conn: 'n', main: 'L' },    // main_e_n
+                33: { conn: 'ns', main: 'L' },   // main_e_ns
+                35: { conn: 'nsw', main: 'L' },  // main_e_nsw
+                37: { conn: 'nw', main: 'L' },   // main_e_nw
+                39: { conn: 's', main: 'L' },    // main_e_s
+                41: { conn: 'sw', main: 'L' },   // main_e_sw
+                43: { conn: 'es', main: 'R' },   // main_w_es
+                45: { conn: 'n', main: 'R' },    // main_w_n
+                47: { conn: 'ne', main: 'R' },   // main_w_ne
+                49: { conn: 'nes', main: 'R' },  // main_w_nes
+                51: { conn: 'ns', main: 'R' },   // main_w_ns
+                53: { conn: 's', main: 'R' },    // main_w_s
+                // ── where two sizes meet ────────────────────────────────
+                55: { conn: 'nsw', main: 'L' },  // MainV2MinorH_Dry_e_nsw
+                57: { conn: 'nes', main: 'R' },  // MainV2MinorH_Dry_w_nes
+                59: { conn: 'nsw' },             // BranchV2MinorH_Dry_nsw
+                61: { conn: 'nes' },             // BranchV2MinorH_Dry_nes
+                63: { conn: 'nesw' },            // BranchV2MinorH_Dry_nesw
+                65: { conn: 'new' },             // BranchH2MinorV_Dry_new
+                67: { conn: 'esw' },             // BranchH2MinorV_Dry_esw
+                69: { conn: 'nesw' },            // BranchH2MinorV_Dry_nesw
+                // ── minor — one cell, half-width channel ────────────────
+                71: { conn: 'e' },               // minor_e
+                73: { conn: 'w' },               // minor_w
+                75: { conn: 's' },               // minor_s
+                77: { conn: 'n' },               // minor_n
+                79: { conn: 'es' },              // minor_es
+                81: { conn: 'ew' },              // minor_ew
+                83: { conn: 'esw' },             // minor_esw
+                85: { conn: 'sw' },              // minor_sw
+                87: { conn: 'ns' },              // minor_ns
+                89: { conn: 'nes' },             // minor_nes
+                91: { conn: 'nesw' },            // minor_nesw
+                93: { conn: 'nsw' },             // minor_nsw
+                95: { conn: 'ne' },              // minor_ne
+                97: { conn: 'new' },             // minor_new
+                99: { conn: 'nw' },              // minor_nw
             },
         },
 

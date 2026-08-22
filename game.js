@@ -370,14 +370,19 @@ class GameScene extends Phaser.Scene {
             for (const name of this._pondArt()) {
                 this.load.image(`pond_${name}`, `${pondDir}${name}.png`);
             }
-            // One spritesheet of 128px frames — dry AND water-filled tiles are
-            // all frames in it; TILES maps gids to meaning + filled frame.
-            this.load.spritesheet('canal_sheet', TM.SHEET,
-                { frameWidth: TM.FRAME, frameHeight: TM.FRAME });
-            // Ground, flat water and the growth overlays live on their own
-            // sheet — the canal sheet is canal pieces only.
-            if (TM.TERRAIN) this.load.spritesheet('terrain', TM.TERRAIN,
-                { frameWidth: TM.FRAME, frameHeight: TM.FRAME });
+            // Every tile sheet the TILESETS table names — 128px frames, dry AND
+            // water-filled tiles all in the same sheet. An entry without an IMAGE
+            // shares a texture some other entry loads, so nothing is fetched or
+            // uploaded twice.
+            const sheets = new Map();
+            for (const def of Object.values(TM.TILESETS || {})) {
+                if (def && def.IMAGE && def.KEY) sheets.set(def.KEY, def.IMAGE);
+            }
+            if (!sheets.has('canal_sheet') && TM.SHEET) sheets.set('canal_sheet', TM.SHEET);
+            if (!sheets.has('terrain') && TM.TERRAIN)    sheets.set('terrain', TM.TERRAIN);
+            for (const [key, url] of sheets) {
+                this.load.spritesheet(key, url, { frameWidth: TM.FRAME, frameHeight: TM.FRAME });
+            }
             // Crop growth stages: one sheet per crop, a single row of
             // CROP_STAGES uniform frames. Loaded as plain images; the frame
             // size is derived from each at build (width / stages, full
@@ -844,9 +849,10 @@ console.log(
             const l = map.layers.find((x) => x.name === name);
             return l ? l.data : null;
         };
-        // The spritesheet frame for a gid is (gid - firstgid); TILES gives each
-        // gid its meaning. The water-filled twin is FLOW_OFFSET later.
-        this.tileFirstGid = map.tilesets[0].firstgid;
+        // How this map's gids resolve to art. Built per map, because firstgid is
+        // a property of the MAP, not of the tileset: the same sheet can start at
+        // a different number in every level, and does.
+        this.tileSets = this._tilesetsOf(map);
         this.tileMeta = TM.TILES || {};
         return {
             cols, rows, tile,
@@ -862,6 +868,43 @@ console.log(
             ponds:      (this._levelDef(levelIndex) || {}).PONDS || {},
             mainLeftCol: mainRightCol - (mainW - 1), mainRightCol, mainW,
         };
+    }
+
+    // A map's tilesets, resolved against the TILESETS table and sorted so the
+    // highest firstgid comes first — which makes finding a gid's sheet a walk
+    // down the list until one starts at or below it.
+    //
+    // Tilesets with no table entry are kept, marked undrawable: their gids then
+    // resolve to "nothing" instead of being mistaken for another sheet's frame,
+    // which is what made a duplicate tileset draw garbage before.
+    _tilesetsOf(map) {
+        const table = (CONFIG.ROAD.TILEMAP.TILESETS) || {};
+        return (map.tilesets || [])
+            .map((t) => {
+                const file = String(t.source || t.name || '').split('/').pop();
+                const def  = table[file] || null;
+                return { file, firstgid: t.firstgid, key: def && def.KEY, canal: !!(def && def.CANAL) };
+            })
+            .sort((a, b) => b.firstgid - a.firstgid);
+    }
+
+    // gid → which sheet, and which frame within it. Returns null for a gid from
+    // a sheet the game does not draw (markers, editor-only decor, leftovers).
+    _tileOf(gid) {
+        if (!gid || !this.tileSets) return null;
+        for (const ts of this.tileSets) {
+            if (gid < ts.firstgid) continue;
+            if (!ts.key) {                       // a real tileset, just not drawn
+                if (!this._warnedSets) this._warnedSets = new Set();
+                if (!this._warnedSets.has(ts.file)) {
+                    this._warnedSets.add(ts.file);
+                    console.warn(`[tilemap] "${ts.file}" has no TILESETS entry — its tiles are not drawn`);
+                }
+                return null;
+            }
+            return { key: ts.key, frame: gid - ts.firstgid, canal: ts.canal, local: gid - ts.firstgid };
+        }
+        return null;
     }
 
     // Register a display object as pannable WORLD content: hidden from the
@@ -1020,10 +1063,16 @@ console.log(
                 for (let col = 0; col < g.cols; col++) {
                     const gid = data[row * g.cols + col];
                     if (!gid) continue;
+                    // Ground always draws the one terrain frame, so its gid is
+                    // never resolved; a branch tile draws from whichever sheet it
+                    // was painted with.
+                    const t = fixed !== null ? null : this._tileOf(gid);
+                    if (fixed === null && !t) continue;      // not a drawable sheet
                     const spr = this._addB(this.add.image(
                             g.left + (col + 0.5) * g.tile,
                             gTop   + (row + 0.5) * g.tile,
-                            tex, fixed !== null ? fixed : gid - this.tileFirstGid)
+                            fixed !== null ? tex : t.key,
+                            fixed !== null ? fixed : t.frame)
                         // +1px so neighbours overlap and no sub-pixel gap shows.
                         .setDisplaySize(g.tile + 1, g.tile + 1)
                         .setDepth(depth), seg);
@@ -1344,8 +1393,12 @@ console.log(
 
     // Where a crop's sheet lives.
     _cropFile(entry) {
-        const f = String(entry);
-        return `graphics/crops/${/\.[^.]+$/.test(f) ? f : f + '.png'}`;
+        const TM = CONFIG.ROAD.TILEMAP;
+        const f  = String(entry);
+        // Crops are all one format now, so the list carries plain NAMES and the
+        // extension comes from config. An entry that does name its own extension
+        // is still honoured, so a one-off in another format costs nothing.
+        return `${TM.CROP_DIR || 'graphics/crops/'}${/\.[^.]+$/.test(f) ? f : f + (TM.CROP_EXT || '.webp')}`;
     }
 
     // Which crop the level being built right now grows. segIndex is the
@@ -1590,9 +1643,16 @@ console.log(
     // frame from a simple per-cell fill model, so nothing pops in whole.
 
     // Open edges of a gid, from the TILES metadata (conn string, e.g. 'nsw').
+    // A canal tile's meaning, from the TILES table. The table is written in the
+    // canal sheet's own numbering — the gids you see in Tiled when that sheet is
+    // first, starting at 1 — so a tile from ANY canal-family sheet resolves to
+    // the same meaning regardless of where that sheet happens to start in this
+    // map. Tiles from non-canal sheets have no meaning and open no edges.
     _connOfGid(gid) {
         const c = { n: false, e: false, s: false, w: false };
-        const m = this.tileMeta && this.tileMeta[gid];
+        const t = this._tileOf(gid);
+        if (!t || !t.canal) return c;
+        const m = this.tileMeta && this.tileMeta[t.local + 1];
         if (m && m.conn) for (const ch of m.conn) if (ch in c) c[ch] = true;
         return c;
     }
@@ -1610,11 +1670,18 @@ console.log(
         const gTop = band.bandTop;
         const off  = CONFIG.ROAD.TILEMAP.FLOW_OFFSET || 1;
         const cells = new Map();
-        const sprite = (gid, c, r, depth) => this._addB(this.add.image(
-                g.left + c * g.tile, gTop + r * g.tile,
-                'canal_sheet', gid - this.tileFirstGid)
-            .setOrigin(0, 0).setDisplaySize(g.tile + 1, g.tile + 1)   // +1px overlap
-            .setDepth(depth).setVisible(false), seg);
+        // `plus` is FLOW_OFFSET for the water-filled twin, which sits that many
+        // frames on in the SAME sheet — so it is added to the local frame, not to
+        // the gid, and works whichever sheet the tile came from.
+        const sprite = (gid, c, r, depth, plus) => {
+            const t = this._tileOf(gid);
+            if (!t) return null;
+            return this._addB(this.add.image(
+                    g.left + c * g.tile, gTop + r * g.tile,
+                    t.key, t.frame + (plus || 0))
+                .setOrigin(0, 0).setDisplaySize(g.tile + 1, g.tile + 1)   // +1px overlap
+                .setDepth(depth).setVisible(false), seg);
+        };
 
         for (let r = 0; r < g.rows; r++) {
             for (let c = 0; c < g.cols; c++) {
@@ -1631,8 +1698,8 @@ console.log(
                         // Nothing green ever overlaps a main-canal cell — crop
                         // art is one tile wide and the canal's neighbours above
                         // are canal too — so raising it costs nothing.
-                        dry:  sprite(mainGid,       c, r, 1.52),  // above ground + branch
-                        flow: sprite(mainGid + off, c, r, this._mainDepth()),
+                        dry:  sprite(mainGid, c, r, 1.52),      // above ground + branch
+                        flow: sprite(mainGid, c, r, this._mainDepth(), off),
                     });
                     continue;
                 }
@@ -1647,7 +1714,7 @@ console.log(
                     cells.set(c + ',' + r, {
                         col: c, row: r, conn: bConn, progress: 0, isEnd: nConn === 1,
                         entryDir: null, filling: false, filled: false, isMain: false,
-                        dry: null, flow: sprite(branchGid + off, c, r, 1.55),
+                        dry: null, flow: sprite(branchGid, c, r, 1.55, off),
                     });
                 }
             }
