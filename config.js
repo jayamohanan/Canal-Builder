@@ -30,7 +30,7 @@ var CONFIG = {
     DEBUG_PERF: true,        // log object / tween / timer / texture counts each
                              // time the world rebases (once per level). Climbing
                              // numbers = something is outliving its band
-    BATTERY_START_LEVEL: 1,
+    BATTERY_START_LEVEL: 3,
     BATTERY_IMAGE_EXTENSIONS: ['svg', 'png', 'jpg', 'webp'],
 
     // BACKGROUND: {
@@ -511,13 +511,54 @@ var CONFIG = {
             // ── Terrain sheet ───────────────────────────────────────────────
             // Everything that is NOT a canal piece: the plain ground, the flat
             // water the flow head is drawn from, and the two growth overlays.
-            // The canal sheet now carries only canal tiles (gid ≤ 53); nothing
-            // reads past that. 5 columns × 4 rows of 128px frames, so a frame
-            // is (row-1) * 5 + (col-1).
+            // The canal sheet now carries only canal tiles (gid <= 53); nothing
+            // reads past that. The sheet is 768x512 = 6 columns x 4 rows of
+            // 128px frames, so a frame index is (row-1) * 6 + (col-1) and each
+            // ROW is exactly the six edge variants one overlay needs.
             TERRAIN: 'graphics/tilesheets/terrain.webp',
-            TERRAIN_GROUND: 0,      // row 1, col 1 — the field's base tile
+            TERRAIN_GROUND: 0,      // row 1, col 1 — the field's base tile, dry
             TERRAIN_WATER:  1,      // row 1, col 2 — flat water; the flow head
                                     // and its foam blobs are cut from this
+            TERRAIN_GROUND_WET: 6,  // row 2, col 1 — the same ground, watered, and
+                                    // the FIRST of that row's six edge variants.
+                                    // Row 2 reads inner / n / ne / ns / nes /
+                                    // nesw exactly like every other overlay row,
+                                    // so CROP_OVERLAY_EDGES describes it too and
+                                    // rotation reaches the other ten cases
+
+            // ── Watered ground ──────────────────────────────────────────────
+            // Irrigation should be VISIBLE in the soil, not only in the ditch:
+            // as the canal fills, the land it feeds darkens tile by tile, so
+            // the wet colour spreads outward from the water instead of the
+            // field staying uniformly dry around a full canal.
+            //
+            // Only PLANTED cells wet — the ones marked on the CROPS layer. Bare
+            // land is not being irrigated, so the wet colour ends up marking the
+            // worked field exactly, and its outline is the crop patch's outline.
+            //
+            // Each planted tile is bound at build time to its NEAREST canal
+            // cell(s) by Manhattan distance — all of them at that distance, not
+            // just the first found — and turns the moment ANY of them wets, so
+            // a tile lying between two ditches turns for whichever fills first
+            // rather than waiting on one arbitrary winner.
+            //
+            // The wet tile is drawn with a RAGGED edge on every side facing land
+            // that is still dry and a straight one where the wet region carries
+            // on, and that mask is RE-CUT as neighbours catch up — an early tile
+            // starts as a lone ragged patch and its sides straighten one by one.
+            // Deciding the mask once at build would draw the finished patch's
+            // outline from the first moment and the spread would read as a hard
+            // square block growing.
+            GROUND_WET: {
+                ENABLED: true,
+                AT:      0.15,      // canal fill fraction that counts as "the
+                                    // water has arrived" — the same threshold
+                                    // the crops start growing on (CROP_WET), so
+                                    // soil and plant react to the same moment
+                FADE_MS: 450,       // cross-fade into the wet tile. 0 = a hard
+                                    // swap, which pops: a whole neighbourhood of
+                                    // tiles can cross AT on the same frame
+            },
 
             // ── Crops ───────────────────────────────────────────────────────
             // A crop grows on every field (grass) cell. Its seed shows from the
@@ -542,13 +583,15 @@ var CONFIG = {
             // Every sheet is one row of CROP_STAGES frames of equal width
             // (640x256 = five 128x256 stages, as they all are today).
             CROP_CYCLE: [
+                'mango',
+                'tomato',
                 'green_bean',
                 'hops',
                 'grape_vine',
                 'grass2',
                 'grass',
-                'tomato',
-                'mango',
+                
+                
                 'grape',
                 
             ],
@@ -621,6 +664,14 @@ var CONFIG = {
             //     not a darkening of it, so it should cover rather than tint
             // Frames are on the TERRAIN sheet, not the canal one. `frame` is the
             // FIRST of six consecutive edge variants — see CROP_OVERLAY_EDGES.
+            CROP_OVERLAY_ENABLED: false,
+                                    // TEMPORARILY OFF — the damp and mossy
+                                    // patches are hidden while the watered
+                                    // GROUND tile (GROUND_WET) is being judged
+                                    // on its own; the two were stacking on the
+                                    // same cells. The definitions below are kept
+                                    // intact: flip this back to true to restore
+                                    // them exactly as they were.
             CROP_OVERLAY: {
                 2: { frame: 12, blend: 'MULTIPLY', alpha: 1 },   // damp  — row 3
                 4: { frame: 18, blend: 'NORMAL',   alpha: 1 },   // mossy — row 4
@@ -637,13 +688,31 @@ var CONFIG = {
             CROP_OVERLAY_EDGES: [0, 1, 3, 5, 7, 15],
                                     // (the flow head's water now comes from
                                     // TERRAIN_WATER above, not the canal sheet)
-            SPLIT_AT:     0.3,      // how far the water must get into a junction
+            SPLIT_AT:     0.6,     // how far the water must get into a junction
                                     // tile before a side branch starts, as a
-                                    // fraction of the tile. 0.5 = the tile's
-                                    // centre; lower starts the branch sooner, so
-                                    // the water is seen to divide while it is
-                                    // still crossing rather than looking held
-                                    // back until the tile is full
+                                    // fraction of the tile.
+                                    //
+                                    // 0.5 is the tile's CENTRE, where every arm
+                                    // of a canal piece meets — the floor for this
+                                    // value, not a preference. Below it the next
+                                    // cell starts while the arm feeding it is
+                                    // still dry, leaving a gap of unwatered
+                                    // channel between the two: most visible on a
+                                    // bend, whose only exit counts as a side arm
+                                    // and so always fires early.
+                                    //
+                                    // Above 0.5 the arm is already wet and the
+                                    // branch simply waits, which reads as the
+                                    // water taking a moment to turn. 0.75 is
+                                    // three quarters across — arm well filled
+                                    // before anything leaves it.
+                                    //
+                                    // It was 0.3 while the head existed: the head
+                                    // bulged ahead of the revealed edge, so at 0.3
+                                    // the VISIBLE front was already near the
+                                    // centre. With the head gone the crop line is
+                                    // the front, and the threshold has to match
+                                    // the geometry.
             // ── Bank shimmer ────────────────────────────────────────────────
             // Once a cell has finished filling, a few small light streaks sit
             // just inside the water at its edges and slowly fade up and down.
@@ -743,6 +812,13 @@ var CONFIG = {
             // is meant to cover it.
             MAIN_WATER_DEPTH: 3.10,
 
+            // The moving front. OFF: the water is simply the tile art being
+            // uncovered, which follows every bend in the channel because it IS
+            // the channel. The head was a sprite laid across the front, so a
+            // tile where the channel turns had it lying over a bank — the turn
+            // happens inside the tile and the head has no way to know.
+            HEAD_ENABLED: false,
+
             HEAD_ALPHA:  0.75,      // the head — the water tongue at the front
             CREST_ALPHA: 0.75,      // the foam crest blobs (white + water copy)
             FOAM_ABOVE: false,      // draw the crest ABOVE the revealed tile
@@ -787,8 +863,11 @@ var CONFIG = {
             FLOW_OFFSET: 1,         // the water-FILLED version of a tile sits this
                                     // many frames after it in the sheet (dry then
                                     // wet, left→right, top→bottom)
-            FLOW_SPEED: 0,          // branch-water speed (px/s @ platformScale).
-                                    // 0 = match the main canal (WATER.MIN_SPEED)
+            FLOW_SPEED: 30,         // branch-water speed (px/s @ platformScale).
+                                    // 0 = match the main canal (WATER.MIN_SPEED).
+                                    // Pinned to 30 — the old shared value — when the
+                                    // main canal was slowed to 40%, so the branches
+                                    // kept their pace. Set back to 0 to re-couple.
             END_FILL: 0.8,          // a dead-end tile's channel closes inside it,
                                     // so water fills only this fraction of the
                                     // tile (up to the closing), not the full edge
@@ -1104,17 +1183,27 @@ var CONFIG = {
             LAG:        1.0,       // how much dry cut the blade keeps open ahead of
                                    // the water, in machine lengths. This is a LIMIT,
                                    // not a leash: 1 = the rig works on dry soil
-            FLOW_TAU:   0.9,       // seconds for the level to close most of the gap
+            FLOW_TAU:   2.25,      // seconds for the level to close most of the gap
                                    // to that limit. This is what stops the water
                                    // reading as a strip towed by the auger — it
                                    // lingers behind a lurch and keeps creeping up
                                    // the cut after the machine has gone quiet.
-                                   // Higher = lazier, more obviously flowing
-            MIN_SPEED:  30,        // steady creep floor (px/s @ platformScale). The
+                                   // Higher = lazier, more obviously flowing.
+                                   //
+                                   // With AFTER_DIG the flood is released against
+                                   // the WHOLE level at once, so the gap is a full
+                                   // band and this constant alone sets the pace:
+                                   // speed starts at roughly (band length / TAU).
+                                   // That is why it read as a surge. 2.25 is 0.9
+                                   // x2.5, i.e. 40% of the old speed.
+            MIN_SPEED:  12,        // steady creep floor (px/s @ platformScale). The
                                    // exponential chase above would crawl to a halt
                                    // as it closes the last of the gap — this keeps
                                    // the final run to the mouth moving at the same
-                                   // pace it had while chasing the blade
+                                   // pace it had while chasing the blade.
+                                   // Scaled with FLOW_TAU so the tail slows by the
+                                   // same 40%, otherwise the run would decelerate
+                                   // into the mouth and then speed back up.
             FRONT:      12,        // length of the wavering leading edge
                                    // (px @ platformScale)
             FRONT_COLS: 7,         // fingers across that edge — each on its own

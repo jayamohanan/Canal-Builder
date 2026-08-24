@@ -118,7 +118,7 @@
             0, 107, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 107, 107, 107, 107, 0, 0, 0, 0],
          "height":20,
          "id":3,
-         "name":"crop",
+         "name":"crops",
          "opacity":1,
          "type":"tilelayer",
          "visible":true,

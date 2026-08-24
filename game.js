@@ -1094,8 +1094,131 @@ console.log(
         // The dug channel is the full width of the main-canal columns.
         this.road.canalW = g.mainW * g.tile;
         this.createTunnel(band, seg);
+        this._buildWetGround(seg);
         this._buildCrops(seg, band);
         this._buildPonds(seg, band);
+    }
+
+    // ── Watered ground ───────────────────────────────────────────────────────
+    // Bind every PLANTED cell to the canal cell(s) that will water it, so the
+    // soil under the crops darkens as the ditches fill. Only planted cells are
+    // bound: bare land — paths, verges, the ground under trees and rocks — is
+    // not being irrigated, so the wet colour marks the worked field exactly.
+    // Runs after createTunnel because the flood's cell map is what it searches.
+    //
+    // The binding is NEAREST-by-Manhattan and keeps EVERY cell at that
+    // distance, not the first one found. A tile with a ditch on two sides
+    // therefore has both at distance 1 and turns for whichever arrives first,
+    // rather than waiting on one arbitrary winner.
+    _buildWetGround(seg) {
+        const TM = CONFIG.ROAD.TILEMAP, W = TM.GROUND_WET || {};
+        if (W.ENABLED === false || TM.TERRAIN_GROUND_WET === undefined) return;
+        const g = this.tileGrid;
+        const F = seg.tunnel && seg.tunnel.flood;
+        if (!g || !F || !F.cells.size) return;
+        const canal  = [...F.cells.values()];
+        const ground = seg.groundSprites || [];
+        const list   = seg.wetGround  = [];
+        // Keyed by cell so a tile turning wet can find its four neighbours and
+        // re-cut their edges. Only planted cells are in here, which is also what
+        // makes the mask below correct: a neighbour that is missing is bare
+        // ground, and bare ground never wets, so that side stays ragged for good.
+        const index  = seg.wetIndex   = new Map();
+        for (let r = 0; r < g.rows; r++) {
+            for (let c = 0; c < g.cols; c++) {
+                if (!g.cropsData[r * g.cols + c]) continue;   // not planted
+                const spr = ground[r * g.cols + c];
+                if (!spr) continue;
+                let bd = Infinity, watch = [];
+                for (const cc of canal) {
+                    const d = Math.abs(cc.col - c) + Math.abs(cc.row - r);
+                    if (d > bd) continue;
+                    if (d < bd) { bd = d; watch = [cc]; } else watch.push(cc);
+                }
+                if (!watch.length) continue;
+                const e = { spr, col: c, row: r, watch, wet: false, fade: null, off: 0, angle: 0 };
+                list.push(e);
+                index.set(c + ',' + r, e);
+            }
+        }
+    }
+
+    // Re-cut one wet tile's edge against its neighbours. The wet region grows
+    // outward over the level, so this is deliberately recomputed rather than
+    // decided once at build: a tile that wets ahead of its neighbours is drawn
+    // ragged on every exposed side, and each side straightens as that neighbour
+    // catches up. Deciding it once would draw the finished patch's outline from
+    // the first moment, and the spread would read as a hard square block.
+    //
+    // Row 2 of the terrain sheet is the six wet variants, in the same order and
+    // meaning as every other overlay row — inner, n, ne, ns, nes, nesw — so
+    // _edgeVariants() already knows which one to use and how far to turn it.
+    _recutWet(seg, e) {
+        if (!e || !e.wet) return;
+        const base  = CONFIG.ROAD.TILEMAP.TERRAIN_GROUND_WET;
+        const index = seg.wetIndex;
+        const bare  = (dc, dr) => {
+            const n = index.get((e.col + dc) + ',' + (e.row + dr));
+            return (n && n.wet) ? 0 : 1;
+        };
+        const mask = bare(0, -1) | (bare(1, 0) << 1) | (bare(0, 1) << 2) | (bare(-1, 0) << 3);
+        const v = this._edgeVariants()[mask] || { off: 0, angle: 0 };
+        e.off = v.off; e.angle = v.angle;
+        // While a tile is still fading in, the fading copy IS the visible wet
+        // tile — re-cut that one, and the sprite beneath inherits it on landing.
+        (e.fade || e.spr).setFrame(base + v.off).setAngle(v.angle);
+    }
+
+    // Turn each planted tile wet as its canal arrives, and re-cut the edges of
+    // the neighbours it just joined. A tile that has turned never turns back, so
+    // it leaves the pending list: the per-frame scan shrinks to the still-dry
+    // frontier instead of re-testing the whole field.
+    _updateWetGround() {
+        const TM = CONFIG.ROAD.TILEMAP, W = TM.GROUND_WET || {};
+        if (W.ENABLED === false || TM.TERRAIN_GROUND_WET === undefined) return;
+        const base = TM.TERRAIN_GROUND_WET;
+        const at   = W.AT      !== undefined ? W.AT      : 0.15;
+        const ms   = W.FADE_MS !== undefined ? W.FADE_MS : 450;
+        for (const seg of this.segments) {
+            const list = seg.wetGround;
+            if (!list || !list.length) continue;
+            // Backwards, so the swap-remove below can't skip an entry.
+            for (let i = list.length - 1; i >= 0; i--) {
+                const e = list[i];
+                let on = false;
+                for (const cc of e.watch) if (cc.progress > at) { on = true; break; }
+                if (!on) continue;
+                list[i] = list[list.length - 1]; list.pop();
+                e.wet = true;
+                if (ms > 0) {
+                    // Cross-fade rather than swap: the wet tile fades in just
+                    // above the dry one, then replaces it and the copy goes.
+                    // 1.41 sits between the ground (1.4) and the first crop
+                    // overlay (1.42), so damp-soil and grass stay on top of it.
+                    e.fade = this._addB(this.add.image(e.spr.x, e.spr.y, 'terrain', base)
+                        .setDisplaySize(e.spr.displayWidth, e.spr.displayHeight)
+                        .setDepth(1.41).setAlpha(0), seg);
+                    this.tweens.add({
+                        targets: e.fade, alpha: 1, duration: ms, ease: 'Sine.easeOut',
+                        onComplete: () => {
+                            // A rebase mid-fade kills this tween before it fires,
+                            // so reaching here means both sprites are still alive.
+                            // Take the edge the fade ended on, not the one it
+                            // started with — a neighbour may have wet meanwhile.
+                            e.spr.setFrame(base + e.off).setAngle(e.angle);
+                            e.fade.destroy();
+                            e.fade = null;
+                        },
+                    });
+                }
+                // This tile, then the neighbours whose edge it just closed.
+                this._recutWet(seg, e);
+                this._recutWet(seg, seg.wetIndex.get(e.col + ',' + (e.row - 1)));
+                this._recutWet(seg, seg.wetIndex.get((e.col + 1) + ',' + e.row));
+                this._recutWet(seg, seg.wetIndex.get(e.col + ',' + (e.row + 1)));
+                this._recutWet(seg, seg.wetIndex.get((e.col - 1) + ',' + e.row));
+            }
+        }
     }
 
     // ── Ponds ────────────────────────────────────────────────────────────────
@@ -1586,7 +1709,10 @@ console.log(
         const wet    = TM.CROP_WET !== undefined ? TM.CROP_WET : 0.15;
         const popFr  = TM.CROP_POP_FROM !== undefined ? TM.CROP_POP_FROM : 0.8;
         const popMs  = TM.CROP_POP_MS   !== undefined ? TM.CROP_POP_MS   : 260;
-        const ovl    = TM.CROP_OVERLAY || null;  // stage → ground overlay to add
+        // stage → ground overlay to add. Nulled by the switch, which is all it
+        // takes: every overlay is laid from this one map, so nothing downstream
+        // needs to know they are off.
+        const ovl    = TM.CROP_OVERLAY_ENABLED === false ? null : (TM.CROP_OVERLAY || null);
         for (const seg of this.segments) {
             if (!seg.crops) continue;
             for (const cr of seg.crops) {
@@ -2057,7 +2183,17 @@ console.log(
         // (so the machine can sit above them too and still be under its water),
         // while a branch's stays in the ground layers where crop leaves growing
         // over a ditch still cover it.
+        // HEAD_ENABLED off: no bulge, no foam — the reveal alone is the water.
+        // The head is a sprite laid ACROSS the channel at the front, and a channel
+        // that bends inside its own tile has no single "across" to lay it on: at a
+        // turn the head is square to the direction the water entered, so it hangs
+        // over the bank the channel is curving away from. Cropping it to the bend
+        // would mean knowing the channel's shape within the tile, which is more
+        // than the tile data carries. The crop-reveal has no such problem — it
+        // uncovers the tile's own art, so it follows every bend exactly.
+        const headOn = CONFIG.ROAD.TILEMAP.HEAD_ENABLED !== false;
         const putHead = (x, y, mx, my, chW, main) => {
+            if (!headOn) return;
             const horiz = mx !== 0;
             // Full channel width across the flow, HEAD_LEN of it along the flow.
             const ew = horiz ? chW * hLen : chW, eh = horiz ? chW : chW * hLen;
@@ -4639,6 +4775,7 @@ console.log(
         this._updateFlood(time);
         // Grow crops as the water reaches them.
         this._updateCrops(time);
+        this._updateWetGround();
     }
 }
 
