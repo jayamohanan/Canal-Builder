@@ -549,6 +549,24 @@ var CONFIG = {
             // Deciding the mask once at build would draw the finished patch's
             // outline from the first moment and the spread would read as a hard
             // square block growing.
+            // The watering itself, played at the plant's base the moment its
+            // canal arrives: a short splash that hands over to the damp soil
+            // partway through, so the ground does not simply change colour on a
+            // timer — you see the water land on it. One row of 128px frames.
+            PLANT_WATER: {
+                ENABLED: true,
+                FILE:    'graphics/plant-water.png',
+                FRAMES:  8,
+                FPS:     6,     // halved from 12 — the whole splash now runs
+                                // ~1.3s instead of ~0.67s
+                SIZE:    1,     // width as a fraction of a tile
+                Y:       0,     // offset from the cell centre, in tiles (+ is down)
+                DAMP_AT: 4,     // 1-based frame the ground turns damp on. The
+                                // splash has landed by here but is still playing,
+                                // so the soil darkens UNDER the water rather than
+                                // after it — the two read as one event
+            },
+
             GROUND_WET: {
                 ENABLED: true,
                 AT:      0.15,      // canal fill fraction that counts as "the
@@ -583,13 +601,15 @@ var CONFIG = {
             // Every sheet is one row of CROP_STAGES frames of equal width
             // (640x256 = five 128x256 stages, as they all are today).
             CROP_CYCLE: [
-                'mango',
+                'grass',
                 'tomato',
+                'mango',
+                
                 'green_bean',
                 'hops',
                 'grape_vine',
                 'grass2',
-                'grass',
+                
                 
                 
                 'grape',

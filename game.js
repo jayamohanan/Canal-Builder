@@ -391,6 +391,13 @@ class GameScene extends Phaser.Scene {
             // point in the cycle after a rebase.
             // The patch of worked soil each plant stands in, drawn under it.
             this.load.image('plant_base', 'graphics/plant-base.png');
+            // The watering splash: one row of square frames, sliced at the
+            // tilemap's own frame size since that is what the art is drawn to.
+            const PW = TM.PLANT_WATER || {};
+            if (PW.ENABLED !== false && PW.FILE) {
+                this.load.spritesheet('plant_water', PW.FILE,
+                    { frameWidth: TM.FRAME, frameHeight: TM.FRAME });
+            }
             for (const f of this._cropList()) {
                 this.load.image(`${String(f).replace(/\.[^.]+$/, '')}_src`, this._cropFile(f));
             }
@@ -1176,9 +1183,7 @@ console.log(
     _updateWetGround() {
         const TM = CONFIG.ROAD.TILEMAP, W = TM.GROUND_WET || {};
         if (W.ENABLED === false || TM.TERRAIN_GROUND_WET === undefined) return;
-        const base = TM.TERRAIN_GROUND_WET;
-        const at   = W.AT      !== undefined ? W.AT      : 0.15;
-        const ms   = W.FADE_MS !== undefined ? W.FADE_MS : 450;
+        const at = W.AT !== undefined ? W.AT : 0.15;
         for (const seg of this.segments) {
             const list = seg.wetGround;
             if (!list || !list.length) continue;
@@ -1189,36 +1194,97 @@ console.log(
                 for (const cc of e.watch) if (cc.progress > at) { on = true; break; }
                 if (!on) continue;
                 list[i] = list[list.length - 1]; list.pop();
-                e.wet = true;
-                if (ms > 0) {
-                    // Cross-fade rather than swap: the wet tile fades in just
-                    // above the dry one, then replaces it and the copy goes.
-                    // 1.41 sits between the ground (1.4) and the first crop
-                    // overlay (1.42), so damp-soil and grass stay on top of it.
-                    e.fade = this._addB(this.add.image(e.spr.x, e.spr.y, 'terrain', base)
-                        .setDisplaySize(e.spr.displayWidth, e.spr.displayHeight)
-                        .setDepth(1.41).setAlpha(0), seg);
-                    this.tweens.add({
-                        targets: e.fade, alpha: 1, duration: ms, ease: 'Sine.easeOut',
-                        onComplete: () => {
-                            // A rebase mid-fade kills this tween before it fires,
-                            // so reaching here means both sprites are still alive.
-                            // Take the edge the fade ended on, not the one it
-                            // started with — a neighbour may have wet meanwhile.
-                            e.spr.setFrame(base + e.off).setAngle(e.angle);
-                            e.fade.destroy();
-                            e.fade = null;
-                        },
-                    });
-                }
-                // This tile, then the neighbours whose edge it just closed.
-                this._recutWet(seg, e);
-                this._recutWet(seg, seg.wetIndex.get(e.col + ',' + (e.row - 1)));
-                this._recutWet(seg, seg.wetIndex.get((e.col + 1) + ',' + e.row));
-                this._recutWet(seg, seg.wetIndex.get(e.col + ',' + (e.row + 1)));
-                this._recutWet(seg, seg.wetIndex.get((e.col - 1) + ',' + e.row));
+                // The splash owns the changeover from here: it turns the soil
+                // partway through itself. With no splash art the tile darkens
+                // straight away, exactly as it did before.
+                if (!this._playPlantWater(seg, e)) this._dampenTile(seg, e);
             }
         }
+    }
+
+    // Water arriving at one plant: a short splash at its base, which hands the
+    // ground over at DAMP_AT — while it is still playing, not after. That
+    // overlap is the point. The soil darkening on its own is a colour change on
+    // a timer; the same change under a landing splash is the water doing it.
+    // Returns false if there is no splash art, so the caller can fall back.
+    _playPlantWater(seg, e) {
+        const TM = CONFIG.ROAD.TILEMAP, PW = TM.PLANT_WATER || {};
+        const g = this.tileGrid;
+        if (PW.ENABLED === false || !g || !this.textures.exists('plant_water')) return false;
+        const key = 'plant_water_run';
+        if (!this.anims.exists(key)) {
+            // Plays ONCE — no repeat. The sprite is built and thrown away per
+            // watering, so the animation is the whole of its life.
+            this.anims.create({
+                key,
+                frames: this.anims.generateFrameNumbers('plant_water',
+                    { start: 0, end: (PW.FRAMES || 8) - 1 }),
+                frameRate: PW.FPS || 12,
+            });
+        }
+        const w   = g.tile * (PW.SIZE !== undefined ? PW.SIZE : 1);
+        const spr = this._addB(this.add.sprite(
+                e.spr.x, e.spr.y + g.tile * (PW.Y || 0), 'plant_water', 0)
+            .setDisplaySize(w, w)
+            // Above the soil patch (2.9) and below the plant (3.0), on the same
+            // row ordering both use — the water pools at the stem and the plant
+            // stands in it rather than behind it.
+            .setDepth(2.95 + e.row * 0.001), seg);
+        const dampAt = Math.max(1, PW.DAMP_AT || 4);
+        let handed = false;
+        const hand = () => {
+            if (handed) return;
+            handed = true;
+            this._dampenTile(seg, e);
+        };
+        // Frame indices are 1-based, and animationupdate first fires on frame 2
+        // — so a DAMP_AT of 1 has to be handled before the animation starts.
+        spr.on('animationupdate', (anim, frame) => { if (frame.index >= dampAt) hand(); });
+        spr.once('animationcomplete', () => {
+            hand();                    // DAMP_AT set past the last frame
+            spr.destroy();
+        });
+        spr.play(key);
+        if (dampAt <= 1) hand();
+        return true;
+    }
+
+    // Turn one tile's soil damp, and re-cut the edges of the neighbours it just
+    // joined. Split out from the trigger because two things call it: the splash
+    // handing over partway through, and the no-art fallback.
+    _dampenTile(seg, e) {
+        if (e.wet) return;
+        const TM = CONFIG.ROAD.TILEMAP, W = TM.GROUND_WET || {};
+        const base = TM.TERRAIN_GROUND_WET;
+        const ms   = W.FADE_MS !== undefined ? W.FADE_MS : 450;
+        e.wet = true;
+        if (ms > 0) {
+            // Cross-fade rather than swap: the wet tile fades in just above the
+            // dry one, then replaces it and the copy goes. 1.41 sits between the
+            // ground (1.4) and the first crop overlay (1.42), so damp-soil and
+            // grass patches stay on top of it.
+            e.fade = this._addB(this.add.image(e.spr.x, e.spr.y, 'terrain', base)
+                .setDisplaySize(e.spr.displayWidth, e.spr.displayHeight)
+                .setDepth(1.41).setAlpha(0), seg);
+            this.tweens.add({
+                targets: e.fade, alpha: 1, duration: ms, ease: 'Sine.easeOut',
+                onComplete: () => {
+                    // A rebase mid-fade kills this tween before it fires, so
+                    // reaching here means both sprites are still alive. Take the
+                    // edge the fade ENDED on, not the one it started with — a
+                    // neighbour may have wet meanwhile.
+                    e.spr.setFrame(base + e.off).setAngle(e.angle);
+                    e.fade.destroy();
+                    e.fade = null;
+                },
+            });
+        }
+        // This tile, then the neighbours whose edge it just closed.
+        this._recutWet(seg, e);
+        this._recutWet(seg, seg.wetIndex.get(e.col + ',' + (e.row - 1)));
+        this._recutWet(seg, seg.wetIndex.get((e.col + 1) + ',' + e.row));
+        this._recutWet(seg, seg.wetIndex.get(e.col + ',' + (e.row + 1)));
+        this._recutWet(seg, seg.wetIndex.get((e.col - 1) + ',' + e.row));
     }
 
     // ── Ponds ────────────────────────────────────────────────────────────────
