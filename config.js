@@ -21,25 +21,27 @@ var CONFIG = {
         // SPLIT, so changing the split alone never resizes the grid: the scale works
         // out to screenWidth/1440 either way (0.5·W/720 === 0.4·W/576).
 
-        PORTRAIT_SPLIT:  0.5,      // the FARM's share of the HEIGHT — note this one
-                                   // is the other way round from LANDSCAPE_SPLIT,
-                                   // because in portrait the farm is the part that
-                                   // takes the named share.
+        PORTRAIT_SPLIT:  0,        // the FARM's share of the HEIGHT — the other way
+                                   // round from LANDSCAPE_SPLIT, because in
+                                   // portrait the farm is the part that takes the
+                                   // named share.
                                    //
-                                   // It also BEHAVES differently, and that is
-                                   // geometry rather than an oversight. Landscape's
-                                   // split moves a boundary across slack — the panel
-                                   // is 478 design px inside a 720 half — so the grid
-                                   // never changes size. Portrait's column has no
-                                   // slack: coin, battery case, panel and button
-                                   // stack with nothing spare. Raise this and the
-                                   // merge grid genuinely shrinks, in proportion.
+                                   // 0 means DERIVE it, which is the default and
+                                   // almost certainly what you want. Standing the
+                                   // battery on its end beside the grid took the
+                                   // case out of the vertical column, leaving only
+                                   // coin, panel and button — about 650 design px
+                                   // where landscape needs 778. The UI half is then
+                                   // sized to that shorter column, which leaves the
+                                   // grid at EXACTLY the size it had before and
+                                   // hands the whole difference to the farm.
                                    //
-                                   // 0.5 is deliberate. The farm already gained
-                                   // about a fifth of its half when the battery row
-                                   // moved out of it and into the UI half, without
-                                   // costing the grid anything. Going past 0.5 is
-                                   // the part that starts costing.
+                                   // Setting a number overrides that, and then it
+                                   // is a real trade. LANDSCAPE_SPLIT spends
+                                   // horizontal slack the panel was not using;
+                                   // portrait's column has none left, so going past
+                                   // the derived value shrinks the merge grid in
+                                   // proportion.
         REF_W_PORTRAIT: 720,
         REF_H: 778,
     },
@@ -312,6 +314,15 @@ var CONFIG = {
                                        // background, which is the signal
         },
 
+        SLOT_LABEL_W: 46,              // width reserved for a charge-rate label
+                                       // (px @ design). PORTRAIT ONLY: the
+                                       // battery stands on end there, so the
+                                       // labels cannot sit above their cells —
+                                       // above is the next cell — and go beside
+                                       // them instead, between the battery and
+                                       // the grid panel. Raising this makes the
+                                       // portrait slots smaller, not the margin
+                                       // wider: the margin is fixed by the panel
         SLOT_ROW_EDGE_PAD: 12,         // least margin each side of the battery,
                                        // which is centred on the half (px @ design)
 

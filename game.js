@@ -114,26 +114,61 @@ class GameScene extends Phaser.Scene {
         const P    = CONFIG.PLATFORM;
         const isP  = this.isPortrait;
 
+        // Design-space constants. None of these depend on the split, so they
+        // come first: portrait's design column is what DECIDES its split.
+        const BASE        = this.CELL_SIZE;                           // 130
+        const panPadRef   = CONFIG.CELL.GRID_PANEL_PADDING;          // 14
+        const btnBotRef   = CONFIG.BUTTON.BOTTOM_PADDING;            // 70
+        const btnGridRef  = CONFIG.MERGE_GRID.PADDING_FROM_BUTTON_TOP; // 50
+        const coinGapRef  = 25;
+        const coinHRef    = 32;                                      // counter height
+        const spawnBtnLogHalfRef = CONFIG.BUTTON.SPAWN_HEIGHT / 2;   // 45
+        const designGridH = ROWS * BASE + (ROWS - 1) * CONFIG.CELL.GAP;
+        const designPanH  = designGridH + 2 * panPadRef;
+
+        // ── The design column, and from it the split ──────────────────────────
+        // Landscape's reference half is 720×778 and its column is battery case,
+        // coin, panel, button — the full 778.
+        //
+        // Portrait's is SHORTER, and that is the whole point of standing the
+        // battery on its end beside the grid: with the case out of the column,
+        // what remains is coin, panel, button, which measures ~650. A shorter
+        // column means the UI half needs less of the screen for the SAME grid,
+        // and every design px saved goes to the farm.
+        //
+        //   6  top margin
+        //   +  coin (half its height to its centre) + coinGap
+        //   +  panel, less the padding already counted by the button gap
+        //   +  gap to button + button half-height + bottom margin
+        // which lands the coin's centre at 22 — hard against the top — and the
+        // panel at 47..473 with the button at 554, in a column of 624.
+        const LY    = CONFIG.LAYOUT || {};
+        const split = LY.LANDSCAPE_SPLIT !== undefined ? LY.LANDSCAPE_SPLIT : 0.4;
+        const REF_H_LAND = LY.REF_H || 778;
+        const REF_H = !isP ? REF_H_LAND
+            : (LY.REF_H_PORTRAIT || (6 + coinHRef / 2 + coinGapRef + designPanH
+                                     - panPadRef + btnGridRef + spawnBtnLogHalfRef + btnBotRef));
+
         // ── partA (UI) and partB (the farm) ───────────────────────────────────
         // Portrait:  partA = bottom, partB = top    (PORTRAIT_SPLIT)
         // Landscape: partA = left,   partB = right  (LANDSCAPE_SPLIT)
-        // The farm takes the larger share — it is the part worth looking at, and
-        // partA needs no more than the grid panel plus margins.
         //
-        // The two splits behave DIFFERENTLY, and the difference is not a
-        // mistake. Landscape's split moves a boundary across slack: the panel is
-        // 478 design px inside a 720 half, so narrowing the half spends margin
-        // and REF_W absorbs it, leaving the grid exactly the same size. Portrait
-        // has no such slack — its column is coin, case, panel and button stacked
-        // with nothing spare — so moving ITS split rescales the whole UI. Raise
-        // PORTRAIT_SPLIT and the merge grid genuinely gets smaller.
-        const LY    = CONFIG.LAYOUT || {};
-        const split = LY.LANDSCAPE_SPLIT !== undefined ? LY.LANDSCAPE_SPLIT : 0.4;
-        const pFarm = LY.PORTRAIT_SPLIT  !== undefined ? LY.PORTRAIT_SPLIT  : 0.5;
+        // PORTRAIT_SPLIT of 0 (the default) DERIVES the farm's share from the
+        // column above, which is the only value that leaves the merge grid
+        // exactly the size it is today: partA shrinks by the same ratio the
+        // column did, so partA.height / REF_H — and therefore the grid — does
+        // not move at all. The farm collects the entire difference.
+        //
+        // Setting it by hand overrides that, and then it is a real trade: unlike
+        // LANDSCAPE_SPLIT, which spends horizontal slack the panel is not using,
+        // portrait's column has no slack left, so going past the derived value
+        // shrinks the grid in proportion.
+        const pAuto = REF_H / (2 * REF_H_LAND);        // UI share that keeps sH put
+        const pUI   = LY.PORTRAIT_SPLIT ? (1 - LY.PORTRAIT_SPLIT) : pAuto;
         let partA, partB;
         if (isP) {
-            partA = { x: 0,       y: H * pFarm, width: W,           height: H * (1 - pFarm) };
-            partB = { x: 0,       y: 0,         width: W,           height: H * pFarm };
+            partA = { x: 0,       y: H * (1 - pUI), width: W,         height: H * pUI };
+            partB = { x: 0,       y: 0,            width: W,         height: H * (1 - pUI) };
         } else {
             partA = { x: 0,       y: 0,       width: W * split,     height: H };
             partB = { x: W*split, y: 0,       width: W * (1-split), height: H };
@@ -147,18 +182,11 @@ class GameScene extends Phaser.Scene {
         //   sH    = height ratio  → VERTICAL   gaps / margins / positions
         //   scale = min(sW, sH)   → UNIFORM element SIZES (keeps the grid square)
         // No upper clamp — everything scales past the reference on bigger screens.
-        const BASE        = this.CELL_SIZE;                           // 130
-        const panPadRef   = CONFIG.CELL.GRID_PANEL_PADDING;          // 40
-        const btnBotRef   = CONFIG.BUTTON.BOTTOM_PADDING;            // 70
-        const btnGridRef  = CONFIG.MERGE_GRID.PADDING_FROM_BUTTON_TOP; // 50
-        const coinGapRef  = 25;
-        const spawnBtnLogHalfRef = CONFIG.BUTTON.SPAWN_HEIGHT / 2;   // 45
-
-        // The reference partA on my 1440×778 MacBook. In landscape it is the half
-        // AT THE CURRENT SPLIT, which is what keeps the grid the same size when
-        // the split moves: sW works out to screenWidth/1440 either way
-        // (0.5·W/720 === 0.4·W/576). Do not "simplify" this back to a constant.
-        const REF_H = LY.REF_H || 778;
+        //
+        // REF_W in landscape is the half AT THE CURRENT SPLIT, which is what
+        // keeps the grid the same size when the split moves: sW works out to
+        // screenWidth/1440 either way (0.5·W/720 === 0.4·W/576). Do not
+        // "simplify" this back to a constant.
         const REF_W = isP ? (LY.REF_W_PORTRAIT || 720) : 1440 * split;
         const sW    = partA.width  / REF_W;             // horizontal ratio
         const sH    = partA.height / REF_H;             // vertical ratio
@@ -179,64 +207,75 @@ class GameScene extends Phaser.Scene {
         // partA.height (designY × sH). The topmost item therefore lands at its
         // design Y on any aspect (no empty top band), and because scale ≤ sH the
         // scale-sized elements never overflow the proportional spacing (no overlap).
-        // Design anchor Ys are derived once from the gap refs at design scale.
-        const designGridH       = ROWS * BASE + (ROWS - 1) * CONFIG.CELL.GAP;       // 398
-        const designPanH        = designGridH + 2 * panPadRef;                      // 478
-        const designButtonCY    = REF_H - btnBotRef;                                // 708
-        const designGridBotEdge = designButtonCY - spawnBtnLogHalfRef - btnGridRef; // 613
+        const designButtonCY    = REF_H - btnBotRef;
+        const designGridBotEdge = designButtonCY - spawnBtnLogHalfRef - btnGridRef;
         // PANEL_DROP slides the grid block down toward the button, closing the
         // dead space between them. The panel's baked shadow may then overlap the
         // button — harmless, the button's depth (100) is far above the panel (1.5).
+        // LANDSCAPE ONLY: it exists to open room for the battery case ABOVE the
+        // panel, and in portrait the case is not there — dropping the panel would
+        // just reopen the gap the shorter column was built to close.
         const designPanelCY     = designGridBotEdge + panPadRef - designPanH / 2
-                                + (CONFIG.MERGE_GRID.PANEL_DROP || 0);             // 414 + drop
-        const designCoinCY      = designPanelCY - designPanH / 2 - coinGapRef;      // 150
+                                + (isP ? 0 : (CONFIG.MERGE_GRID.PANEL_DROP || 0));
+        const designCoinCY      = designPanelCY - designPanH / 2 - coinGapRef;
         const buttonCenterY     = partA.y + designButtonCY * sH;
         const panelCenterY      = partA.y + designPanelCY  * sH;
         let   coinCenterY       = partA.y + designCoinCY   * sH;
 
-        // ── The battery-slot row, both orientations ───────────────────────────
-        // The row owns the band above the grid panel and the whole WIDTH of the
-        // half: it starts at the screen edge, not the panel's. Given that room
-        // the slots reach for their cap — one grid cell — which is the point: a
-        // battery in a slot should look like a battery in a cell.
+        // ── The battery ───────────────────────────────────────────────────────
+        // Three slots in one battery-shaped case, but standing differently in
+        // each orientation, and in both cases it stands where there is already
+        // room rather than making room for itself.
         //
-        // The battery case wraps the three cells, so its walls, outline and
-        // terminal all come out of the row's width and height budget.
-        //
-        // The two orientations differ ONLY in the order of the column above the
-        // panel, and each order is forced by its own geometry:
-        //   LANDSCAPE  case → coin → grid.  The half is 778 design px tall and
-        //              the band above the panel is only ~175 of them; stacking
-        //              the coin above the case would eat it and cap the slots
-        //              near 95. So the coin shares the case's height instead,
-        //              keeping its right-aligned x, clear of the slots.
-        //   PORTRAIT   coin → case → grid.  The half is short but the band above
-        //              the panel is ~205 design px and the coin is only ~32, so
-        //              the stack fits with the slots still over 100 — and the
-        //              coin stays where it has always been, at the top.
+        //   LANDSCAPE  laid flat in the band above the panel, terminal east. The
+        //              half is 778 design px tall and that band is ~175 of them,
+        //              so the coin shares the band's height rather than stacking
+        //              above it (it keeps its right-aligned x, clear of the
+        //              slots) — stacked, it would cap the slots near 95.
+        //   PORTRAIT   stood on end in the MARGIN BESIDE the panel, terminal
+        //              north, centred on the panel. The panel is square-ish and
+        //              the half is full-width, so that margin is dead space the
+        //              grid was never going to use. Nothing above the panel
+        //              needs to move, and the column keeps its short form.
         const CS              = P.BATTERY_CASE || {};
         const designCasePad   = CS.ENABLED === false ? 0 : (CS.PAD || 0);
         const designCaseExtra = CS.ENABLED === false ? 0
                               : 2 * designCasePad + (CS.STROKE || 0)
                                 + (CS.NODE_GAP || 0) + (CS.NODE_W || 0);
         const designSlotLabel = P.CHARGE_RATE_GAP + 14;                    // gap + text
-        const designCoinH     = 32;                    // the counter's own height
-        const designCoinCY_P  = 6 + designCoinH / 2;   // portrait: hard against the top
-        const designRowTop    = (isP ? designCoinCY_P + designCoinH / 2 + 8 : 6)
-                              + designSlotLabel + designCasePad;           // under the label
-        const designRowBot    = designPanelCY - designPanH / 2 - 8 - designCasePad;
         const designEdgePad   = P.SLOT_ROW_EDGE_PAD  || 12;                // margin each side
-        const designSlotSize  = Math.min(
-            BASE,                                           // never bigger than a cell
-            designRowBot - designRowTop,                    // the band's height
-            (REF_W - 2 * designEdgePad
-                   - 2 * CONFIG.CELL.GAP - designCaseExtra) / 3);   // what the width leaves
-        const designSlotCY    = designRowTop + designSlotSize / 2;
-        const slotRowCenterY  = partA.y + designSlotCY * sH;
-        const slotSize        = designSlotSize * scale;
+        let slotRowCenterY, slotSize, slotCenterX = null;
         if (isP) {
-            coinCenterY = partA.y + designCoinCY_P * sH;
+            // The battery is capped by the margin the panel leaves, never by the
+            // band above it — so it is the WIDTH of the half, not its height,
+            // that decides how big a portrait slot can be. On a narrow phone
+            // that margin is tight and the slot comes out under a cell; on
+            // anything wider it hits the cap and a slot matches a cell exactly.
+            const margin = (partA.width - panW) / 2;
+            const caseW  = (2 * designCasePad + (CS.STROKE || 0)) * scale;
+            // The margin has to hold three things side by side: the edge gap,
+            // the battery, and the charge-rate labels — which cannot stack ABOVE
+            // each cell the way they do in landscape, because the cell above is
+            // where they would land. So they sit beside their own cell instead,
+            // between the battery and the panel, and their width is reserved
+            // here rather than discovered later.
+            const labelW = (P.SLOT_LABEL_W || 46) * scale;
+            slotSize     = Math.max(8, Math.min(cellSize,
+                                    margin - designEdgePad * scale - caseW - labelW));
+            // Hard against the left edge, so every px the panel does not want is
+            // left on the label side rather than split uselessly in two.
+            slotRowCenterY = panelCenterY;
+            slotCenterX    = partA.x + designEdgePad * scale + (slotSize + caseW) / 2;
         } else {
+            const designRowTop = 6 + designSlotLabel + designCasePad;      // under the label
+            const designRowBot = designPanelCY - designPanH / 2 - 8 - designCasePad;
+            const designSlotSize = Math.min(
+                BASE,                                           // never bigger than a cell
+                designRowBot - designRowTop,                    // the band's height
+                (REF_W - 2 * designEdgePad
+                       - 2 * CONFIG.CELL.GAP - designCaseExtra) / 3);   // what the width leaves
+            slotRowCenterY = partA.y + (designRowTop + designSlotSize / 2) * sH;
+            slotSize       = designSlotSize * scale;
             // Coin counter goes back above the grid, centred in the band the
             // dropped panel opened up between the battery case and the panel's
             // top edge. Derived from the row's actual bottom, so it keeps its
@@ -292,7 +331,7 @@ class GameScene extends Phaser.Scene {
             partA, partB,
             platformScale,
             sW, sH, scale,
-            panelCenterY, buttonCenterY, coinCenterY, slotRowCenterY, slotSize,
+            panelCenterY, buttonCenterY, coinCenterY, slotRowCenterY, slotSize, slotCenterX,
             // Battery / cell content
             batteryDisplaySize, batteryYOffset, levelTextYOffset, levelTextSize,
             // Spawn button contents
@@ -562,15 +601,35 @@ console.log(
         const casePad  = caseOn ? (CS.PAD || 0) * scale : 0;
         const slotGap  = L.cellGap;
         const spacing  = ssz + slotGap;
-        // The whole battery — case walls and terminal included — is centred on
-        // the half, which is where the grid panel is centred too, so the two
-        // blocks line up on one axis.
-        const nodeW    = caseOn ? ((CS.NODE_GAP || 0) + (CS.NODE_W || 14)) * scale : 0;
-        const batteryW = 3 * ssz + 2 * slotGap + 2 * casePad + nodeW;
-        const rowLeft  = B.x + B.width / 2 - batteryW / 2 + casePad;   // first cell's left edge
-        const centerX  = rowLeft + ssz / 2 + spacing;   // centre slot of the three
-        const slotY    = L.slotRowCenterY;              // the band above the grid
-        const slotXs = [centerX - spacing, centerX, centerX + spacing];
+        // The battery lies FLAT in landscape and stands ON END in portrait, so
+        // everything below is written along a RUN — the axis the three cells are
+        // laid out on — rather than in x and y twice over.
+        //
+        //   landscape  run east,  terminal at the run's END   (east)
+        //   portrait   run south, terminal at the run's START (north)
+        //
+        // The terminal is on top in portrait because that is where a battery's
+        // plus terminal is when you stand one up; it is the one bit of the shape
+        // that tells you which way round the thing is.
+        const vert     = L.isPortrait;
+        const nodeRun  = caseOn ? ((CS.NODE_GAP || 0) + (CS.NODE_W || 14)) * scale : 0;
+        // Length along the run — walls and terminal included, because it is the
+        // whole battery that gets centred, not just the three cells.
+        const batteryL = 3 * ssz + 2 * slotGap + 2 * casePad + nodeRun;
+        // Where the battery sits ACROSS the run: portrait puts it in the margin
+        // beside the panel, landscape centres it on the half.
+        const acrossC  = vert ? L.slotCenterX : B.x + B.width / 2;
+        // …and along it: portrait centres on the panel, landscape on the band.
+        const runC     = vert ? L.slotRowCenterY : acrossC;
+        // First cell's centre along the run. In portrait the terminal comes
+        // first, so the cells start below it.
+        const runStart = (vert ? runC : acrossC) - batteryL / 2
+                       + casePad + (vert ? nodeRun : 0) + ssz / 2;
+        const runCs    = [runStart, runStart + spacing, runStart + 2 * spacing];
+        const centerX  = vert ? acrossC : runCs[1];
+        const slotY    = vert ? runCs[1] : L.slotRowCenterY;
+        const slotXs   = vert ? [acrossC, acrossC, acrossC] : runCs;
+        const slotYs   = vert ? runCs : [slotY, slotY, slotY];
 
         this.stationCenterX = centerX;
         this.slotY = slotY;
@@ -579,14 +638,16 @@ console.log(
         // ── The battery case ──────────────────────────────────────────────────
         // One battery holding three cells: a rounded outline around all three, a
         // divider between each pair — stopped short of the walls, so it reads as
-        // a division and not a bar — and the terminal node off the right end.
+        // a division and not a bar — and the terminal node off the far end.
         this.batteryCase = null;
         if (caseOn) {
             const sp   = (v) => (v || 0) * scale;
+            // The case is the three cells plus its walls, whichever way it runs.
             const left = slotXs[0] - ssz / 2 - casePad;
-            const top  = slotY - ssz / 2 - casePad;
+            const top  = slotYs[0] - ssz / 2 - casePad;
             const w    = (slotXs[2] + ssz / 2 + casePad) - left;
-            const h    = ssz + casePad * 2;
+            const h    = (slotYs[2] + ssz / 2 + casePad) - top;
+            const thin = vert ? w : h;          // the case's SHORT dimension
             const col  = hexColor(CS.COLOR || '#364549');
             const g    = this.add.graphics().setDepth(2.8);
 
@@ -596,28 +657,47 @@ console.log(
             g.lineStyle(Math.max(1, sp(CS.STROKE || 4)), col, 1);
             g.strokeRoundedRect(left, top, w, h, sp(CS.RADIUS || 14));
 
-            const inset = h * (CS.DIVIDER_INSET !== undefined ? CS.DIVIDER_INSET : 0.22);
+            // Dividers cross the case, so they are inset from the SHORT walls and
+            // sit between each pair of cells along the run.
+            const inset = thin * (CS.DIVIDER_INSET !== undefined ? CS.DIVIDER_INSET : 0.22);
             g.lineStyle(Math.max(1, sp(CS.DIVIDER_W || 3)), col, 1);
             for (let i = 0; i < 2; i++) {
-                const dx = (slotXs[i] + slotXs[i + 1]) / 2;
-                g.lineBetween(dx, top + inset, dx, top + h - inset);
+                if (vert) {
+                    const dy = (slotYs[i] + slotYs[i + 1]) / 2;
+                    g.lineBetween(left + inset, dy, left + w - inset, dy);
+                } else {
+                    const dx = (slotXs[i] + slotXs[i + 1]) / 2;
+                    g.lineBetween(dx, top + inset, dx, top + h - inset);
+                }
             }
 
-            const nodeW = sp(CS.NODE_W || 14);
-            const nodeH = h * (CS.NODE_H !== undefined ? CS.NODE_H : 0.38);
+            // The terminal: NODE_W is its length off the end, NODE_H its width
+            // across — so standing the battery up turns the node with it.
+            const nodeL = sp(CS.NODE_W || 14);
+            const nodeC = thin * (CS.NODE_H !== undefined ? CS.NODE_H : 0.38);
+            const nodeR = sp(CS.NODE_RADIUS || 5);
             g.fillStyle(col, 1);
-            g.fillRoundedRect(left + w + sp(CS.NODE_GAP || 0), slotY - nodeH / 2,
-                              nodeW, nodeH, sp(CS.NODE_RADIUS || 5));
+            if (vert) {
+                // North, above the case — a stood-up battery's plus terminal.
+                g.fillRoundedRect(left + w / 2 - nodeC / 2,
+                                  top - sp(CS.NODE_GAP || 0) - nodeL,
+                                  nodeC, nodeL, nodeR);
+            } else {
+                g.fillRoundedRect(left + w + sp(CS.NODE_GAP || 0), top + h / 2 - nodeC / 2,
+                                  nodeL, nodeC, nodeR);
+            }
             this.batteryCase = g;
 
             // ── The machine, ghosted inside the battery ───────────────────────
             // A faint whole rig laid across the case: the batteries and the thing
             // they drive as one image. It is the SAME two sprites as the field
             // and the SAME spacing between them (TUNNEL.TRENCHER), just turned a
-            // quarter-turn right so the rig's length runs along the battery's
-            // width. In the field it travels north, control unit leading; turned
-            // right, that puts the control unit at the battery's east end and the
-            // belt at its west.
+            // turned to lie along the battery's LENGTH. In the field it travels
+            // north, control unit leading — so a stood-up (portrait) battery
+            // needs no turn at all, and the control unit lands at the terminal
+            // end for free. Landscape turns it a quarter-turn right, which puts
+            // the control unit at the battery's east end and the belt at its
+            // west — the same relationship, laid flat.
             const D = P.TRENCHER_DECO || {};
             if (D.ENABLED !== false && this.textures.exists('trencher_belt')) {
                 const TR    = CONFIG.ROAD.TUNNEL.TRENCHER;
@@ -628,20 +708,21 @@ console.log(
                 const rear   = beltDY + TR.BELT_H / 2;      // belt's trailing edge
                 const front  = ctrlDY - TR.CTRL_H / 2;      // control unit's nose
                 const mid    = (rear + front) / 2;          // the rig's own centre
-                // One factor fits the rig's whole length to the case's width.
-                const k  = w * (D.LEN_FRAC !== undefined ? D.LEN_FRAC : 1) / (rear - front);
-                const cx = left + w / 2;
+                // One factor fits the rig's whole length to the case's LONG side.
+                const k  = (vert ? h : w)
+                         * (D.LEN_FRAC !== undefined ? D.LEN_FRAC : 1) / (rear - front);
+                const cx = left + w / 2, cy = top + h / 2;
                 // Lay the parts along the rotated axis rather than hard-coding a
                 // side: the rig travels north, so its heading (0,-1) turned by
-                // ANGLE gives the direction the control unit points. Change ANGLE
-                // alone and both the sprites and their order follow — 90 puts the
-                // control unit at the terminal end, -90 at the far end.
-                const a  = (D.ANGLE !== undefined ? D.ANGLE : 90) * Math.PI / 180;
+                // `ang` gives the direction the control unit points. Change that
+                // alone and both the sprites and their order follow.
+                const ang = vert ? 0 : (D.ANGLE !== undefined ? D.ANGLE : 90);
+                const a  = ang * Math.PI / 180;
                 const ux = Math.sin(a), uy = -Math.cos(a);
                 const put = (tex, dy, sw, sh, frame) => this.add.image(
-                        cx + ux * (mid - dy) * k, slotY + uy * (mid - dy) * k, tex, frame)
+                        cx + ux * (mid - dy) * k, cy + uy * (mid - dy) * k, tex, frame)
                     .setDisplaySize(sw * k, sh * k)
-                    .setAngle(D.ANGLE !== undefined ? D.ANGLE : 90)
+                    .setAngle(ang)
                     .setAlpha(D.ALPHA !== undefined ? D.ALPHA : 0.2)
                     .setDepth(D.DEPTH !== undefined ? D.DEPTH : 2.7);
                 this.trencherGhost = [put('trencher_ctrl', ctrlDY, TR.CTRL_W, TR.CTRL_H, 0),
@@ -649,8 +730,9 @@ console.log(
             }
         }
 
+        const labelW = s(P.SLOT_LABEL_W || 46);
         for (let i = 0; i < 3; i++) {
-            const slotX = slotXs[i];
+            const slotX = slotXs[i], slotYi = slotYs[i];
 
             // Slot backgrounds. Inside the battery case an EMPTY division draws
             // nothing (the case's outline already bounds it) and an occupied one
@@ -661,34 +743,38 @@ console.log(
                 this._makeCellTextures(L.cellSize);
                 const face = Math.round(ssz - 2 * Math.max(2, ssz * 4 / CONFIG.CELL.SIZE));
                 slotBg = this.add.graphics().setDepth(3);         // empty: nothing drawn
-                slotBgFilled = this.add.image(slotX, slotY, 'cell_face')
+                slotBgFilled = this.add.image(slotX, slotYi, 'cell_face')
                     .setDisplaySize(face, face).setDepth(3).setVisible(false);
             } else {
                 slotBg = this.add.graphics();
-                this._drawSlot(slotBg, slotX, slotY, ssz, false);
+                this._drawSlot(slotBg, slotX, slotYi, ssz, false);
                 slotBg.setDepth(3);
                 slotBgFilled = this.add.graphics();
-                this._drawSlot(slotBgFilled, slotX, slotY, ssz, true);
+                this._drawSlot(slotBgFilled, slotX, slotYi, ssz, true);
                 slotBgFilled.setDepth(3);
                 slotBgFilled.setVisible(false);
             }
 
-            // Charge-rate label, clear of the case wall
-            const rateTextY = slotY - ssz / 2 - casePad - chargeGap;
-            const chargeRateText = this.add.text(slotX - 2, rateTextY, '', {
+            // Charge-rate label, clear of the case wall. Landscape puts it above
+            // its cell; portrait cannot — above is the next cell — so it goes
+            // beside, in the strip the layout reserved for it. Either way it is
+            // the same text-then-bolt pair, just centred somewhere else.
+            const rateX = vert ? slotX + ssz / 2 + casePad + labelW / 2 : slotX;
+            const rateY = vert ? slotYi : slotYi - ssz / 2 - casePad - chargeGap;
+            const chargeRateText = this.add.text(rateX - 2, rateY, '', {
                 fontSize, fontFamily: CONFIG.FONT_FAMILY,
                 color: '#000000', fontStyle: 'bold',
                 stroke: '#FFFFFF', strokeThickness: 3,
             }).setOrigin(1, 0.5).setDepth(5).setVisible(false);
 
-            const chargeRateBolt = this.add.image(slotX + 2, rateTextY, 'bolt')
+            const chargeRateBolt = this.add.image(rateX + 2, rateY, 'bolt')
                 .setDisplaySize(boltSize, boltSize)
                 .setOrigin(0, 0.5).setDepth(5).setVisible(false)
                 .setTint(0xFFFF00);
 
             this.platforms.push({
                 index: i,
-                slotX, slotY, slotSize: ssz,
+                slotX, slotY: slotYi, slotSize: ssz,
                 slotBg, slotBgFilled,
                 chargeRateText, chargeRateBolt,
                 batterySprite: null, batteryLevelText: null,
