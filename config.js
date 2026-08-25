@@ -16,10 +16,30 @@ var CONFIG = {
     // the larger share: the UI needs only the grid panel's width plus margins.
     // Portrait stays a 50/50 top/bottom split — see calculateLayout().
     LAYOUT: {
-        LANDSCAPE_SPLIT: 0.4,      // UI's share of the width; the farm gets the rest
+        LANDSCAPE_SPLIT: 0.4,      // UI's share of the WIDTH; the farm gets the rest
         // The design reference is a 1440×778 MacBook. REF_W is the UI half AT THAT
         // SPLIT, so changing the split alone never resizes the grid: the scale works
         // out to screenWidth/1440 either way (0.5·W/720 === 0.4·W/576).
+
+        PORTRAIT_SPLIT:  0.5,      // the FARM's share of the HEIGHT — note this one
+                                   // is the other way round from LANDSCAPE_SPLIT,
+                                   // because in portrait the farm is the part that
+                                   // takes the named share.
+                                   //
+                                   // It also BEHAVES differently, and that is
+                                   // geometry rather than an oversight. Landscape's
+                                   // split moves a boundary across slack — the panel
+                                   // is 478 design px inside a 720 half — so the grid
+                                   // never changes size. Portrait's column has no
+                                   // slack: coin, battery case, panel and button
+                                   // stack with nothing spare. Raise this and the
+                                   // merge grid genuinely shrinks, in proportion.
+                                   //
+                                   // 0.5 is deliberate. The farm already gained
+                                   // about a fifth of its half when the battery row
+                                   // moved out of it and into the UI half, without
+                                   // costing the grid anything. Going past 0.5 is
+                                   // the part that starts costing.
         REF_W_PORTRAIT: 720,
         REF_H: 778,
     },
