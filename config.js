@@ -739,7 +739,11 @@ var CONFIG = {
             // It is the settled water's only animation and it does most of the
             // work of making a still canal look alive — cheap, because the
             // streaks never move: only their brightness changes.
-            MARK_ENABLED: true,
+            MARK_ENABLED: false,    // TEMPORARILY OFF — the streaks read as white
+                                    // lines lying across the water rather than
+                                    // as glints in it. Everything below is left
+                                    // tuned as it was, so this is the only line
+                                    // to change to bring them back.
             // Two rows of streaks per bank. The outer row sits against the
             // water's edge and carries the effect; the inner row is a sparse
             // scatter a little further in, which stops the outer one reading as
