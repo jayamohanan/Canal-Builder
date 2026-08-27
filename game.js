@@ -3735,15 +3735,16 @@ console.log(
         if (tn.open) return;
         tn.open = true;
 
+        // The rig STAYS. It shuts down — belt stopped, tracks stopped, no spoil —
+        // and sits parked at the head of the cut it just finished, which is where
+        // a real machine would be. It used to fade out here, which read as the
+        // vehicle evaporating the moment its work was done and left the whole
+        // flood with nothing on screen but water.
+        //
+        // It is retired only when its successor exists (see _buildNextSegment),
+        // so there is always exactly one machine and never a gap with none.
         this._setTrencherRunning(tn, false, false);
         this._runSpoil(tn.bore, tn.entryY - tn.progressPx, false);
-        const parts = [tn.bore.belt, tn.bore.ctrl, tn.bore.shadow,
-                       tn.bore.cutEdge].filter(Boolean);
-        this.tweens.add({
-            targets: parts,
-            alpha: 0, duration: 700,
-            onComplete: () => parts.forEach((o) => o.setVisible(false)),
-        });
 
         // The waterline just carries on: it runs from where it was holding
         // (LAG behind the blade) up to the far mouth in one smooth flood —
@@ -3932,8 +3933,20 @@ console.log(
         const r = this.road;
 
         E.segIndex++;
-        this._buildSegment(r.top - E.segH, r.top);
+        const fresh = this._buildSegment(r.top - E.segH, r.top);
+        // Hand over: the parked rig goes only now that a new one is standing.
+        for (const seg of this.segments) if (seg !== fresh) this._retireBore(seg);
         E.nextReady = true;
+    }
+
+    // Take one segment's machine off the board. Not a fade — by the time this
+    // runs its replacement is already standing at the next cut, and two rigs
+    // dissolving into each other reads worse than a clean handover. The sprites
+    // are still in the segment's registry, so the rebase destroys them properly.
+    _retireBore(seg) {
+        const b = seg && seg.tunnel && seg.tunnel.bore;
+        if (!b) return;
+        for (const o of [b.belt, b.ctrl, b.shadow, b.cutEdge]) if (o) o.setVisible(false);
     }
 
     // Once the finished stretch has been admired: if the next band is
