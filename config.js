@@ -49,6 +49,13 @@ var CONFIG = {
     RESET_PROGRESS: false,
     DEBUG_HALF_LINE: false,  // draw a line splitting partA / partB (vertical in
                              // landscape, horizontal in portrait)
+    DEBUG_MAP:  true,        // report, per band, exactly what reached the
+                             // renderer from the level's .tmj: which layers were
+                             // found and whether they carry anything, which
+                             // tilesets resolved to art, which gids could not be
+                             // drawn, and how much of the ground on screen is
+                             // the MAP versus the filler strip. Errors and
+                             // warnings below are logged whatever this is set to
     DEBUG_PERF: true,        // log object / tween / timer / texture counts each
                              // time the world rebases (once per level). Climbing
                              // numbers = something is outliving its band
@@ -402,19 +409,16 @@ var CONFIG = {
             // plain ground, so short levels read as a field with open land
             // beyond it rather than leaving a hole between levels.
             LEVELS: [
-                  { FILE: 'level_maps/test3.tmj' },
-                { FILE: 'level_maps/level_0111_8.tmj' },
-                { FILE: 'level_maps/new_level.tmj' },
-                 { FILE: 'level_maps/level_01.tmj' },
                 { FILE: 'level_maps/level_02.tmj' },
-                 {
-                    FILE: 'level_maps/level_03.tmj',
-                    // Which pond art this level's markers stand for. The KEY is
-                    // the marker's position in markers.tsx (see MARKERS), so the
-                    // same two markers mean different ponds in different levels
-                    // — paint pond A, decide here which pond it is.
-                    PONDS: { 1: 'pond1_dry', 2: 'pond2_dry' },
-                },
+                // { FILE: 'level_maps/level_02.tmj' },
+                //  {
+                //     FILE: 'level_maps/level_03.tmj',
+                //     // Which pond art this level's markers stand for. The KEY is
+                //     // the marker's position in markers.tsx (see MARKERS), so the
+                //     // same two markers mean different ponds in different levels
+                //     // — paint pond A, decide here which pond it is.
+                //     PONDS: { 1: 'pond1_dry', 2: 'pond2_dry' },
+                // },
                
                
             ],
@@ -634,8 +638,8 @@ var CONFIG = {
             // Every sheet is one row of CROP_STAGES frames of equal width
             // (640x256 = five 128x256 stages, as they all are today).
             CROP_CYCLE: [
-                'grass',
                 'tomato',
+                'grass',
                 'mango',
                 
                 'green_bean',
@@ -957,7 +961,14 @@ var CONFIG = {
             GROUND_LAYER: 'ground',        // plain land, under everything
             BRANCH_LAYER: 'branch',        // dry branch canals (always shown)
             MAIN_LAYER: 'main',            // main canal, revealed as it's dug
-            CROPS_LAYER: 'crops',          // marker only — where crops spawn
+            CROPS_LAYER: ['crop', 'crops'],// marker only — where crops spawn.
+                                           // A LIST because the maps disagree:
+                                           // the Tiled project was rebuilt and
+                                           // names it "crop", while the earlier
+                                           // maps still in the rotation say
+                                           // "crops". First match wins, so both
+                                           // load. Any layer name here may be a
+                                           // list; a plain string still works.
 
             // gid → meaning. The gid is the number Tiled shows when you hover a
             // tile. conn = open edges (any of n/e/s/w). main = 'L'/'R' half of

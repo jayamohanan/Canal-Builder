@@ -426,6 +426,14 @@ class GameScene extends Phaser.Scene {
             // few KB of JSON, so loading the rotation up front costs nothing and
             // means a level change never waits on a fetch.
             this._levels().forEach((lv, i) => this.load.json(`level_map_${i}`, lv.FILE));
+            // A .tmj that 404s leaves the cache entry simply absent, and the band
+            // then falls back to procedural land — which looks exactly like a
+            // level that loaded and drew nothing. Say so instead.
+            this.load.on('loaderror', (file) => {
+                console.error(`[load] FAILED "${file.key}" <- ${file.url} ` +
+                    `(${file.type}). Check the path is relative to index.html and ` +
+                    `that the file is actually served.`);
+            });
             const pondDir = TM.POND_DIR || 'graphics/pond/';
             for (const name of this._pondArt()) {
                 this.load.image(`pond_${name}`, `${pondDir}${name}.png`);
@@ -959,16 +967,21 @@ console.log(
         const gw   = cols * tile, gh = rows * tile;
         const mainW = TM.MAIN_TILES || 2;                  // the 2 centre columns
         const mainRightCol = Math.floor(cols / 2);
-        const layer = (name) => {
-            const l = map.layers.find((x) => x.name === name);
-            return l ? l.data : null;
+        // A layer spec may be one name or several alternatives — maps authored
+        // at different times disagree about a few of them, and first match wins.
+        const layer = (spec) => {
+            for (const name of (Array.isArray(spec) ? spec : [spec])) {
+                const l = map.layers.find((x) => x.name === name);
+                if (l && l.data) return l.data;
+            }
+            return null;
         };
         // How this map's gids resolve to art. Built per map, because firstgid is
         // a property of the MAP, not of the tileset: the same sheet can start at
         // a different number in every level, and does.
         this.tileSets = this._tilesetsOf(map);
         this.tileMeta = TM.TILES || {};
-        return {
+        const grid = {
             cols, rows, tile,
             left: B.x + (B.width - gw) / 2,   // centred horizontally
             w: gw, h: gh,
@@ -982,6 +995,150 @@ console.log(
             ponds:      (this._levelDef(levelIndex) || {}).PONDS || {},
             mainLeftCol: mainRightCol - (mainW - 1), mainRightCol, mainW,
         };
+        this._mapReport(levelIndex, map, grid);
+        return grid;
+    }
+
+    // What actually reached the renderer from this level's .tmj.
+    //
+    // Worth having because every failure in this path is SILENT by design: a
+    // missing map falls back to procedural land, a misnamed layer becomes an
+    // empty array, and a tileset with no TILESETS entry draws nothing. All three
+    // look identical on screen — an empty field — so the console is the only
+    // place they can be told apart.
+    _mapReport(levelIndex, map, g) {
+        const TM  = CONFIG.ROAD.TILEMAP;
+        const def = this._levelDef(levelIndex) || {};
+        const tag = `[map ${levelIndex}] ${def.FILE || '(no FILE)'}`;
+        const lname = (spec) => (Array.isArray(spec) ? spec.join('" or "') : spec);
+
+        if (!map) {
+            console.error(`${tag} — NOT LOADED (no JSON in cache). The band falls ` +
+                `back to procedural land, which looks like a level that loaded ` +
+                `and drew nothing. Check the path, and check LEVELS was not ` +
+                `edited after preload ran.`);
+            return;
+        }
+        if (!CONFIG.DEBUG_MAP) return;
+
+        // Layers: found or not, and carrying anything or not. A layer that is
+        // simply absent is the single most common cause of "nothing renders" —
+        // the name match is exact and a miss is silent.
+        const present = (map.layers || []).map((l) => l.name);
+        const layers = [TM.GROUND_LAYER, TM.BRANCH_LAYER, TM.MAIN_LAYER,
+                        TM.CROPS_LAYER, TM.POND_LAYER].map((spec) => {
+            const alts = Array.isArray(spec) ? spec : [spec];
+            const l = alts.map((n) => (map.layers || []).find((x) => x.name === n))
+                          .find(Boolean);
+            if (!l)      return `${alts.join('|')}=MISSING`;
+            if (!l.data) return `${l.name}=not-a-tile-layer`;
+            const nz = l.data.reduce((n, v) => n + (v ? 1 : 0), 0);
+            return `${l.name}=${nz || 'EMPTY'}`;
+        });
+
+        // Tilesets: which resolve to a texture, which are along for the ride.
+        const table = TM.TILESETS || {};
+        const sets = (map.tilesets || []).map((t) => {
+            const file = String(t.source || t.name || '').split('/').pop();
+            const d = table[file];
+            return `${file}@${t.firstgid}${d ? ' -> ' + d.KEY : ' -> NO TILESETS ENTRY (not drawn)'}`;
+        });
+
+        // Every distinct gid on a DRAWN layer, split by whether it resolves.
+        // FLIP bits live in the top three bits of a gid and are not masked off
+        // anywhere in this codebase, so a flipped tile resolves to nonsense —
+        // call that out separately rather than lumping it in with "unknown".
+        const FLIP = 0xE0000000;
+        const drawn = [g.groundData, g.branchData, g.mainData];
+        const seen = new Set(), bad = new Set(), flipped = new Set();
+        for (const data of drawn) {
+            for (const raw of (data || [])) {
+                if (!raw || seen.has(raw)) continue;
+                seen.add(raw);
+                if (raw & FLIP) { flipped.add(raw); continue; }
+                if (!this._tileOf(raw)) bad.add(raw);
+            }
+        }
+
+        // MARKER tiles on a DRAWN layer. Markers are never rendered, so one
+        // painted on ground/branch/main is always a mistake — and a silent one,
+        // since it just resolves to "not drawn". This is what catches a crop
+        // marker dropped on the main layer instead of the crops layer.
+        const mb = g.markerBase;
+        const names = TM.MARKERS || [];
+        if (mb !== null && mb !== undefined) {
+            const stray = new Map();      // local id -> count
+            for (const [layer, data] of [['ground', g.groundData], ['branch', g.branchData],
+                                         ['main', g.mainData]]) {
+                for (let i = 0; i < (data || []).length; i++) {
+                    const raw = data[i];
+                    if (!raw || raw < mb) continue;
+                    if (this._tileOf(raw)) continue;          // a real, drawable tile
+                    const id = raw - mb;
+                    const k = `${layer}:${id}`;
+                    stray.set(k, (stray.get(k) || 0) + 1);
+                }
+            }
+            for (const [k, n] of stray) {
+                const [layer, id] = k.split(':');
+                console.warn(`${tag} — ${n} MARKER tile(s) painted on the "${layer}" ` +
+                    `layer: marker ${id}${names[id] ? ` ("${names[id]}")` : ''}. Markers ` +
+                    `are never drawn, so these do nothing there. A crop marker ` +
+                    `belongs on "${lname(TM.CROPS_LAYER)}", a pond marker on ` +
+                    `"${lname(TM.POND_LAYER)}".`);
+            }
+        }
+
+        // What the marker layers are actually carrying, by marker NAME — so a
+        // pond marker painted on the crops layer (or the reverse) is visible
+        // here rather than showing up later as art that never appears.
+        if (mb !== null && mb !== undefined) {
+            for (const [role, data] of [[lname(TM.CROPS_LAYER), g.cropsData],
+                                        [lname(TM.POND_LAYER),  g.pondData]]) {
+                const by = new Map();
+                for (const raw of (data || [])) {
+                    if (!raw) continue;
+                    const id = raw - mb;
+                    by.set(id, (by.get(id) || 0) + 1);
+                }
+                if (by.size) {
+                    console.log(`   ${role.padEnd(9)} ` + [...by].map(([id, n]) =>
+                        `${n}x marker ${id}${names[id] ? ` ("${names[id]}")` : ''}`).join(', '));
+                }
+            }
+        }
+
+        // Main-canal cells: what the machine will actually have to dig.
+        let mains = 0;
+        for (let r = 0; r < g.rows; r++) {
+            for (const col of [g.mainLeftCol, g.mainRightCol]) {
+                const cn = this._connOfGid(g.mainData[r * g.cols + col] || 0);
+                if (cn.n || cn.e || cn.s || cn.w) mains++;
+            }
+        }
+
+        console.log(`${tag}\n` +
+            `   grid      ${g.cols}x${g.rows} @ ${g.tile.toFixed(1)}px = ${g.w.toFixed(0)}x${g.h.toFixed(0)}px\n` +
+            `   layers    ${layers.join('  ')}\n` +
+            `   in file   ${present.join(', ')}\n` +
+            `   tilesets  ${sets.join('\n             ')}\n` +
+            `   gids      ${seen.size} distinct on drawn layers` +
+            (bad.size ? `, ${bad.size} UNRESOLVABLE: ${[...bad].slice(0, 12).join(',')}` : '') +
+            (flipped.size ? `, ${flipped.size} FLIPPED (unsupported): ${[...flipped].slice(0, 4).join(',')}` : '') + `\n` +
+            `   main      ${mains} canal cells in cols ${g.mainLeftCol}-${g.mainRightCol}` +
+            (mains ? '' : '  <- nothing to dig'));
+
+        if (!mains) {
+            console.warn(`${tag} — the main canal is EMPTY in the two centre ` +
+                `columns (${g.mainLeftCol},${g.mainRightCol}). The machine has ` +
+                `nothing to cut, so this level can never complete.`);
+        }
+        if (!(g.cropsData || []).some((v) => v)) {
+            console.warn(`${tag} — the "${lname(TM.CROPS_LAYER)}" layer is empty, so no ` +
+                `crops spawn. Nothing on this level is visible before the dig ` +
+                `starts: the ground layer draws the same frame as the filler ` +
+                `strip above it, and the main canal only appears as it is cut.`);
+        }
     }
 
     // A map's tilesets, resolved against the TILESETS table and sorted so the
@@ -1144,6 +1301,19 @@ console.log(
         const lakeUp = this._lakeLift(g);
         const gTop = bandBot - lakeUp - g.h;   // grid bottom = the lake's top row
         const TMc  = CONFIG.ROAD.TILEMAP;
+        if (CONFIG.DEBUG_MAP) {
+            // Where the ground on screen comes from. The filler strip draws the
+            // SAME terrain frame as the map's own ground layer, so a band can
+            // look completely normal while the map contributes almost none of
+            // it — which is indistinguishable by eye and the usual reason a
+            // level "isn't rendering" when in fact it is.
+            const fill = Math.max(0, Math.ceil((gTop - bandTop) / g.tile));
+            console.log(`[band] map rows ${g.rows} + filler rows ${fill}` +
+                (lakeUp ? `, lifted ${(lakeUp / g.tile).toFixed(1)} rows by the lake` : '') +
+                `  |  band ${(bandBot - bandTop).toFixed(0)}px, map ${g.h.toFixed(0)}px` +
+                `, map top ${(gTop - bandTop).toFixed(0)}px below band top` +
+                (gTop < bandTop ? '  <- MAP RUNS OFF THE TOP OF THE CAMERA' : ''));
+        }
 
         // A map with fewer rows than the band leaves a strip above it. Fill that
         // with plain ground so a short level reads as a field with open land
