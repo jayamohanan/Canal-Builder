@@ -434,7 +434,7 @@ var CONFIG = {
                
                
             ],
-            FILE:    'level_maps/level_01.tmj',   // fallback when LEVELS is empty
+            FILE:    'level_maps/level_02.tmj',   // fallback when LEVELS is empty
 
             // ── Markers ──────────────────────────────────────────────────
             // A map that references MARKER_TILESET is painting MARKERS: tiles
@@ -582,6 +582,30 @@ var CONFIG = {
                                     // drawn at a non-integer scale, so one pixel
                                     // of headroom is not quite enough.
             MAIN_TILES: 2,          // the main canal is this many tiles wide
+
+            // A temporary wall across the main canal — a water blocker.
+            //
+            // It appears when the CUT REACHES IT, not when the level is built:
+            // until then there is nothing to block. One goes in at the level's
+            // far edge the moment the dig finishes, immediately before the flood
+            // is released, so the water arrives to find it standing.
+            //
+            // The point of it is the plan for LONG levels: two or three walls
+            // part-way up, so each stretch fills as it is cut instead of the
+            // whole canal waiting for the end. That turns one long wait into
+            // several visible payoffs. Only the end wall exists today.
+            //
+            // Authored against a 256px (two tile) canal, so it takes the SAME
+            // scale the 128px tiles take: whatever a tile is on screen, divided
+            // by FRAME. At 449x226 that puts it 3.5 tiles wide — the two canal
+            // columns plus about three quarters of a tile onto each bank.
+            BLOCK: {
+                ENABLED: true,
+                FILE:  'graphics/block.png',
+                Y:     0,        // nudge off the boundary line, in tiles
+                DEPTH: 3.11,     // over the canal's water, so it reads as holding
+                                 // the water rather than sitting under it
+            },
 
             // ── Terrain sheet ───────────────────────────────────────────────
             // Everything that is NOT a canal piece: the plain ground, the flat
@@ -1172,6 +1196,19 @@ var CONFIG = {
                                    // machine — it spins and advances for this long,
                                    // then sits dead until the next tick
             ADVANCE_PER_CHARGE: 2, // px of digging banked per unit of battery charge
+            OVERRUN_TILES: 3.5,    // keep cutting this far PAST the level's last
+                                   // row before the level counts as dug. The belt
+                                   // straddles the cut line — 40% ahead of it,
+                                   // 60% trailing — so stopping the line on the
+                                   // boundary leaves most of the machine still
+                                   // standing on the level it has just finished.
+                                   // This carries it fully clear.
+                                   //
+                                   // DIG distance only. The canal, the water, the
+                                   // lilies and the reveal all still measure to
+                                   // the level's own edge, so the overrun floods
+                                   // nothing and costs the player nothing — the
+                                   // machine simply drives out.
             MARGIN: 9,             // loose ground the bore takes beyond the channel
                                    // on each side (px @ platformScale)
 

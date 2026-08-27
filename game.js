@@ -466,6 +466,8 @@ class GameScene extends Phaser.Scene {
             }
             // The watering splash: one row of square frames, sliced at the
             // tilemap's own frame size since that is what the art is drawn to.
+            const BK = TM.BLOCK || {};
+            if (BK.ENABLED !== false && BK.FILE) this.load.image('block', BK.FILE);
             const PW = TM.PLANT_WATER || {};
             if (PW.ENABLED !== false && PW.FILE) {
                 this.load.spritesheet('plant_water', PW.FILE,
@@ -1678,6 +1680,37 @@ console.log(
         put('lake_water', LK.DEPTH_WATER !== undefined ? LK.DEPTH_WATER : 3.11);
     }
 
+    // The wall across the main canal at the level's far edge.
+    //
+    // Placed when the CUT IS FINISHED, not when the level is built — because it
+    // is a water blocker, and until the cut reaches it there is nothing to block.
+    // It goes in immediately before the flood is released, so the water arrives
+    // to find it already standing.
+    //
+    // Positioned entirely from the tunnel: exitY is the level's far edge, and
+    // the canal's centre is the seam between the two main columns. Nothing here
+    // reads the live band, which by now may belong to the next level.
+    //
+    // Scale is the TILES' own factor — the art is authored against a 256px
+    // two-tile canal, exactly the space two 128px canal frames occupy, so its
+    // pixel size divided by the sheet's frame size times the on-screen tile
+    // keeps it locked to the canal at any tile size.
+    _placeBlock(tn) {
+        const TM = CONFIG.ROAD.TILEMAP, BK = TM.BLOCK || {};
+        if (BK.ENABLED === false || !this.textures.exists('block')) return;
+        const F = tn && tn.flood;
+        if (!F || !F.g) return;
+        const g = F.g;
+        const src = this.textures.get('block').getSourceImage();
+        const k   = g.tile / (TM.FRAME || 128);
+        this._addB(this.add.image(
+                g.left + g.mainRightCol * g.tile,     // the seam between the main columns
+                tn.exitY + g.tile * (BK.Y || 0),      // the level's far edge
+                'block')
+            .setDisplaySize(src.width * k, src.height * k)
+            .setDepth(BK.DEPTH !== undefined ? BK.DEPTH : 3.11), F.seg);
+    }
+
     // A white lattice on the TILE boundaries, for checking alignment — where the
     // lake meets the level, where the machine starts, whether a map sits where
     // you think it does.
@@ -2354,6 +2387,38 @@ console.log(
                 }
             }
         }
+
+        // ── The overrun ──────────────────────────────────────────────────────
+        // The blade keeps cutting past the level's last row so it can get clear
+        // of it (TUNNEL.OVERRUN_TILES). The canal has to exist up there or the
+        // machine drives on throwing spoil over untouched ground — the cut has
+        // to appear where the cut is happening.
+        //
+        // These are DRY cells only: the trench continues, the water does not.
+        // Their row numbers are NEGATIVE, one above the map for each -1, and
+        // every formula in the flood already handles that — a row's bottom edge
+        // is (rows - row - 1) tiles above the dig's start line whichever side of
+        // zero the row sits, and the waterline stops at the level's own edge so
+        // their fill can never begin.
+        //
+        // They copy the map's TOP row of main tiles, so the channel carries on
+        // in whatever shape the level ended with.
+        const over = Math.ceil((CONFIG.ROAD.TUNNEL.OVERRUN_TILES || 0));
+        for (let k = 1; k <= over; k++) {
+            const r = -k;
+            for (const c of [g.mainLeftCol, g.mainRightCol]) {
+                const gid = g.mainData[c] || 0;            // row 0 — the map's top
+                const cn  = this._connOfGid(gid);
+                if (!(cn.n || cn.e || cn.s || cn.w)) continue;
+                cells.set(c + ',' + r, {
+                    col: c, row: r, conn: cn, progress: 0, dryP: 0,
+                    entryDir: 's', filling: false, filled: false, isMain: true,
+                    overrun: true,
+                    dry:  sprite(gid, c, r, this._mainDryDepth()),
+                    flow: null,                            // never floods
+                });
+            }
+        }
         // Foam is drawn as textured sprites (water frame + 30% white, soft
         // ellipse — baked once). They sit BELOW the revealed water (1.55) so the
         // filling water covers the foam behind its edge and only the leading
@@ -2570,11 +2635,11 @@ console.log(
         //    the auger's dig (progressPx, px dug from the bottom); the FILLED
         //    tile follows the waterline (tn.wet), which lags the blade. Row r's
         //    bottom edge sits (rows-r-1) tiles up from the bottom.
-        // Height of a row's BOTTOM EDGE above the dig's start line. Taken from
-        // the tunnel's own length rather than the row count, because the lake
-        // moves the start line up off the map's floor — with no lake the two are
-        // identical (len is exactly rows x tile).
-        const cellUp = (row) => tn.len - (row + 1) * g.tile;
+        // Height of a row's BOTTOM EDGE above the dig's start line, which is the
+        // grid's bottom edge — so this is pure map geometry. It must NOT be taken
+        // from the dig's length: the blade now runs past the level's last row
+        // (OVERRUN_TILES) and every row would reveal that much late.
+        const cellUp = (row) => (g.rows - row - 1) * g.tile;
         for (const cell of F.cells.values()) {
             if (!cell.isMain) continue;
             cell.entryDir = 's';
@@ -2955,6 +3020,15 @@ console.log(
         const entryY = band.headY;
         const exitY  = band.bandTop;
         const len    = entryY - exitY;
+        // How far the BLADE travels, as opposed to how long the canal is. The
+        // machine keeps cutting past the level's last row until the belt — which
+        // trails 60% of its height behind the cut line — is completely clear of
+        // the ground it has finished. Only the dig budget and the finish test
+        // read this; the canal, the water and everything measured along it stay
+        // on `len`, so the overrun neither floods nor costs anything.
+        const tile   = (this.tileGrid && this.tileGrid.tile)
+                     || r.canalW / (CONFIG.ROAD.TILEMAP.MAIN_TILES || 2);
+        const digLen = len + (TN.OVERRUN_TILES || 0) * tile;
 
         // The soil strip is CHANNEL-sized: what the machine leaves behind is
         // exactly as wide as the finished canal.
@@ -2967,10 +3041,6 @@ console.log(
         // same ratio, so the two parts keep their authored proportions and
         // their spacing at any tile size.
         const TR   = TN.TRENCHER;
-        // Off the tilemap (no grid) the main canal's own width stands in: it is
-        // MAIN_TILES tiles across.
-        const tile = (this.tileGrid && this.tileGrid.tile)
-                   || r.canalW / (CONFIG.ROAD.TILEMAP.MAIN_TILES || 2);
         const tsc  = tile * (TR.BELT_TILES || 1) / TR.BELT_W;
         const beltW = TR.BELT_W * tsc, beltH = TR.BELT_H * tsc;
         const ctrlW = TR.CTRL_W * tsc, ctrlH = TR.CTRL_H * tsc;
@@ -3107,7 +3177,7 @@ console.log(
         // The machine advances off a banked-charge account: one progress
         // value drives the rig, the mask and the reveal.
         this.tunnel = {
-            entryY, exitY, len, bladeLen, bodyH,
+            entryY, exitY, len, digLen, bladeLen, bodyH,
             progressPx: 0, earnedPx: 0, open: false, lastTime: 0, pulseT: 0,
             wet: 0,                          // how far the water has actually come
             bore, maskShape, foam: foamGfx, crack, crackW: beltW,
@@ -3493,7 +3563,7 @@ console.log(
         // so it keeps creeping up the cut and rippling while the blade rests.
         this._advanceWater(tn, dt, time);
 
-        const remaining = Math.min(tn.earnedPx, tn.len) - tn.progressPx;
+        const remaining = Math.min(tn.earnedPx, tn.digLen || tn.len) - tn.progressPx;
 
         // The machine runs on the battery's 1-second pulse: each charge tick
         // arms a short burst (pulseT). Outside a burst — or with nothing owed —
@@ -3544,7 +3614,7 @@ console.log(
         // Spoil: the emitters follow the cut line and run only while cutting.
         this._runSpoil(b, faceY, true);
 
-        if (tn.progressPx >= tn.len - 0.5) this._breakthrough();
+        if (tn.progressPx >= (tn.digLen || tn.len) - 0.5) this._breakthrough();
     }
 
     // ── The waterline ────────────────────────────────────────────────────────
@@ -3751,6 +3821,11 @@ console.log(
         // same mask, same soil-recedes-ahead-of-it behaviour as while digging,
         // so the finish reads as the last of the water flowing in rather than
         // as anything being built.
+        // The wall goes in first, then the water is let go — so the flood arrives
+        // to find it already standing rather than appearing behind water that
+        // has already passed.
+        this._placeBlock(tn);
+
         // No timed flood: the water just keeps flowing at the speed it was
         // already flowing at. The blade is simply no longer holding it back,
         // so its target becomes the far mouth and it runs the last stretch on
