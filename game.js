@@ -1458,6 +1458,7 @@ console.log(
         // The lake itself, at the foot of the screen — under the level that has
         // just been lifted to meet it.
         this._buildLake(seg, bandBot);
+        this._buildDebugGrid(seg, bandTop, bandBot, gTop);
 
         seg.band = band;
         this.road.band = band;
@@ -1675,6 +1676,45 @@ console.log(
                 .setOrigin(0, 1).setDisplaySize(w, h).setDepth(depth), seg);
         put('lake_dry',   LK.DEPTH_DRY   !== undefined ? LK.DEPTH_DRY   : 3.02);
         put('lake_water', LK.DEPTH_WATER !== undefined ? LK.DEPTH_WATER : 3.11);
+    }
+
+    // A white lattice on the TILE boundaries, for checking alignment — where the
+    // lake meets the level, where the machine starts, whether a map sits where
+    // you think it does.
+    //
+    // Drawn as WORLD content so it scrolls with the band and stays welded to the
+    // tiles; a screen-fixed grid would drift off them the moment the world pans
+    // and would then be worse than no grid at all.
+    //
+    // Rows are anchored to the MAP's own grid and continued in both directions
+    // to fill the visible band, so a short map still gets lines above it that
+    // line up with its tiles.
+    _buildDebugGrid(seg, bandTop, bandBot, gTop) {
+        const D = CONFIG.DEBUG_GRID;
+        if (!D || D.ENABLED === false) return;
+        const g = this.tileGrid;
+        if (!g) return;
+        const gfx = this.add.graphics().setDepth(D.DEPTH !== undefined ? D.DEPTH : 9000);
+        gfx.lineStyle(Math.max(1, (D.WIDTH || 1) * this.layoutConfig.platformScale),
+                      D.COLOR !== undefined ? D.COLOR : 0xffffff,
+                      D.ALPHA !== undefined ? D.ALPHA : 0.25);
+        for (let c = 0; c <= g.cols; c++) {
+            const x = g.left + c * g.tile;
+            gfx.lineBetween(x, bandTop, x, bandBot);
+        }
+        // Step back from the map's top edge to the first line at or above the
+        // band's top, then draw down past its bottom.
+        const first = gTop - Math.ceil(Math.max(0, gTop - bandTop) / g.tile) * g.tile;
+        let n = 0;
+        for (let y = first; y <= bandBot + 0.5; y += g.tile) {
+            gfx.lineBetween(g.left, y, g.left + g.cols * g.tile, y);
+            n++;
+        }
+        this._addB(gfx, seg);
+        if (CONFIG.DEBUG_MAP) {
+            console.log(`[grid] ${g.cols} cols x ${n - 1} rows visible @ ${g.tile.toFixed(1)}px` +
+                `  (map is ${g.cols}x${g.rows})`);
+        }
     }
 
     // ── Ponds ────────────────────────────────────────────────────────────────

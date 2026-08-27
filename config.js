@@ -49,6 +49,18 @@ var CONFIG = {
     RESET_PROGRESS: false,
     DEBUG_HALF_LINE: false,  // draw a line splitting partA / partB (vertical in
                              // landscape, horizontal in portrait)
+    // White lattice over the farm half, on the TILE boundaries — so it shows
+    // where tiles actually are, not just where 22x20 cells would fall. It is
+    // world content, so it scrolls with the band and stays welded to the tiles.
+    // Columns come from the map's own width; rows are anchored to the map's grid
+    // and continued in both directions to fill the visible band.
+    DEBUG_GRID: {
+        ENABLED: true,
+        COLOR:   0xffffff,
+        ALPHA:   0.25,     // faint: this has to sit over the art without hiding it
+        WIDTH:   1,        // px @ platformScale
+        DEPTH:   9000,     // above everything the farm draws
+    },
     DEBUG_MAP:  true,        // report, per band, exactly what reached the
                              // renderer from the level's .tmj: which layers were
                              // found and whether they carry anything, which
