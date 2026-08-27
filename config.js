@@ -605,6 +605,14 @@ var CONFIG = {
                 Y:     0,        // nudge off the boundary line, in tiles
                 DEPTH: 3.11,     // over the canal's water, so it reads as holding
                                  // the water rather than sitting under it
+                // Pulling one out is what lets the water through. A wall is
+                // removed the instant the level ABOVE it is about to flood — so
+                // the water does not merely appear beyond the boundary, it goes
+                // because the thing stopping it was taken away.
+                REMOVE_MS:   280,
+                REMOVE_RISE: 0.45,   // how far it lifts as it goes, in tiles.
+                                     // Lifted rather than faded in place: it is
+                                     // being pulled out of the channel
             },
 
             // ── Terrain sheet ───────────────────────────────────────────────
@@ -1390,11 +1398,41 @@ var CONFIG = {
             },
         },
 
+        // ── The world scrolls; it no longer jumps ─────────────────────────
+        // Levels are stacked FLUSH: each one's floor is the one below it's top,
+        // and a band is exactly its own map — never a screen height. That is
+        // what removes the strip of filler ground that used to sit between
+        // levels, and what stops the machine being teleported to a fresh dig
+        // site: the next level's canal begins exactly where the last one ended,
+        // so the rig simply keeps cutting.
+        //
+        // Finished levels are NOT torn down when the next begins. They stay on
+        // screen, watered and grown, and are only released once they have
+        // scrolled clear below — so the player sees the stack of fields they
+        // have already brought in.
         ENDLESS: {
             ENABLED: true,
-            SETTLE_MS: 5000,       // how long the finished stretch stays on
-                                   // screen before the camera moves on
-            PAN_MS: 2500,          // camera travel time to the next dig site
+            // The camera holds still until the machine leaves a band of the
+            // view, then eases up to put it back. A camera welded to the rig
+            // would always be looking at bare soil and never at the crops
+            // coming in behind it.
+            FOLLOW_TOP:  0.34,     // machine may climb to this fraction of the
+                                   // view before the camera answers
+            FOLLOW_LERP: 2.2,      // how fast it closes on that, per second.
+                                   // Low: the answer should read as the camera
+                                   // catching up, not as a snap
+            FILL_AHEAD:  0.75,     // keep this many view-heights of world BUILT
+                                   // above the camera. Levels are shorter than
+                                   // the screen, so without this the viewport is
+                                   // mostly empty: the next level used to appear
+                                   // only when the last one finished. The world
+                                   // is continuous, so it has to exist before
+                                   // the player can see it
+            KEEP_BELOW:  0.6,      // release a finished level once its top edge
+                                   // is this many view-heights below the camera.
+                                   // Generous — it is cheaper to hold a band a
+                                   // moment longer than to have one vanish in
+                                   // view
         },
 
         WATER: {

@@ -940,15 +940,17 @@ console.log(
         // off, camB is never created and _addB degrades to a plain registry
         // push — behaviour is identical to before.
         this.segments  = [];
+        this.active    = null;        // the level being dug (not always the newest)
         this._plantWaterN = 0;        // splash rotation counter (see _playPlantWater)
         this._worldBSet = new Set();
         this._camBSnapDone = false;   // fresh build (incl. scene.restart on resize) → the set must refill
         this.camB = null;
         if (RC.ENDLESS && RC.ENDLESS.ENABLED) {
             this.endless = {
-                segH: bottom - top, segIndex: 0,
-                panning: false, nextReady: false,
+                segIndex: 0,
+                viewH: bottom - B.y,      // what the farm camera can see at once
                 baseScrollY: B.y,
+                held: false,              // next dig waiting on the last field
             };
             this.camB = this.cameras.add(B.x, B.y, B.width, (bottom - B.y) + s(2));
             this.camB.setScroll(B.x, B.y);
@@ -956,7 +958,11 @@ console.log(
             this.endless = null;
         }
 
-        this._buildSegment(top, bottom);
+        // The first level stands on the screen's floor; every one after it stands
+        // on the level below. Then keep going until the view is full — a level
+        // is a third of the screen, so one of them is not a world.
+        this._buildSegment(bottom, top, bottom);
+        this._fillViewport();
     }
 
     // Build the tile grid for a level, fitted to a band of `bandH` whose bottom
@@ -969,7 +975,11 @@ console.log(
         const map = this._levelMap(levelIndex);
         if (!map) return null;
         const cols = map.width, rows = map.height;
-        const tile = Math.min(bandH / rows, B.width / cols);
+        // Fixed by the half's WIDTH alone. It used to be the smaller of the
+        // width fit and the height fit, which gave a 20-row level and an 8-row
+        // level slightly different tile sizes — and levels that stack flush have
+        // to share one scale or they cannot line up at the seam.
+        const tile = B.width / cols;
         const gw   = cols * tile, gh = rows * tile;
         const mainW = TM.MAIN_TILES || 2;                  // the 2 centre columns
         const mainRightCol = Math.floor(cols / 2);
@@ -1288,7 +1298,11 @@ console.log(
     // and the stretch of canal already built at its foot, plus the machine
     // parked at the head ready to dig the rest. Returns the segment record
     // ({objects, band, tunnel}) used for panning, rebasing and teardown.
-    _buildSegment(bandTop, bandBot) {
+    // Build one level standing on `floorY` — the y its ground rests on, which is
+    // the previous level's top edge. The band IS the map: its height is the
+    // map's own rows, never a screen height, which is what lets levels of
+    // different lengths stack without a gap.
+    _buildSegment(floorY, bandTop, bandBot) {
         const RC = CONFIG.ROAD;
         const s  = (v) => v * this.layoutConfig.platformScale;
         const B  = this.layoutConfig.partB;
@@ -1301,13 +1315,18 @@ console.log(
         // rebuilt here rather than once at startup.
         if (this.tileGrid) {
             const idx = this.endless ? this.endless.segIndex : 0;
-            this.tileGrid = this._makeGrid(idx, bandBot, bandBot - bandTop) || this.tileGrid;
+            this.tileGrid = this._makeGrid(idx, floorY, 0) || this.tileGrid;
         }
 
         // Tile-map mode: draw the authored grid and stop. No procedural land,
-        // no dug canal, no auger — just the level's tiles filling the band.
+        // no dug canal, no auger — just the level's tiles.
         if (this.tileGrid) {
-            this._buildTileBand(bandTop, bandBot, seg);
+            this._buildTileBand(seg, floorY);
+            // createTunnel points this.tunnel at whatever it just made. That is
+            // right for the FIRST level and wrong for every level built ahead of
+            // the machine, so control is handed straight back to the live one.
+            if (!this.active) this.active = seg;
+            else { this.tunnel = this.active.tunnel; this._retireBore(seg); }
             return seg;
         }
 
@@ -1363,51 +1382,28 @@ console.log(
     // anchored to the BOTTOM of the band so it sits just above the slots; on a
     // taller band any slack falls at the top. Cell (0,0) is the top-left; the
     // data array is row-major (row * cols + col), 0 = empty.
-    _buildTileBand(bandTop, bandBot, seg) {
+    _buildTileBand(seg, floorY) {
         const g    = this.tileGrid;
-        // The lake lifts the WHOLE level, it does not merely cover its foot: the
-        // grid is anchored so its bottom row lands exactly on the lake's top
-        // row. Everything the level owns — ground, branches, crops, the dig line
-        // — rises with it, because all of it is measured off gTop.
+        // The band IS the map. Its floor is what it was handed — the previous
+        // level's top edge — so levels meet with nothing between them, and there
+        // is no filler ground to draw because there is no band left over.
         //
-        // The level then runs off the top of the camera by however much it rose.
-        // That is expected for now; the camera work that follows the machine
-        // upward is a separate job.
+        // Only the first level is lifted, and only by the lake: its bottom row
+        // has to land ON the lake's top row so the canal is joined to the water
+        // rather than merely near it.
         const lakeUp = this._lakeLift(g);
-        const gTop = bandBot - lakeUp - g.h;   // grid bottom = the lake's top row
+        const gTop = floorY - lakeUp - g.h;
         const TMc  = CONFIG.ROAD.TILEMAP;
         if (CONFIG.DEBUG_MAP) {
-            // Where the ground on screen comes from. The filler strip draws the
-            // SAME terrain frame as the map's own ground layer, so a band can
-            // look completely normal while the map contributes almost none of
-            // it — which is indistinguishable by eye and the usual reason a
-            // level "isn't rendering" when in fact it is.
-            const fill = Math.max(0, Math.ceil((gTop - bandTop) / g.tile));
-            console.log(`[band] map rows ${g.rows} + filler rows ${fill}` +
-                (lakeUp ? `, lifted ${(lakeUp / g.tile).toFixed(1)} rows by the lake` : '') +
-                `  |  band ${(bandBot - bandTop).toFixed(0)}px, map ${g.h.toFixed(0)}px` +
-                `, map top ${(gTop - bandTop).toFixed(0)}px below band top` +
-                (gTop < bandTop ? '  <- MAP RUNS OFF THE TOP OF THE CAMERA' : ''));
+            console.log(`[band] level ${this.endless ? this.endless.segIndex : 0}: ` +
+                `${g.rows} rows x ${g.tile.toFixed(1)}px = ${g.h.toFixed(0)}px, ` +
+                `floor ${floorY.toFixed(0)} -> top ${gTop.toFixed(0)}` +
+                (lakeUp ? `, lifted ${(lakeUp / g.tile).toFixed(1)} rows by the lake` : ''));
         }
 
         // A map with fewer rows than the band leaves a strip above it. Fill that
         // with plain ground so a short level reads as a field with open land
         // beyond it, rather than a hole between this band and the next.
-        if (gTop > bandTop + 0.5 && this.textures.exists('terrain')) {
-            const gFrame = TMc.TERRAIN_GROUND !== undefined ? TMc.TERRAIN_GROUND : 0;
-            const rows = Math.ceil((gTop - bandTop) / g.tile);
-            for (let row = 0; row < rows; row++) {
-                for (let col = 0; col < g.cols; col++) {
-                    this._addB(this.add.image(
-                            g.left + (col + 0.5) * g.tile,
-                            gTop - (row + 0.5) * g.tile,
-                            'terrain', gFrame)
-                        .setDisplaySize(g.tile + 1, g.tile + 1)
-                        .setDepth(1.4), seg);
-                }
-            }
-        }
-
         // GROUND (plain land) then BRANCH (the pre-built dry branches on top
         // of it) are drawn statically and always visible, each cell one
         // spritesheet frame. Both come from the same sheet, so they batch as
@@ -1459,10 +1455,12 @@ console.log(
         };
         // The lake itself, at the foot of the screen — under the level that has
         // just been lifted to meet it.
-        this._buildLake(seg, bandBot);
-        this._buildDebugGrid(seg, bandTop, bandBot, gTop);
+        this._buildLake(seg, floorY);
+        this._buildDebugGrid(seg, gTop, gTop + g.h, gTop);
 
         seg.band = band;
+        seg.top   = band.bandTop;      // the next level's floor
+        seg.floor = band.bandBot;
         this.road.band = band;
         // The dug channel is the full width of the main-canal columns.
         this.road.canalW = g.mainW * g.tile;
@@ -1703,12 +1701,42 @@ console.log(
         const g = F.g;
         const src = this.textures.get('block').getSourceImage();
         const k   = g.tile / (TM.FRAME || 128);
-        this._addB(this.add.image(
+        const img = this._addB(this.add.image(
                 g.left + g.mainRightCol * g.tile,     // the seam between the main columns
                 tn.exitY + g.tile * (BK.Y || 0),      // the level's far edge
                 'block')
             .setDisplaySize(src.width * k, src.height * k)
             .setDepth(BK.DEPTH !== undefined ? BK.DEPTH : 3.11), F.seg);
+        if (F.seg) F.seg.block = img;
+    }
+
+    // Pull the wall out of the level BELOW this one, immediately before this
+    // level floods.
+    //
+    // That ordering is the whole effect. Each level's water starts at its own
+    // mouth, which is exactly where the wall below it stands — so lifting that
+    // wall at the moment the water is released makes the flood read as water
+    // coming THROUGH, rather than as water that has appeared past a boundary.
+    // The wall lifts rather than fading where it stands: it is being taken out
+    // of the channel, not dissolving.
+    _removeBlockBelow(tn) {
+        const F = tn && tn.flood;
+        const seg = F && F.seg;
+        if (!seg) return;
+        const below = this.segments[this.segments.indexOf(seg) - 1];
+        const img = below && below.block;
+        if (!img || !img.scene) return;
+        below.block = null;
+        const BK = CONFIG.ROAD.TILEMAP.BLOCK || {};
+        const ms = BK.REMOVE_MS !== undefined ? BK.REMOVE_MS : 280;
+        const rise = (BK.REMOVE_RISE !== undefined ? BK.REMOVE_RISE : 0.45)
+                   * (this.tileGrid ? this.tileGrid.tile : 0);
+        if (ms <= 0) { img.destroy(); return; }
+        this.tweens.add({
+            targets: img, y: img.y - rise, alpha: 0,
+            duration: ms, ease: 'Quad.easeIn',
+            onComplete: () => img.destroy(),
+        });
     }
 
     // A white lattice on the TILE boundaries, for checking alignment — where the
@@ -3183,10 +3211,9 @@ console.log(
             bore, maskShape, foam: foamGfx, crack, crackW: beltW,
             flood: this._buildFlood(seg, band),   // canal water (tilemap only)
             seg: seg || null,
-            // A dig site built ahead (endless: the NEXT band, while the
-            // camera is still down at the current one) stays dormant — no
-            // charge banks, no digging — until the camera has arrived and
-            // settled (_rebaseWorld arms it). The first segment starts armed.
+            // A level built while the one below it is still coming in stays
+            // dormant — no charge banks, no digging — until that field has
+            // finished growing (_finishStretch arms it). The first starts armed.
             ready: this.segments.length <= 1,
         };
         this.tunnel.lilies = this._buildLilies(seg, band, this.tunnel);
@@ -3811,8 +3838,8 @@ console.log(
         // vehicle evaporating the moment its work was done and left the whole
         // flood with nothing on screen but water.
         //
-        // It is retired only when its successor exists (see _buildNextSegment),
-        // so there is always exactly one machine and never a gap with none.
+        // It is retired only when the level above goes live and its own rig takes
+        // over, so there is always exactly one machine and never a gap with none.
         this._setTrencherRunning(tn, false, false);
         this._runSpoil(tn.bore, tn.entryY - tn.progressPx, false);
 
@@ -3821,10 +3848,11 @@ console.log(
         // same mask, same soil-recedes-ahead-of-it behaviour as while digging,
         // so the finish reads as the last of the water flowing in rather than
         // as anything being built.
-        // The wall goes in first, then the water is let go — so the flood arrives
-        // to find it already standing rather than appearing behind water that
-        // has already passed.
+        // This level's wall goes in, and the one below it comes out — then the
+        // water is let go. The wall below stands exactly at this level's mouth,
+        // so pulling it is what the water flows through.
         this._placeBlock(tn);
+        this._removeBlockBelow(tn);
 
         // No timed flood: the water just keeps flowing at the speed it was
         // already flowing at. The blade is simply no longer holding it back,
@@ -3833,19 +3861,33 @@ console.log(
         tn.flooding = true;
     }
 
-    // This stretch of canal is finished. In endless mode this is also the
-    // moment the NEXT band appears above — the machine starts over there —
-    // while the finished stretch is held on screen for SETTLE_MS before the
-    // camera rides up to the new site.
+    // This stretch of canal is finished and full. The next level goes up
+    // immediately — the machine is already standing in it — but it is HELD:
+    // no charge banks and nothing advances until every crop this level watered
+    // has grown through to its final stage.
+    //
+    // That hold is the whole completion beat. The point of a level is watching
+    // the field come in, and digging on while it was still growing would throw
+    // that away. The camera keeps following, so the player watches the finished
+    // field from just below while the rig waits at its edge.
     _finishStretch(tn) {
-        if (this.endless) {
-            // A breakthrough during a pan (extreme charge rates) must wait
-            // for the rebase — the band above is still occupied until then.
-            if (this.endless.panning) this.endless.deferBuild = true;
-            else this._buildNextSegment();
-            this.time.delayedCall(CONFIG.ROAD.ENDLESS.SETTLE_MS || 5000,
-                                  () => this._maybePan());
-        }
+        const E = this.endless;
+        if (!E) return;
+        const seg = tn.flood && tn.flood.seg;
+        const nextSeg = this._advanceToNextLevel(seg);
+        this._fillViewport();                  // keep the world ahead of the view
+        const next = nextSeg && nextSeg.tunnel;
+        if (next) next.ready = false;
+        E.held = true;
+        const wait = () => {
+            if (seg && !this._cropsDone(seg)) { this.time.delayedCall(300, wait); return; }
+            // Tick the job off, and only then let the machine bite again.
+            this._completeTask(() => {
+                E.held = false;
+                if (next) next.ready = true;
+            });
+        };
+        wait();
     }
 
     // ================================================================
@@ -4003,76 +4045,94 @@ console.log(
     // Stack the next band above the world: fresh land, a fresh stretch of
     // built canal at its foot and a machine parked at that head. From here the
     // batteries bank charge toward the NEW machine.
-    _buildNextSegment() {
+    // Keep the world built ahead of the camera.
+    //
+    // A level is roughly a third of the screen, so "build the next one when this
+    // one finishes" leaves most of the viewport empty. Levels are stacked upward
+    // until there is a comfortable margin of world above the view, and topped up
+    // as the camera climbs — so what the player sees is one continuous landscape
+    // rather than a single field with nothing beyond it.
+    //
+    // Only the LIVE level has a machine; the ones built ahead are landscape.
+    _fillViewport() {
         const E = this.endless;
-        const r = this.road;
-
-        E.segIndex++;
-        const fresh = this._buildSegment(r.top - E.segH, r.top);
-        // Hand over: the parked rig goes only now that a new one is standing.
-        for (const seg of this.segments) if (seg !== fresh) this._retireBore(seg);
-        E.nextReady = true;
-    }
-
-    // Take one segment's machine off the board. Not a fade — by the time this
-    // runs its replacement is already standing at the next cut, and two rigs
-    // dissolving into each other reads worse than a clean handover. The sprites
-    // are still in the segment's registry, so the rebase destroys them properly.
-    _retireBore(seg) {
-        const b = seg && seg.tunnel && seg.tunnel.bore;
-        if (!b) return;
-        for (const o of [b.belt, b.ctrl, b.shadow, b.cutEdge]) if (o) o.setVisible(false);
-    }
-
-    // Once the finished stretch has been admired: if the next band is
-    // waiting, ride up to it.
-    _maybePan() {
-        const E = this.endless;
-        if (!E || !E.nextReady || E.panning) return;
-        // Don't move on until the finished band's branches have all filled —
-        // let the water reach the end of every ditch first — and then until
-        // every crop it waters has grown through to its final stage. The whole
-        // point of the level is watching the field come in, so the payoff is
-        // never cut short by the pan.
-        for (const seg of this.segments) {
-            if (!seg.tunnel || !seg.tunnel.open) continue;
-            if (!this._floodDone(seg.tunnel) || !this._cropsDone(seg)) {
-                this.time.delayedCall(300, () => this._maybePan());
-                return;
-            }
+        if (!E || !this.camB || !this.tileGrid) return;
+        const C = CONFIG.ROAD.ENDLESS || {};
+        const ahead = (C.FILL_AHEAD !== undefined ? C.FILL_AHEAD : 0.75) * this.camB.height;
+        // Bounded: a map with no height would otherwise spin here forever.
+        for (let guard = 0; guard < 16; guard++) {
+            const top = this.segments[this.segments.length - 1];
+            if (!top || top.top === undefined) return;
+            if (top.top <= this.camB.scrollY - ahead) return;
+            E.segIndex++;
+            const made = this._buildSegment(top.top);
+            if (!made || made.top === undefined || made.top >= top.top) return;  // no progress
         }
-        E.panning  = true;
-        E.nextReady = false;
-        // The job is done: tick it off and let the list settle BEFORE the camera
-        // leaves. Panning while the tick is still playing would throw away the
-        // one moment that tells the player they finished something.
-        this._completeTask(() => {
-            this.tweens.add({
-                targets:  this.camB,
-                scrollY:  E.baseScrollY - E.segH,
-                duration: CONFIG.ROAD.ENDLESS.PAN_MS || 2500,
-                ease:     'Sine.easeInOut',
-                onComplete: () => {
-                    // Small settle delay so transient tweens (debris, coins)
-                    // mostly drain before coordinates shift under them.
-                    this.time.delayedCall(400, () => this._rebaseWorld());
-                },
-            });
-        });
     }
 
-    // The pan is over: teleport the world back into the home band so state
-    // never drifts. Everything shifts down by segH — display objects, band
-    // and dig anchors — the old segment is destroyed, the camera snaps back,
-    // and on screen NOTHING moves: world+camera shift cancel out.
-    _rebaseWorld() {
-        const E = this.endless, r = this.road;
-        const segH = E.segH;
+    // Hand the machine to the level above: it is already built and standing
+    // there, so this is a change of which tunnel is live, not a new dig site.
+    _advanceToNextLevel(seg) {
+        const i = this.segments.indexOf(seg);
+        const next = this.segments[i + 1];
+        if (!next || !next.tunnel) return null;
+        this._retireBore(seg);          // one machine on the board
+        this.active = next;
+        this.tunnel = next.tunnel;
+        // It inherits the ground the old rig cut on its way out (OVERRUN_TILES
+        // past the boundary), so it stands exactly where that one parked rather
+        // than dropping back to this level's floor.
+        const tile = this.tileGrid ? this.tileGrid.tile : 0;
+        next.tunnel.progressPx = Math.min(next.tunnel.len,
+            (CONFIG.ROAD.TUNNEL.OVERRUN_TILES || 0) * tile);
+        this._showBore(next);
+        this._placeBore(next.tunnel);
+        // Those overrun cells now sit on top of this level's own bottom rows —
+        // the same trench drawn twice.
+        this._dropOverrun(seg);
+        return next;
+    }
 
-        // 1. Tear down every segment but the newest.
-        const survivor = this.segments[this.segments.length - 1];
-        for (const seg of this.segments) {
-            if (seg === survivor) continue;
+    // Follow the machine, but only when it insists.
+    //
+    // The camera holds still while the rig works inside a band of the view, and
+    // eases up only once it climbs out of the top of that band. A camera welded
+    // to the machine would always be pointed at bare soil and never at the crops
+    // coming in behind it — which is the part worth watching.
+    _followMachine(dtMs) {
+        const E = this.endless;
+        if (!E || !this.camB) return;
+        const tn = this.tunnel;
+        if (!tn) return;
+        const C = CONFIG.ROAD.ENDLESS || {};
+        const view = this.camB.height;
+        const frac = C.FOLLOW_TOP !== undefined ? C.FOLLOW_TOP : 0.34;
+        const cutY = tn.entryY - tn.progressPx;            // the machine's cut line
+        // Highest the machine may sit before the camera answers.
+        const want = cutY - view * frac;
+        if (want < this.camB.scrollY) {
+            const k = 1 - Math.exp(-(dtMs / 1000) * (C.FOLLOW_LERP || 2.2));
+            this.camB.scrollY += (want - this.camB.scrollY) * k;
+        }
+        this._fillViewport();
+        this._reapSegments();
+    }
+
+    // Release levels that have scrolled clear below the camera. They are kept
+    // long after they finish — the stack of fields already brought in is the
+    // clearest progress the game has — so this is the only thing that ever
+    // destroys one, and it waits until the level is genuinely out of sight.
+    _reapSegments() {
+        const C = CONFIG.ROAD.ENDLESS || {};
+        const below = this.camB.scrollY + this.camB.height
+                    + (C.KEEP_BELOW !== undefined ? C.KEEP_BELOW : 0.6) * this.camB.height;
+        for (let i = this.segments.length - 1; i >= 0; i--) {
+            const seg = this.segments[i];
+            if (this.segments.length <= 1) break;          // never the live one
+            if (seg === this.active) continue;
+            if (seg === this.segments[this.segments.length - 1]) continue;
+            if (seg.top === undefined || seg.top < below) continue;
+            this.segments.splice(i, 1);
             for (const o of seg.objects) {
                 this.tweens.killTweensOf(o);
                 // Containers (lily clusters) tween their CHILDREN, which are not
@@ -4080,50 +4140,57 @@ console.log(
                 if (o.list) for (const ch of o.list) this.tweens.killTweensOf(ch);
                 o.destroy();
             }
-        }
-        this.segments = [survivor];
-
-        // 2. Shift the survivor's visuals and anchors down into the home band.
-        for (const o of survivor.objects) {
-            if (!o._noRebase) o.y += segH;
-        }
-        survivor.band.headY   += segH;
-        survivor.band.bandTop += segH;
-        survivor.band.bandBot += segH;
-        r.band = survivor.band;
-        const tn = survivor.tunnel;
-        if (tn) {
-            tn.entryY += segH; tn.exitY += segH;
-            // The reveal mask stays at y=0 (future draws use new coords); if
-            // this stretch somehow finished before the rebase, refill the
-            // whole span in the new coordinate frame.
-            if (tn.open) {
-                tn.maskShape.clear().fillStyle(0xffffff)
-                    .fillRect(0, tn.exitY - 2, this.scale.width, tn.len + 4);
+            if (CONFIG.DEBUG_PERF) {
+                console.log(`[perf] released a level; live=${this.segments.length} ` +
+                    `objects=${this.children.list.length} ` +
+                    `tweens=${this.tweens.getTweens().length}`);
             }
         }
-        // Watch for drift across levels: if these climb level after level,
-        // something built per band is outliving its teardown. Flat numbers mean
-        // the cost is per-band load, not a leak.
-        if (CONFIG.DEBUG_PERF) {
-            console.log(`[perf] level=${E.segIndex} objects=${this.children.list.length} ` +
-                `tweens=${this.tweens.getTweens().length} ` +
-                `timers=${this.time.getActiveEvents ? this.time.getActiveEvents().length : '?'} ` +
-                `textures=${this.textures.list ? Object.keys(this.textures.list).length : '?'} ` +
-                `segments=${this.segments.length}`);
-        }
-
-        // 3. Camera home and stationary — NOW the new site opens for work:
-        // the parked machine accepts charge from the next battery tick.
-        this.camB.scrollY = E.baseScrollY;
-        E.panning = false;
-        if (E.deferBuild) {
-            E.deferBuild = false;
-            this._buildNextSegment();
-        }
-        if (this.tunnel) this.tunnel.ready = true;
     }
 
+    // Take one segment's machine off the board. Not a fade — by the time this
+    // runs its replacement is already standing at the next cut, and two rigs
+    // dissolving into each other reads worse than a clean handover. The sprites
+    // stay in the segment's registry, so its teardown destroys them properly.
+    _retireBore(seg) {
+        const b = seg && seg.tunnel && seg.tunnel.bore;
+        if (!b) return;
+        for (const o of [b.belt, b.ctrl, b.shadow, b.cutEdge]) if (o) o.setVisible(false);
+    }
+
+    // Bring a level's machine back onto the board — the mirror of _retireBore,
+    // used when a level built ahead becomes the live one.
+    _showBore(seg) {
+        const b = seg && seg.tunnel && seg.tunnel.bore;
+        if (!b) return;
+        for (const o of [b.belt, b.ctrl, b.shadow, b.cutEdge]) if (o) o.setVisible(true);
+    }
+
+    // Put the rig on its cut line. Called when a tunnel is seeded with progress
+    // it did not dig itself, where update() would otherwise not reach the
+    // positioning code.
+    _placeBore(tn) {
+        const b = tn && tn.bore;
+        if (!b) return;
+        const faceY = tn.entryY - tn.progressPx;
+        if (b.belt)    b.belt.y   = faceY + b.beltDY;
+        if (b.ctrl)    b.ctrl.y   = faceY + b.ctrlDY;
+        if (b.shadow)  b.shadow.y = faceY + b.shdDY;
+        if (b.cutEdge) b.cutEdge.setVisible(true).y = faceY + b.edgeDY;
+    }
+
+    // A finished level's overrun cells sit on top of the next level's own bottom
+    // rows — the same trench drawn twice. Once the next level exists, its cells
+    // are the real ones, so these go.
+    _dropOverrun(seg) {
+        const F = seg && seg.tunnel && seg.tunnel.flood;
+        if (!F) return;
+        for (const [key, cell] of F.cells) {
+            if (!cell.overrun) continue;
+            if (cell.dry) cell.dry.destroy();
+            F.cells.delete(key);
+        }
+    }
 
     // ── Color lerp helper ────────────────────────────────────────────────────
     // The fill curve for a pond: a constant spread across the bed, then a slow
@@ -5374,9 +5441,12 @@ console.log(
     // ================================================================
     // UPDATE
     // ================================================================
-    update(time) {
+    update(time, delta) {
         // Drive the boring machine — and the water it leaves behind.
         if (this.tunnel) this._updateTunnel(time);
+        // …and keep it in frame. The world scrolls continuously now; there is no
+        // pan between levels because there is no gap between them.
+        this._followMachine(delta || 16);
         // Spread water from the main canal into the pre-built side branches.
         this._updateFlood(time);
         // Grow crops as the water reaches them.
