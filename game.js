@@ -458,7 +458,6 @@ class GameScene extends Phaser.Scene {
             // they are a few hundred KB each and a level can start at any
             // point in the cycle after a rebase.
             // The patch of worked soil each plant stands in, drawn under it.
-            this.load.image('plant_base', 'graphics/plant-base.png');
             // South Lake — the source. Two images the same size, overlaid.
             const LK = CONFIG.ROAD.LAKE || {};
             if (LK.ENABLED !== false) {
@@ -531,6 +530,10 @@ console.log(
         bgGfx.fillGradientStyle(sc, sc, ec, ec, 1);
         bgGfx.fillRect(0, 0, W, H);
         bgGfx.setDepth(0);
+
+        // Gutters around every tile frame, before anything samples one. Must be
+        // before createRoad: the first band's sprites are built there.
+        this._extrudeTileSheets();
 
         // The battery slots, then the farm they power: the land and the canal
         // being cut through it.
@@ -935,6 +938,7 @@ console.log(
         // off, camB is never created and _addB degrades to a plain registry
         // push — behaviour is identical to before.
         this.segments  = [];
+        this._plantWaterN = 0;        // splash rotation counter (see _playPlantWater)
         this._worldBSet = new Set();
         this._camBSnapDone = false;   // fresh build (incl. scene.restart on resize) → the set must refill
         this.camB = null;
@@ -1178,6 +1182,75 @@ console.log(
         return null;
     }
 
+    // ── Sheet extrusion ──────────────────────────────────────────────────────
+    // Rebuild a spritesheet with a GUTTER around every frame, filled with a copy
+    // of that frame's own edge pixels.
+    //
+    // Slicing decides which texels a frame owns, but sampling interpolates: at a
+    // frame's outer edge the GPU reads a little way past it, into whatever the
+    // sheet happens to hold next door. Where a transparent edge sits beside a
+    // solid one, that shows as a line drawn along an edge that should be empty.
+    // Extruding means whatever it reaches for is what was already there.
+    //
+    // A plain transparent gap would NOT do: the sampler would then pull in
+    // transparency and every tile would gain a faint fading border instead.
+    //
+    // Frame numbering is preserved — Phaser is handed the margin and spacing —
+    // so every frame index in config stays correct.
+    _extrudeSheet(key, frameSize, pad) {
+        if (!pad || !this.textures.exists(key)) return;
+        const tex = this.textures.get(key);
+        // Scene restarts (every resize) re-run create() but not preload, and
+        // textures outlive the scene — so this must never run twice on one sheet.
+        if (tex.__extruded) return;
+        const src = tex.getSourceImage();
+        if (!src || !src.width) return;
+        const fs   = frameSize;
+        const cols = Math.floor(src.width / fs), rows = Math.floor(src.height / fs);
+        if (cols < 1 || rows < 1) return;
+        const cell = fs + pad * 2;
+
+        const cv = document.createElement('canvas');
+        cv.width = cols * cell; cv.height = rows * cell;
+        const cx = cv.getContext('2d');
+        cx.imageSmoothingEnabled = false;
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const sx = c * fs, sy = r * fs;
+                const dx = c * cell + pad, dy = r * cell + pad;
+                cx.drawImage(src, sx, sy, fs, fs, dx, dy, fs, fs);
+                // Four edges stretched outward one row/column at a time…
+                cx.drawImage(src, sx, sy, 1, fs, dx - pad, dy, pad, fs);            // W
+                cx.drawImage(src, sx + fs - 1, sy, 1, fs, dx + fs, dy, pad, fs);    // E
+                cx.drawImage(src, sx, sy, fs, 1, dx, dy - pad, fs, pad);            // N
+                cx.drawImage(src, sx, sy + fs - 1, fs, 1, dx, dy + fs, fs, pad);    // S
+                // …and the four corners, from the single corner pixel.
+                cx.drawImage(src, sx, sy, 1, 1, dx - pad, dy - pad, pad, pad);
+                cx.drawImage(src, sx + fs - 1, sy, 1, 1, dx + fs, dy - pad, pad, pad);
+                cx.drawImage(src, sx, sy + fs - 1, 1, 1, dx - pad, dy + fs, pad, pad);
+                cx.drawImage(src, sx + fs - 1, sy + fs - 1, 1, 1, dx + fs, dy + fs, pad, pad);
+            }
+        }
+        // margin skips the first gutter, spacing skips the two between frames —
+        // which lands every frame on the same index it had before.
+        this.textures.remove(key);
+        const out = this.textures.addSpriteSheet(key, cv, {
+            frameWidth: fs, frameHeight: fs, margin: pad, spacing: pad * 2,
+        });
+        if (out) out.__extruded = true;
+    }
+
+    // Every sheet sliced on the tilemap's frame grid, gutters added once.
+    _extrudeTileSheets() {
+        const TM = CONFIG.ROAD.TILEMAP;
+        if (!TM) return;
+        const pad = TM.SHEET_PAD !== undefined ? TM.SHEET_PAD : 2;
+        if (!pad) return;
+        const keys = new Set(['terrain']);
+        for (const def of Object.values(TM.TILESETS || {})) if (def && def.KEY) keys.add(def.KEY);
+        for (const k of keys) this._extrudeSheet(k, TM.FRAME || 128, pad);
+    }
+
     // Register a display object as pannable WORLD content: hidden from the
     // main (UI) camera, tracked in `seg`'s registry for rebase/teardown.
     // Pass seg=null for a world object that belongs to no segment. With
@@ -1391,8 +1464,10 @@ console.log(
         // The dug channel is the full width of the main-canal columns.
         this.road.canalW = g.mainW * g.tile;
         this.createTunnel(band, seg);
-        this._buildWetGround(seg);
+        // Crops first: the wet pass now works off their tilled patches, so the
+        // crop records have to exist before it runs.
         this._buildCrops(seg, band);
+        this._buildWetGround(seg);
         this._buildPonds(seg, band);
     }
 
@@ -1413,63 +1488,32 @@ console.log(
         const g = this.tileGrid;
         const F = seg.tunnel && seg.tunnel.flood;
         if (!g || !F || !F.cells.size) return;
-        const canal  = [...F.cells.values()];
-        const ground = seg.groundSprites || [];
-        const list   = seg.wetGround  = [];
-        // Keyed by cell so a tile turning wet can find its four neighbours and
-        // re-cut their edges. Only planted cells are in here, which is also what
-        // makes the mask below correct: a neighbour that is missing is bare
-        // ground, and bare ground never wets, so that side stays ragged for good.
-        const index  = seg.wetIndex   = new Map();
-        for (let r = 0; r < g.rows; r++) {
-            for (let c = 0; c < g.cols; c++) {
-                if (!g.cropsData[r * g.cols + c]) continue;   // not planted
-                const spr = ground[r * g.cols + c];
-                if (!spr) continue;
-                let bd = Infinity, watch = [];
-                for (const cc of canal) {
-                    const d = Math.abs(cc.col - c) + Math.abs(cc.row - r);
-                    if (d > bd) continue;
-                    if (d < bd) { bd = d; watch = [cc]; } else watch.push(cc);
-                }
-                if (!watch.length) continue;
-                const e = { spr, col: c, row: r, watch, wet: false, fade: null, off: 0, angle: 0 };
-                list.push(e);
-                index.set(c + ',' + r, e);
+        const canal = [...F.cells.values()];
+        const list  = seg.wetGround = [];
+        // Driven off the crop records, because the thing that darkens is the
+        // TILLED PATCH under each plant — not the field. Bare land is not being
+        // irrigated, so the wet colour ends up marking the worked ground exactly,
+        // and its outline is the crop patch's outline.
+        for (const cr of (seg.crops || [])) {
+            if (!cr.tilled) continue;
+            const c = cr.col, r = cr.row;
+            // Nearest canal cell(s) by Manhattan distance — ALL of them at that
+            // distance, so a patch lying between two ditches turns for whichever
+            // fills first rather than waiting on one arbitrary winner.
+            let bd = Infinity, watch = [];
+            for (const cc of canal) {
+                const d = Math.abs(cc.col - c) + Math.abs(cc.row - r);
+                if (d > bd) continue;
+                if (d < bd) { bd = d; watch = [cc]; } else watch.push(cc);
             }
+            if (watch.length) list.push({ cr, watch, wet: false, fade: null });
         }
     }
 
-    // Re-cut one wet tile's edge against its neighbours. The wet region grows
-    // outward over the level, so this is deliberately recomputed rather than
-    // decided once at build: a tile that wets ahead of its neighbours is drawn
-    // ragged on every exposed side, and each side straightens as that neighbour
-    // catches up. Deciding it once would draw the finished patch's outline from
-    // the first moment, and the spread would read as a hard square block.
-    //
-    // Row 2 of the terrain sheet is the six wet variants, in the same order and
-    // meaning as every other overlay row — inner, n, ne, ns, nes, nesw — so
-    // _edgeVariants() already knows which one to use and how far to turn it.
-    _recutWet(seg, e) {
-        if (!e || !e.wet) return;
-        const base  = CONFIG.ROAD.TILEMAP.TERRAIN_GROUND_WET;
-        const index = seg.wetIndex;
-        const bare  = (dc, dr) => {
-            const n = index.get((e.col + dc) + ',' + (e.row + dr));
-            return (n && n.wet) ? 0 : 1;
-        };
-        const mask = bare(0, -1) | (bare(1, 0) << 1) | (bare(0, 1) << 2) | (bare(-1, 0) << 3);
-        const v = this._edgeVariants()[mask] || { off: 0, angle: 0 };
-        e.off = v.off; e.angle = v.angle;
-        // While a tile is still fading in, the fading copy IS the visible wet
-        // tile — re-cut that one, and the sprite beneath inherits it on landing.
-        (e.fade || e.spr).setFrame(base + v.off).setAngle(v.angle);
-    }
-
-    // Turn each planted tile wet as its canal arrives, and re-cut the edges of
-    // the neighbours it just joined. A tile that has turned never turns back, so
-    // it leaves the pending list: the per-frame scan shrinks to the still-dry
-    // frontier instead of re-testing the whole field.
+    // Turn each tilled patch wet as its canal arrives, and play the splash that
+    // hands it over. A patch that has turned never turns back, so it leaves the
+    // pending list: the per-frame scan shrinks to the still-dry frontier instead
+    // of re-testing the whole field.
     _updateWetGround() {
         const TM = CONFIG.ROAD.TILEMAP, W = TM.GROUND_WET || {};
         if (W.ENABLED === false || TM.TERRAIN_GROUND_WET === undefined) return;
@@ -1485,17 +1529,17 @@ console.log(
                 if (!on) continue;
                 list[i] = list[list.length - 1]; list.pop();
                 // The splash owns the changeover from here: it turns the soil
-                // partway through itself. With no splash art the tile darkens
-                // straight away, exactly as it did before.
+                // partway through itself. With no splash art the patch darkens
+                // straight away.
                 if (!this._playPlantWater(seg, e)) this._dampenTile(seg, e);
             }
         }
     }
 
     // Water arriving at one plant: a short splash at its base, which hands the
-    // ground over at DAMP_AT — while it is still playing, not after. That
-    // overlap is the point. The soil darkening on its own is a colour change on
-    // a timer; the same change under a landing splash is the water doing it.
+    // soil over at DAMP_AT — while it is still playing, not after. That overlap
+    // is the point. Soil darkening on its own is a colour change on a timer; the
+    // same change under a landing splash is the water doing it.
     // Returns false if there is no splash art, so the caller can fall back.
     _playPlantWater(seg, e) {
         const TM = CONFIG.ROAD.TILEMAP, PW = TM.PLANT_WATER || {};
@@ -1512,14 +1556,22 @@ console.log(
                 frameRate: PW.FPS || 12,
             });
         }
-        const w   = g.tile * (PW.SIZE !== undefined ? PW.SIZE : 1);
-        const spr = this._addB(this.add.sprite(
-                e.spr.x, e.spr.y + g.tile * (PW.Y || 0), 'plant_water', 0)
+        const base = e.cr.tilled;
+        const w    = g.tile * (PW.SIZE !== undefined ? PW.SIZE : 1);
+        // Each splash is turned a step further than the last, so one 8-frame
+        // sheet never plays the same way twice in a row across a field. The
+        // counter is reset with the road, so a scene rebuild (every resize)
+        // replays the same sequence rather than reshuffling the field.
+        const step = PW.ANGLE_STEP !== undefined ? PW.ANGLE_STEP : 0;
+        const ang  = step ? ((this._plantWaterN = (this._plantWaterN || 0) + 1) * step) % 360 : 0;
+        const spr  = this._addB(this.add.sprite(
+                base.x, base.y + g.tile * (PW.Y || 0), 'plant_water', 0)
             .setDisplaySize(w, w)
-            // Above the soil patch (2.9) and below the plant (3.0), on the same
-            // row ordering both use — the water pools at the stem and the plant
+            .setAngle(ang)
+            // Above the tilled soil and below the plant, on the same row
+            // ordering both use — the water pools at the stem and the plant
             // stands in it rather than behind it.
-            .setDepth(2.95 + e.row * 0.001), seg);
+            .setDepth(2.95 + e.cr.row * 0.001), seg);
         const dampAt = Math.max(1, PW.DAMP_AT || 4);
         let handed = false;
         const hand = () => {
@@ -1539,42 +1591,37 @@ console.log(
         return true;
     }
 
-    // Turn one tile's soil damp, and re-cut the edges of the neighbours it just
-    // joined. Split out from the trigger because two things call it: the splash
-    // handing over partway through, and the no-art fallback.
+    // Darken one tilled patch. The watered art is the SAME shape one row on in
+    // the sheet, so this is the dry tile's own variant offset added to the wet
+    // row's base — no second mask, and nothing to re-cut as neighbours catch up.
+    // The patch was tilled before any water; only its colour was ever going to
+    // change.
     _dampenTile(seg, e) {
         if (e.wet) return;
         const TM = CONFIG.ROAD.TILEMAP, W = TM.GROUND_WET || {};
-        const base = TM.TERRAIN_GROUND_WET;
-        const ms   = W.FADE_MS !== undefined ? W.FADE_MS : 450;
+        const cr = e.cr, spr = cr.tilled;
+        if (!spr) return;
+        const frame = TM.TERRAIN_GROUND_WET + (cr.tilledOff || 0);
+        const ms = W.FADE_MS !== undefined ? W.FADE_MS : 450;
         e.wet = true;
-        if (ms > 0) {
-            // Cross-fade rather than swap: the wet tile fades in just above the
-            // dry one, then replaces it and the copy goes. 1.41 sits between the
-            // ground (1.4) and the first crop overlay (1.42), so damp-soil and
-            // grass patches stay on top of it.
-            e.fade = this._addB(this.add.image(e.spr.x, e.spr.y, 'terrain', base)
-                .setDisplaySize(e.spr.displayWidth, e.spr.displayHeight)
-                .setDepth(1.41).setAlpha(0), seg);
-            this.tweens.add({
-                targets: e.fade, alpha: 1, duration: ms, ease: 'Sine.easeOut',
-                onComplete: () => {
-                    // A rebase mid-fade kills this tween before it fires, so
-                    // reaching here means both sprites are still alive. Take the
-                    // edge the fade ENDED on, not the one it started with — a
-                    // neighbour may have wet meanwhile.
-                    e.spr.setFrame(base + e.off).setAngle(e.angle);
-                    e.fade.destroy();
-                    e.fade = null;
-                },
-            });
-        }
-        // This tile, then the neighbours whose edge it just closed.
-        this._recutWet(seg, e);
-        this._recutWet(seg, seg.wetIndex.get(e.col + ',' + (e.row - 1)));
-        this._recutWet(seg, seg.wetIndex.get((e.col + 1) + ',' + e.row));
-        this._recutWet(seg, seg.wetIndex.get(e.col + ',' + (e.row + 1)));
-        this._recutWet(seg, seg.wetIndex.get((e.col - 1) + ',' + e.row));
+        if (ms <= 0) { spr.setFrame(frame); return; }
+        // Cross-fade rather than swap: the wet patch fades in just above the dry
+        // one, then replaces it and the copy goes. A whole neighbourhood can
+        // cross the threshold on the same frame, and a hard swap pops.
+        e.fade = this._addB(this.add.image(spr.x, spr.y, 'terrain', frame)
+            .setDisplaySize(spr.displayWidth, spr.displayHeight)
+            .setAngle(cr.tilledAngle || 0)
+            .setAlpha(0).setDepth(1.415), seg);
+        this.tweens.add({
+            targets: e.fade, alpha: 1, duration: ms, ease: 'Sine.easeOut',
+            onComplete: () => {
+                // A rebase mid-fade kills this tween before it fires, so
+                // reaching here means both sprites are still alive.
+                spr.setFrame(frame);
+                e.fade.destroy();
+                e.fade = null;
+            },
+        });
     }
 
     // How far the lake lifts the level above the screen's floor, in px.
@@ -1989,22 +2036,39 @@ console.log(
                     if (d < bd) { bd = d; best = cc; }
                 }
                 if (!best) continue;
-                // The soil patch the plant stands in. The crop sprite's origin
-                // IS its stem base and sits at the cell centre, so the base goes
-                // at the same point. Depth keeps the row ordering the crops use
-                // but stays below all of them, so no plant is ever covered by
-                // the base of the plant behind it.
+                // Which sides of this cell face bare ground, as an N/E/S/W
+                // bitmask. The tilled patch and the growth overlays both draw a
+                // ragged edge on those and a straight one where a planted
+                // neighbour carries the patch on. Off-grid counts as bare, so
+                // the field's border is ragged.
+                const nb = (cc, rr) => (cc >= 0 && cc < g.cols && rr >= 0 && rr < g.rows &&
+                                        g.cropsData[rr * g.cols + cc]) ? 0 : 1;
+                const edge = nb(c, r - 1) | (nb(c + 1, r) << 1) |
+                             (nb(c, r + 1) << 2) | (nb(c - 1, r) << 3);
+
+                // The worked soil the plant stands in — a FULL TILE from the
+                // terrain sheet's tilled row, cut to the shape of the planted
+                // area rather than one stamp repeated. It sits just above the
+                // ground and below the growth overlays, so damp and moss stack
+                // on top of it later.
+                //
+                // Its variant is kept on the record because the WATERED tile is
+                // the same shape one row on: wetting this patch is a frame swap
+                // by a fixed row offset, with no second mask to compute and
+                // nothing to re-cut as neighbours catch up. Tilling happens
+                // before any water, so this outline is final from the start.
                 const BS = TM.CROP_BASE || {};
-                if (BS.ENABLED !== false && this.textures.exists('plant_base')) {
-                    const bw = g.tile * (BS.SIZE || 0.8);
-                    const bs = this.textures.get('plant_base').getSourceImage();
-                    this._addB(this.add.image(
-                            g.left + (c + 0.5) * g.tile,
-                            gTop + (r + 0.5) * g.tile + g.tile * (BS.Y || 0),
-                            'plant_base')
-                        .setDisplaySize(bw, bw * (bs.height / bs.width))
+                const ev = this._edgeVariants()[edge] || { off: 0, angle: 0 };
+                let tilled = null;
+                if (BS.ENABLED !== false && TM.TERRAIN_TILLED !== undefined
+                        && this.textures.exists('terrain')) {
+                    tilled = this._addB(this.add.image(
+                            g.left + (c + 0.5) * g.tile, gTop + (r + 0.5) * g.tile,
+                            'terrain', TM.TERRAIN_TILLED + ev.off)
+                        .setDisplaySize(g.tile + 1, g.tile + 1)
+                        .setAngle(ev.angle)
                         .setAlpha(BS.ALPHA !== undefined ? BS.ALPHA : 1)
-                        .setDepth(2.9 + r * 0.001), seg);
+                        .setDepth(1.41), seg);
                 }
                 // Per-plant variation, so a field is not the same stamp repeated.
                 // Every value comes from a HASH OF THE CELL, never Math.random():
@@ -2024,14 +2088,6 @@ console.log(
                 // stem, so a flipped plant is not lit from the wrong side.
                 if (V.FLIP !== false && h2 < 0.5) spr.setFlipX(true);
                 if (V.ROT_DEG) spr.setAngle((h3 - 0.5) * 2 * V.ROT_DEG);
-                // Which sides of this cell face bare ground, as an N/E/S/W
-                // bitmask — the growth overlays draw a ragged edge on those and
-                // a straight one where a crop neighbour continues the patch.
-                // Off-grid counts as bare, so the field's border is ragged.
-                const nb = (cc, rr) => (cc >= 0 && cc < g.cols && rr >= 0 && rr < g.rows &&
-                                        g.cropsData[rr * g.cols + cc]) ? 0 : 1;
-                const edge = nb(c, r - 1) | (nb(c + 1, r) << 1) |
-                             (nb(c, r + 1) << 2) | (nb(c - 1, r) << 3);
                 // `sc` is cached per crop so the stage-change spring knows the
                 // full y-scale to settle back to. Stage 1 spawns hard, unscaled.
                 // `ground` is this cell's ground tile — never changed itself, but
@@ -2040,6 +2096,8 @@ console.log(
                 // in lockstep is what really reads as stamped — more than any
                 // silhouette repeat — so every plant runs a little fast or slow.
                 crops.push({ watch: best, stage: 1, timer: 0, sprite: spr, sc: psc, crop, edge,
+                             col: c, row: r,
+                             tilled, tilledOff: ev.off, tilledAngle: ev.angle,
                              growMul: 1 + (this._cellHash(c, r, 4) - 0.5) * 2 * (V.GROW_VAR || 0),
                              ground: (seg.groundSprites || [])[r * g.cols + c] || null,
                              ovl: 0, done: false });

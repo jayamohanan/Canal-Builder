@@ -543,25 +543,64 @@ var CONFIG = {
                                  KEY: 'terrain' },
             },
             FRAME:   128,           // frame size in the sheet
+            SHEET_PAD: 2,           // EXTRUSION, in px, added around every frame
+                                    // of every tile sheet at load. 0 disables.
+                                    //
+                                    // Why it is needed: slicing tells the GPU
+                                    // which texels a frame owns, but sampling
+                                    // INTERPOLATES, so at a frame's outer edge it
+                                    // reaches into whatever sits next to it in
+                                    // the sheet. Where a transparent edge touches
+                                    // a solid one — the "ne" variants do exactly
+                                    // this — that shows as a line along an edge
+                                    // that should be empty.
+                                    //
+                                    // A transparent gap is NOT the fix: then the
+                                    // sampler pulls in transparency and every
+                                    // tile gets a faint fading border instead.
+                                    // The gutter is filled with a COPY of each
+                                    // frame's own edge pixels, so whatever the
+                                    // sampler reaches for is what was already
+                                    // there and nothing changes.
+                                    //
+                                    // Frame NUMBERING is unaffected — Phaser is
+                                    // told the margin and spacing — so every
+                                    // frame index in this file stays correct.
+                                    // 2 rather than 1: the tiles are rotated and
+                                    // drawn at a non-integer scale, so one pixel
+                                    // of headroom is not quite enough.
             MAIN_TILES: 2,          // the main canal is this many tiles wide
 
             // ── Terrain sheet ───────────────────────────────────────────────
             // Everything that is NOT a canal piece: the plain ground, the flat
             // water the flow head is drawn from, and the two growth overlays.
             // The canal sheet now carries only canal tiles (gid <= 53); nothing
-            // reads past that. The sheet is 768x512 = 6 columns x 4 rows of
+            // reads past that. The sheet is 768x640 = 6 columns x 5 rows of
             // 128px frames, so a frame index is (row-1) * 6 + (col-1) and each
-            // ROW is exactly the six edge variants one overlay needs.
+            // ROW after the first is exactly the six edge variants one layer
+            // needs, in the CROP_OVERLAY_EDGES order: inner, n, ne, ns, nes,
+            // nesw — everything else reached by rotating those.
+            //
+            //   row 1  the plain ground, and the flat water
+            //   row 2  TILLED soil, dry      — the worked patch a seed sits in
+            //   row 3  TILLED soil, watered  — the same shapes, darker
+            //   row 4  damp overlay
+            //   row 5  mossy overlay
+            //
+            // Rows 3-5 each moved down by one when the tilled row was inserted;
+            // every frame number below is measured from this list, so the list
+            // is the thing to correct if the sheet changes again.
             TERRAIN: 'graphics/tilesheets/terrain.webp',
             TERRAIN_GROUND: 0,      // row 1, col 1 — the field's base tile, dry
             TERRAIN_WATER:  1,      // row 1, col 2 — flat water; the flow head
                                     // and its foam blobs are cut from this
-            TERRAIN_GROUND_WET: 6,  // row 2, col 1 — the same ground, watered, and
-                                    // the FIRST of that row's six edge variants.
-                                    // Row 2 reads inner / n / ne / ns / nes /
-                                    // nesw exactly like every other overlay row,
-                                    // so CROP_OVERLAY_EDGES describes it too and
-                                    // rotation reaches the other ten cases
+            TERRAIN_TILLED:     6,  // row 2, col 1 — DRY tilled soil, and the
+                                    // first of that row's six edge variants
+            TERRAIN_GROUND_WET: 12, // row 3, col 1 — the SAME tilled shapes,
+                                    // watered. Dry and wet share an edge variant
+                                    // index, so wetting a patch is this row's
+                                    // base plus the offset the dry tile already
+                                    // chose — no second mask, no re-cut
 
             // ── Watered ground ──────────────────────────────────────────────
             // Irrigation should be VISIBLE in the soil, not only in the ditch:
@@ -598,6 +637,23 @@ var CONFIG = {
                                 // ~1.3s instead of ~0.67s
                 SIZE:    1,     // width as a fraction of a tile
                 Y:       0,     // offset from the cell centre, in tiles (+ is down)
+                ANGLE_STEP: 0, // each splash is turned this many degrees further
+                                // than the one before it — spawn 1 at 0, spawn 2
+                                // at 45, and so on, wrapping at 360. Successive
+                                // plants therefore never show the same splash
+                                // twice in a row, from ONE 8-frame sheet.
+                                //
+                                // Free: a sprite's angle is one value in a
+                                // transform that is computed either way, so this
+                                // costs nothing per frame and does not break
+                                // batching. The splash's content reaches 71px
+                                // from the frame centre against a 90px corner,
+                                // so it cannot clip or spill at any angle.
+                                //
+                                // 0 turns it off. Note the art is a splash at the
+                                // stem, not a symmetrical burst — past about 20
+                                // degrees the water starts to read as falling
+                                // sideways, so judge it on screen.
                 DAMP_AT: 4,     // 1-based frame the ground turns damp on. The
                                 // splash has landed by here but is still playing,
                                 // so the soil darkens UNDER the water rather than
@@ -665,11 +721,16 @@ var CONFIG = {
             // centred on the stem base and drawn UNDER the plant — and under
             // every other plant too, so a base can never cover the crop in front
             // of it.
+            // The worked patch a plant stands in. It is a FULL TILE from the
+            // terrain sheet's tilled row, not a small stamp — so the patch is
+            // cut to the shape of the planted area, ragged where it meets bare
+            // ground and straight where the next planted cell carries it on.
+            // The mask is fixed at build: tilling happens before any water, and
+            // the patch's outline never changes afterwards — only its colour,
+            // when the water arrives.
             CROP_BASE: {
                 ENABLED: true,
-                SIZE:    0.8,       // width as a fraction of a tile
                 ALPHA:   1,
-                Y:       0,         // nudge down (+) or up (-), in tiles
             },
 
             // ── Per-plant variation ──────────────────────────────────────
@@ -730,8 +791,8 @@ var CONFIG = {
                                     // intact: flip this back to true to restore
                                     // them exactly as they were.
             CROP_OVERLAY: {
-                2: { frame: 12, blend: 'MULTIPLY', alpha: 1 },   // damp  — row 3
-                4: { frame: 18, blend: 'NORMAL',   alpha: 1 },   // mossy — row 4
+                2: { frame: 18, blend: 'MULTIPLY', alpha: 1 },   // damp  — row 4
+                4: { frame: 24, blend: 'NORMAL',   alpha: 1 },   // mossy — row 5
             },
             // Each overlay is drawn with a RAGGED edge where it borders bare
             // ground and a straight one where it meets another overlay cell, so
