@@ -402,6 +402,8 @@ var CONFIG = {
             // plain ground, so short levels read as a field with open land
             // beyond it rather than leaving a hole between levels.
             LEVELS: [
+                  { FILE: 'level_maps/test3.tmj' },
+                { FILE: 'level_maps/level_0111_8.tmj' },
                 { FILE: 'level_maps/new_level.tmj' },
                  { FILE: 'level_maps/level_01.tmj' },
                 { FILE: 'level_maps/level_02.tmj' },
@@ -865,6 +867,21 @@ var CONFIG = {
             // still run under its own water. Branch water is unaffected — it
             // stays down in the ground layers, where a leaf overhanging a ditch
             // is meant to cover it.
+            MAIN_DRY_DEPTH:   3.03, // the dug trench, before water. It used to sit
+                                    // down at 1.52 with the ground and branches,
+                                    // which was fine until South Lake: the lake's
+                                    // basin covers everything below it, so the
+                                    // trench cut through the lake's top row was
+                                    // buried. It now sits just ABOVE the basin
+                                    // (3.02) and just BELOW the torn lip (3.04)
+                                    // and the machine — the trench is in the
+                                    // ground, the machine rides over it.
+                                    //
+                                    // Safe above the crops for the same reason
+                                    // MAIN_WATER_DEPTH already is: crop art is one
+                                    // tile wide and a main cell's neighbours along
+                                    // the canal are canal too, so no plant ever
+                                    // overlaps one.
             MAIN_WATER_DEPTH: 3.10,
 
             // The moving front. OFF: the water is simply the tile art being
@@ -1020,6 +1037,39 @@ var CONFIG = {
                 97: { conn: 'new' },             // minor_new
                 99: { conn: 'nw' },              // minor_nw
             },
+        },
+
+        // ── South Lake ────────────────────────────────────────────────────
+        // The world's one water source, at the very bottom of level 1. Only its
+        // NORTH BANK is drawn — the water runs off the bottom and sides of the
+        // frame, which is what says "this is big" without drawing any of it.
+        //
+        // Two images, same size, exactly overlaid: the dry basin (bank + floor)
+        // and the water alone. The machine is sandwiched BETWEEN them, so its
+        // belt sits in the basin with water drawn over it — dipped in the lake,
+        // ready to cut inland.
+        //
+        // The dig starts START_ROW tiles below the lake's top edge, so the
+        // machine begins on the bank and level 1's first canal tile lands on the
+        // lake's top row — the canal is joined to the lake, not merely near it.
+        LAKE: {
+            ENABLED: true,
+            DRY:   'graphics/pond.webp',      // basin: bank and floor
+            WATER: 'graphics/pond-water.webp',// the water only, drawn over it
+            ROWS:  0,          // height in tiles. 0 = DERIVE it from the art's
+                               // own aspect against the grid's width, so a
+                               // re-export at a different size just works and
+                               // the lake can never come out stretched
+            START_ROW: 1,      // the dig line sits this many tiles below the
+                               // lake's top edge — 1 puts it on the line between
+                               // the lake's top row and the one under it
+            // Depths. The lake bed goes over everything the map draws (ground
+            // 1.4, branches 1.5, crops 3.0) so the bottom rows of level 1 are
+            // simply covered; the lake water goes over the machine (3.04–3.07)
+            // AND over the main canal's water (3.10), so nothing surfaces
+            // through the lake.
+            DEPTH_DRY:   3.02,
+            DEPTH_WATER: 3.11,
         },
 
         // ── The channel ───────────────────────────────────────────────────

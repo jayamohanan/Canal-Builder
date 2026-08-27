@@ -451,6 +451,12 @@ class GameScene extends Phaser.Scene {
             // point in the cycle after a rebase.
             // The patch of worked soil each plant stands in, drawn under it.
             this.load.image('plant_base', 'graphics/plant-base.png');
+            // South Lake — the source. Two images the same size, overlaid.
+            const LK = CONFIG.ROAD.LAKE || {};
+            if (LK.ENABLED !== false) {
+                if (LK.DRY)   this.load.image('lake_dry',   LK.DRY);
+                if (LK.WATER) this.load.image('lake_water', LK.WATER);
+            }
             // The watering splash: one row of square frames, sliced at the
             // tilemap's own frame size since that is what the art is drawn to.
             const PW = TM.PLANT_WATER || {};
@@ -1127,7 +1133,16 @@ console.log(
     // data array is row-major (row * cols + col), 0 = empty.
     _buildTileBand(bandTop, bandBot, seg) {
         const g    = this.tileGrid;
-        const gTop = bandBot - g.h;            // anchor grid to the band's bottom
+        // The lake lifts the WHOLE level, it does not merely cover its foot: the
+        // grid is anchored so its bottom row lands exactly on the lake's top
+        // row. Everything the level owns — ground, branches, crops, the dig line
+        // — rises with it, because all of it is measured off gTop.
+        //
+        // The level then runs off the top of the camera by however much it rose.
+        // That is expected for now; the camera work that follows the machine
+        // upward is a separate job.
+        const lakeUp = this._lakeLift(g);
+        const gTop = bandBot - lakeUp - g.h;   // grid bottom = the lake's top row
         const TMc  = CONFIG.ROAD.TILEMAP;
 
         // A map with fewer rows than the band leaves a strip above it. Fill that
@@ -1197,6 +1212,10 @@ console.log(
             bandTop: gTop,                 // …and climbs to its top edge
             bandBot: gTop + g.h,
         };
+        // The lake itself, at the foot of the screen — under the level that has
+        // just been lifted to meet it.
+        this._buildLake(seg, bandBot);
+
         seg.band = band;
         this.road.band = band;
         // The dug channel is the full width of the main-canal columns.
@@ -1386,6 +1405,59 @@ console.log(
         this._recutWet(seg, seg.wetIndex.get((e.col + 1) + ',' + e.row));
         this._recutWet(seg, seg.wetIndex.get(e.col + ',' + (e.row + 1)));
         this._recutWet(seg, seg.wetIndex.get((e.col - 1) + ',' + e.row));
+    }
+
+    // How far the lake lifts the level above the screen's floor, in px.
+    //
+    // The level's bottom row has to BE the lake's top row — the canal is joined
+    // to the lake, not merely near it — so the grid rises by the lake's height
+    // less the overlap. START_ROW is that overlap, and it is also where the dig
+    // line lands, since the dig starts at the grid's bottom edge.
+    //
+    // Zero whenever there is no lake, which is every level after the first.
+    _lakeLift(g) {
+        const rows = this._lakeRows(g);
+        if (!rows) return 0;
+        const LK = CONFIG.ROAD.LAKE || {};
+        const start = LK.START_ROW !== undefined ? LK.START_ROW : 1;
+        return Math.max(0, rows - start) * g.tile;
+    }
+
+    // The lake's height in tiles, taken from the ART's own aspect against the
+    // grid's width unless overridden — so a re-export at a different size just
+    // works, and the lake can never come out stretched.
+    _lakeRows(g) {
+        const LK = CONFIG.ROAD.LAKE || {};
+        if (LK.ENABLED === false || !g) return 0;
+        // First level only — after that the lake has scrolled away for good.
+        if (this.endless && this.endless.segIndex > 0) return 0;
+        if (!this.textures.exists('lake_dry')) return 0;
+        if (LK.ROWS) return LK.ROWS;
+        const src = this.textures.get('lake_dry').getSourceImage();
+        return g.cols * (src.height / src.width);
+    }
+
+    // South Lake: the world's water source, drawn at the foot of the screen.
+    //
+    // Only the north bank is drawn. The art runs off the bottom and both sides
+    // of the frame, which is what makes it read as large — there is no far shore
+    // to give its size away.
+    //
+    // The two images are the same size and exactly overlaid, and the MACHINE
+    // GOES BETWEEN THEM: the basin under it, the water over it. That is the
+    // whole trick behind the belt looking dipped in the lake rather than parked
+    // on top of it.
+    _buildLake(seg, bandBot) {
+        const g = this.tileGrid;
+        const rows = this._lakeRows(g);
+        if (!rows) return;
+        const LK = CONFIG.ROAD.LAKE || {};
+        const w = g.cols * g.tile, h = rows * g.tile;
+        const put = (key, depth) => this.textures.exists(key) && this._addB(
+            this.add.image(g.left, bandBot, key)
+                .setOrigin(0, 1).setDisplaySize(w, h).setDepth(depth), seg);
+        put('lake_dry',   LK.DEPTH_DRY   !== undefined ? LK.DEPTH_DRY   : 3.02);
+        put('lake_water', LK.DEPTH_WATER !== undefined ? LK.DEPTH_WATER : 3.11);
     }
 
     // ── Ponds ────────────────────────────────────────────────────────────────
@@ -1985,13 +2057,15 @@ console.log(
                     cells.set(c + ',' + r, {
                         col: c, row: r, conn: mConn, progress: 0, dryP: 0,
                         entryDir: 's', filling: false, filled: false, isMain: true,
-                        // The dry trench stays down in the ground layers; the
-                        // WATER rides above the crops so the machine can sit on
-                        // top of the field and still be under its own canal.
+                        // BOTH halves of the main canal ride above the crops —
+                        // the trench just under the machine, the water just over
+                        // it — so the rig can sit on top of the field and still
+                        // be under its own canal, and so South Lake's basin can
+                        // pass beneath the pair while its water passes over them.
                         // Nothing green ever overlaps a main-canal cell — crop
-                        // art is one tile wide and the canal's neighbours above
-                        // are canal too — so raising it costs nothing.
-                        dry:  sprite(mainGid, c, r, 1.52),      // above ground + branch
+                        // art is one tile wide and the canal's neighbours along
+                        // it are canal too — so raising them costs nothing.
+                        dry:  sprite(mainGid, c, r, this._mainDryDepth()),
                         flow: sprite(mainGid, c, r, this._mainDepth(), off),
                     });
                     continue;
@@ -2037,6 +2111,11 @@ console.log(
     // should hide the biggest machine on screen — and still be under the water
     // it is letting in. Branch water stays in the ground layers, where a leaf
     // growing over a ditch is meant to cover it.
+    _mainDryDepth() {
+        const d = CONFIG.ROAD.TILEMAP.MAIN_DRY_DEPTH;
+        return d !== undefined ? d : 3.03;
+    }
+
     _mainDepth() {
         const d = CONFIG.ROAD.TILEMAP.MAIN_WATER_DEPTH;
         return d !== undefined ? d : 3.10;
@@ -2223,7 +2302,11 @@ console.log(
         //    the auger's dig (progressPx, px dug from the bottom); the FILLED
         //    tile follows the waterline (tn.wet), which lags the blade. Row r's
         //    bottom edge sits (rows-r-1) tiles up from the bottom.
-        const cellUp = (row) => (g.rows - row - 1) * g.tile;
+        // Height of a row's BOTTOM EDGE above the dig's start line. Taken from
+        // the tunnel's own length rather than the row count, because the lake
+        // moves the start line up off the map's floor — with no lake the two are
+        // identical (len is exactly rows x tile).
+        const cellUp = (row) => tn.len - (row + 1) * g.tile;
         for (const cell of F.cells.values()) {
             if (!cell.isMain) continue;
             cell.entryDir = 's';
