@@ -707,6 +707,27 @@ console.log(
             }
             this.batteryCase = g;
 
+            // The three rates added up, beside the case. Per-slot numbers say
+            // what each cell gives; this says what the machine is actually fed,
+            // which is the number that decides how fast the ground gives way.
+            //
+            // Beside the terminal in landscape (the case runs east) and under it
+            // in portrait (the case stands on end), so it never lands on top of
+            // the battery whichever way round it is.
+            const TC = P.TOTAL_CHARGE || {};
+            if (TC.ENABLED !== false) {
+                const gap = sp(TC.GAP || 14);
+                this.totalChargeText = this.add.text(
+                    vert ? left + w / 2 : left + w + sp(CS.NODE_GAP || 0) + nodeL + gap,
+                    vert ? top + h + gap : top + h / 2, '', {
+                        fontSize: Math.max(9, Math.round((TC.SIZE || 30) * scale)) + 'px',
+                        fontFamily: CONFIG.FONT_FAMILY,
+                        color: TC.COLOR || '#ffe07a', fontStyle: 'bold',
+                        stroke: TC.STROKE || '#3a2a00',
+                        strokeThickness: Math.max(1, Math.round((TC.STROKE_W || 4) * scale)),
+                    }).setOrigin(vert ? 0.5 : 0, vert ? 0 : 0.5).setDepth(5);
+            }
+
             // ── The machine, ghosted inside the battery ───────────────────────
             // A faint whole rig laid across the case: the batteries and the thing
             // they drive as one image. It is the SAME two sprites as the field
@@ -1718,6 +1739,32 @@ console.log(
             .setDisplaySize(src.width * k, src.height * k)
             .setDepth(BK.DEPTH !== undefined ? BK.DEPTH : 3.11), F.seg);
         if (F.seg) F.seg.block = img;
+
+        // DROP IT IN rather than blinking it into existence. It starts a little
+        // high and a little larger — larger reads as nearer the camera — then
+        // settles to its resting place at full size. Shrinking as it descends is
+        // what turns a slide down the screen into a wall coming down out of the
+        // air and into the channel.
+        //
+        // setDisplaySize has already set the scale that means "correct size", so
+        // the drop is expressed as a MULTIPLE of whatever that worked out to be,
+        // never as an absolute — the wall is scaled to the tile size and that
+        // changes with the viewport.
+        const ms = BK.DROP_MS !== undefined ? BK.DROP_MS : 260;
+        if (ms > 0) {
+            const restY = img.y, sx = img.scaleX, sy = img.scaleY;
+            const grow  = BK.DROP_SCALE !== undefined ? BK.DROP_SCALE : 1.18;
+            img.y = restY - (BK.DROP_RISE !== undefined ? BK.DROP_RISE : 0.55) * g.tile;
+            img.setScale(sx * grow, sy * grow);
+            this.tweens.add({
+                targets:  img,
+                y:        restY,
+                scaleX:   sx,
+                scaleY:   sy,
+                duration: ms,
+                ease:     BK.DROP_EASE || 'Back.easeIn',
+            });
+        }
     }
 
     // Pull the wall out of the level BELOW this one, immediately before this
@@ -1739,12 +1786,26 @@ console.log(
         below.block = null;
         const BK = CONFIG.ROAD.TILEMAP.BLOCK || {};
         const ms = BK.REMOVE_MS !== undefined ? BK.REMOVE_MS : 280;
-        const rise = (BK.REMOVE_RISE !== undefined ? BK.REMOVE_RISE : 0.45)
-                   * (this.tileGrid ? this.tileGrid.tile : 0);
         if (ms <= 0) { img.destroy(); return; }
+        // LIFTED OUT — the placement run backwards. It rises the same distance
+        // it fell and swells by the same amount, so it withdraws toward the
+        // camera exactly as it descended away from it, and fades as it goes.
+        // Reusing the drop's own numbers means the two can never drift apart:
+        // whatever height and swell make the placement read, the removal
+        // inherits.
+        const tile  = this.tileGrid ? this.tileGrid.tile : 0;
+        const rise  = (BK.DROP_RISE  !== undefined ? BK.DROP_RISE  : 1.3) * tile;
+        const grow  = BK.DROP_SCALE  !== undefined ? BK.DROP_SCALE  : 1.45;
         this.tweens.add({
-            targets: img, y: img.y - rise, alpha: 0,
-            duration: ms, ease: 'Quad.easeIn',
+            targets: img,
+            y:       img.y - rise,
+            scaleX:  img.scaleX * grow,
+            scaleY:  img.scaleY * grow,
+            alpha:   0,
+            duration: ms,
+            // easeOut, the mirror of the drop's easeIn: it leaves quickly and
+            // slows as it goes, where the drop gathered speed on the way down.
+            ease:    BK.REMOVE_EASE || 'Back.easeOut',
             onComplete: () => img.destroy(),
         });
     }
@@ -3219,6 +3280,7 @@ console.log(
             progressPx: 0, open: false, lastTime: 0,
             // Power-delivery state, per tunnel — two levels' tunnels exist at
             // once, so none of this can live on the scene.
+            digStart: 0,     // tiles of this level already cut by the one below
             tickT: 0,        // seconds since the last battery tick (the surge)
             wheelPx: 0,      // ground covered, which is what turns the wheels
             beltRate: 0,     // cycles/sec the load is currently allowing
@@ -3232,6 +3294,20 @@ console.log(
             // finished growing (_finishStretch arms it). The first starts armed.
             ready: this.segments.length <= 1,
         };
+        // The work left in this level, floating over the machine. Created with
+        // the rig so it is torn down with the segment, and positioned every
+        // frame from the control unit it rides above.
+        const PL = CONFIG.ROAD.TILEMAP.POWER_LABEL || {};
+        if (PL.ENABLED !== false) {
+            const sL = this.layoutConfig.scale;
+            this.tunnel.workLabel = this._addB(this.add.text(x, entryY, '', {
+                fontSize: Math.max(9, Math.round((PL.SIZE || 26) * sL)) + 'px',
+                fontFamily: CONFIG.FONT_FAMILY,
+                color: PL.COLOR || '#ffffff', fontStyle: 'bold',
+                stroke: PL.STROKE || '#1d2b16',
+                strokeThickness: Math.max(1, Math.round((PL.STROKE_W || 5) * sL)),
+            }).setOrigin(1, 0.5).setDepth(PL.DEPTH !== undefined ? PL.DEPTH : 3.2), seg);
+        }
         this.tunnel.lilies = this._buildLilies(seg, band, this.tunnel);
         if (seg) seg.tunnel = this.tunnel;
     }
@@ -3586,6 +3662,40 @@ console.log(
         puff.refresh();
     }
 
+    // Big numbers, readably. The economy reaches 27 trillion by level 65, so
+    // every figure the player sees goes through this.
+    _bigNum(v) {
+        const a = Math.max(0, v);
+        if (a >= 1e12) return (a / 1e12).toFixed(a < 1e13 ? 1 : 0) + 'T';
+        if (a >= 1e9)  return (a / 1e9 ).toFixed(a < 1e10 ? 1 : 0) + 'B';
+        if (a >= 1e6)  return (a / 1e6 ).toFixed(a < 1e7  ? 1 : 0) + 'M';
+        if (a >= 1e3)  return (a / 1e3 ).toFixed(a < 1e4  ? 1 : 0) + 'K';
+        return String(Math.ceil(a));
+    }
+
+    // What this dig still has to pay for, from wherever the machine currently
+    // stands to the end of its overrun.
+    //
+    // Two adjustments, and they are opposite sides of the same coin. A level
+    // ADDS the overrun into the level above, which it genuinely cuts. And every
+    // level after the first SUBTRACTS its own opening rows, because the level
+    // below already cut those on its way out — its tunnel is seeded with them
+    // done. Each tile is paid for exactly once, by whichever dig actually turns
+    // it over.
+    _digWorkRemaining(tn) {
+        const g = tn && tn.flood && tn.flood.g;
+        if (!g || !g.tile) return 0;
+        const over  = Math.ceil(CONFIG.ROAD.TUNNEL.OVERRUN_TILES || 0);
+        const atRow = (tn.progressPx || 0) / g.tile;
+        let sum = 0;
+        for (let r = 0; r < g.rows + over; r++) {
+            // How much of row r is still ahead of the machine, 0..1.
+            const left = Math.max(0, Math.min(1, r + 1 - atRow));
+            if (left > 0) sum += this._tileHardness(tn, r) * left;
+        }
+        return sum;
+    }
+
     // What the slots are delivering, per second. This is POWER — it is not
     // converted to distance anywhere. How far that power moves the machine
     // depends on what it is cutting through, which is the whole point.
@@ -3609,6 +3719,26 @@ console.log(
         for (let i = 0; i < 3; i++) {
             if (this.chargingSlots[i]) this._pulseBatteryIcon(this.platforms[i]);
         }
+        this._refreshTotalCharge(true);
+
+        // The work remaining takes its hit HERE, on the same beat — batteries
+        // flash, the number drops. Between ticks it holds still, which is what
+        // makes each second's delivery legible as a blow landing rather than a
+        // counter spinning.
+        if (tn.workLeft !== undefined && tn.workLabel) {
+            const dropped = tn.workShown === undefined || tn.workShown > tn.workLeft;
+            tn.workShown = tn.workLeft;
+            if (dropped) {
+                const P = CONFIG.PLATFORM;
+                this.tweens.killTweensOf(tn.workLabel);
+                tn.workLabel.setScale(1);
+                this.tweens.add({
+                    targets: tn.workLabel, scale: 1.16,
+                    duration: P.BATTERY_PULSE_DURATION,
+                    yoyo: true, ease: 'Sine.easeInOut',
+                });
+            }
+        }
     }
 
     // What this level's ground costs to cut, in work per tile.
@@ -3631,33 +3761,37 @@ console.log(
         const idx  = ((tn && tn.levelIndex) || 0) % costs.length;
         const cost = costs[idx] * (TM.COST_SCALE || 1);
         const st   = TM.STRETCHES || [1];
-        const rows = Math.max(1, g.rows);
-        // Past this level's last row the machine is not driving clear of finished
-        // work — levels stack flush, so it is already cutting the OPENING of the
-        // field above. It meets that level's ground and slows accordingly, which
-        // is why the rig labours as it crosses a boundary instead of coasting.
+
+        // THE SPAN THIS DIG ACTUALLY CUTS, in tiles.
         //
-        // Nothing is paid twice: the level above starts its own dig with exactly
-        // these tiles already marked cut (_advanceToNextLevel seeds it with the
-        // overrun), so each tile is charged once, at its own level's rate.
-        if (rowFromBottom >= rows) {
-            const seg   = tn && tn.flood && tn.flood.seg;
-            const above = seg ? this.segments[this.segments.indexOf(seg) + 1] : null;
-            const aG    = above && above.tunnel && above.tunnel.flood
-                        && above.tunnel.flood.g;
-            if (aG) {
-                const aCost = costs[(above.levelIndex || 0) % costs.length]
-                            * (TM.COST_SCALE || 1);
-                return aCost * st[0] / (Math.max(1, aG.rows) / st.length);
-            }
-            // Nothing built above yet — charge this level's own opening rather
-            // than nothing, so the machine never gets a free run.
-            return cost * st[0] / (rows / st.length);
-        }
-        const f = Math.max(0, rowFromBottom / rows);
-        const s = Math.min(st.length - 1, Math.floor(f * st.length));
-        // That stretch's share of the cost, spread over the rows it covers.
-        return cost * st[s] / (rows / st.length);
+        // A level hands the next one 3.5 tiles it has already cut, and receives
+        // 3.5 from the one below — so for every level but the first those cancel
+        // and the dig is exactly its own row count, shifted up the map. The
+        // overrun therefore belongs to the level DOING the cutting and is charged
+        // at its rate, not at the rate of the level it happens to sit in. Nothing
+        // is gained or lost in the exchange and each level pays precisely what
+        // the economy says it is worth.
+        //
+        // The first level is the exception: nothing below it, so it cuts its own
+        // rows AND the overrun, 3.5 tiles further than anyone else. Its cost is
+        // unchanged — the economy sets what a level is worth, not how far the
+        // machine travels — so the same total spreads over the longer span and
+        // its ground comes out correspondingly softer.
+        const over  = CONFIG.ROAD.TUNNEL.OVERRUN_TILES || 0;
+        const start = (tn && tn.digStart) || 0;
+        const span  = Math.max(1e-6, g.rows + over - start);
+        // Clamped, not rejected. The row the machine STANDS IN at the start of a
+        // level is the one the boundary falls inside — seeded at 3.5 tiles it is
+        // cutting the upper half of row 3 — and treating that whole row as
+        // already cut handed it free ground, so it sprinted at the speed cap for
+        // the first half tile of every level. Rows genuinely below the start are
+        // never reached by this dig anyway, and the work sum weights each row by
+        // how much of it is still ahead, so clamping costs nothing there.
+        const at    = Math.max(0, rowFromBottom - start);
+        // Which stretch of THIS DIG the row falls in. The stretches run across
+        // the whole span, so they still sum to the level's cost exactly.
+        const s = Math.min(st.length - 1, Math.max(0, Math.floor((at / span) * st.length)));
+        return cost * st[s] / (span / st.length);
     }
 
     // Advance the blade while it owes banked distance. Reveal = growing the
@@ -3729,6 +3863,7 @@ console.log(
             // and that case has vTiles above zero and never reaches here.
             tn.strain   = 0;
             tn.beltRate = 0;
+            tn.travel   = 0;
             this._setTrencherRunning(tn, false, false);
             this._runSpoil(tn.bore, tn.entryY - tn.progressPx, false, tn);
             this._shakeBore(tn, 0);
@@ -3742,18 +3877,13 @@ console.log(
         const depth = PW.PULSE_DEPTH !== undefined ? PW.PULSE_DEPTH : 0.4;
         const surge = 1 + depth * Math.cos(2 * Math.PI * (tn.tickT % 1));
 
-        // The belt tracks travel, but on its OWN curve rather than a fixed
-        // cycles-per-tile ratio — those two demands fight each other through one
-        // constant and the belt loses.
-        //
-        // This rises steeply from a standstill and flattens toward the belt's top
-        // speed, so the belt is already visibly chewing at the speeds most of the
-        // game is played at, keeps climbing when power is added, and can never
-        // reach a frame rate that strobes. The surge reaches it too, so the belt
-        // and the rig always pulse together.
+        // The belt runs at ONE rate, always. Ground hardness is told entirely
+        // through how fast the machine travels — hard ground and it creeps while
+        // the belt keeps chewing at the same pace. Making the belt slow down too
+        // said the same thing twice, and left neither reading clean.
         const vNow  = vTiles * surge;
-        const bMax  = PW.BELT_MAX || 12, bHalf = PW.BELT_HALF || 0.55;
-        tn.beltRate = bMax * vNow / (vNow + bHalf);              // cycles/sec
+        tn.travel   = vNow;                                      // tiles/sec
+        tn.beltRate = PW.BELT_CYCLES || 10;                      // cycles/sec
         // Strain is how hard this looks, and it drives the shake. Measured against
         // the pace a well-powered machine settles at — NOT against MAX_SPEED,
         // which sits far above normal play precisely so it never binds. Against
@@ -3778,6 +3908,14 @@ console.log(
         const step  = Math.min(remaining, vNow * gTile * dt);
         tn.progressPx += step;
         tn.wheelPx = (tn.wheelPx || 0) + step;
+
+        // Work remaining, counted down by the work actually CONSUMED — hardness
+        // times ground covered. In normal play that is exactly the charge the
+        // batteries delivered; where the machine is capped and some power is
+        // going to waste, this still reaches zero at the moment the dig ends,
+        // which a readout claiming to be the job left has to do.
+        if (tn.workLeft === undefined) tn.workLeft = this._digWorkRemaining(tn);
+        tn.workLeft = Math.max(0, tn.workLeft - hard * (step / gTile));
 
         // The face climbs from the mouth the machine started at.
         const cutH  = tn.progressPx;
@@ -3805,6 +3943,19 @@ console.log(
         }
         this._setTrencherRunning(tn, true, step > 0.01);
         this._shakeBore(tn, tn.strain);
+        if (tn.workLabel) {
+            // On the dig line, out past the rig's left flank. Anchored to the
+            // machine's own x and width, so it clears the rig at any tile size.
+            const PL = CONFIG.ROAD.TILEMAP.POWER_LABEL || {};
+            // Shows workShown, not workLeft. The underlying figure falls every
+            // frame; the DISPLAY only steps once a second, on the battery tick,
+            // so the number lands as one visible hit rather than blurring.
+            if (tn.workShown === undefined) tn.workShown = tn.workLeft;
+            tn.workLabel.setVisible(true)
+                .setText(this._bigNum(tn.workShown))
+                .setPosition(b.x - b.rigW * (0.5 + (PL.X !== undefined ? PL.X : 0.4)),
+                             faceY + (PL.Y || 0) * gTile);
+        }
         // The soil strip in the wake is no longer shown — the ditch sprite is
         // what gets uncovered as the grass recedes. (The cut sprite is kept only
         // so its width still feeds the foam-finger layout.)
@@ -3962,7 +4113,9 @@ console.log(
             sprayL: fan(-1),
             sprayR: fan(1),
             // Grit off the cutting face, dropping back into the trench behind it.
-            chips: this._addB(this.add.particles(0, 0, 'debris_chip', {
+            // Off by default: it fires up the middle from the same texture as
+            // the side sprays, which reads as a third spray aimed at the camera.
+            chips: D.CHIPS === false ? null : this._addB(this.add.particles(0, 0, 'debris_chip', {
                 angle:    { min: 60, max: 120 },
                 speed:    { min: px(D.SPEED_MIN || 20), max: px(D.SPEED_MAX || 90) },
                 gravityY: px(D.GRAVITY || 260),
@@ -4002,9 +4155,10 @@ console.log(
         const PW = CONFIG.ROAD.TUNNEL.POWER || {};
         const sc = this.layoutConfig.platformScale;
 
-        // 0..1, how close the belt is to free-running.
-        const free = (PW.BELT_MAX || 12);
-        const work = tn ? Math.max(0, Math.min(1, (tn.beltRate || 0) / free)) : 1;
+        // 0..1, how hard the machine is working. Read from TRAVEL, not from the
+        // belt — the belt is a constant now, so it can no longer report anything.
+        const easy = PW.EASY_SPEED || 1.2;
+        const work = tn ? Math.max(0, Math.min(1, (tn.travel || 0) / easy)) : 1;
         const floor = PW.SPOIL_MIN !== undefined ? PW.SPOIL_MIN : 0.25;
         const k = floor + (1 - floor) * work;
         if (tn && sp.k !== undefined && Math.abs(k - sp.k) < 0.02) {
@@ -4025,9 +4179,9 @@ console.log(
         const x = b.rigW * (S.OFFSET_X !== undefined ? S.OFFSET_X : 0.22);
         sp.sprayL.setPosition(b.x - x, y);
         sp.sprayR.setPosition(b.x + x, y);
-        sp.chips.setPosition(b.x, faceY);
+        if (sp.chips) sp.chips.setPosition(b.x, faceY);
         sp.dust.setPosition(b.x, faceY);
-        for (const e of [sp.sprayL, sp.sprayR, sp.chips, sp.dust]) e.emitting = cutting;
+        for (const e of [sp.sprayL, sp.sprayR, sp.chips, sp.dust]) if (e) e.emitting = cutting;
     }
 
     // The blade exits the far edge: retire the machines, then flood the last
@@ -4050,6 +4204,7 @@ console.log(
         // over, so there is always exactly one machine and never a gap with none.
         this._setTrencherRunning(tn, false, false);
         this._runSpoil(tn.bore, tn.entryY - tn.progressPx, false);
+        if (tn.workLabel) tn.workLabel.setVisible(false);
 
         // The waterline just carries on: it runs from where it was holding
         // (LAG behind the blade) up to the far mouth in one smooth flood —
@@ -4084,14 +4239,18 @@ console.log(
         const seg = tn.flood && tn.flood.seg;
         const nextSeg = this._advanceToNextLevel(seg);
         this._fillViewport();                  // keep the world ahead of the view
+        const C = CONFIG.ROAD.ENDLESS || {};
         const next = nextSeg && nextSeg.tunnel;
-        if (next) next.ready = false;
+        // Hold the MACHINE, the CAMERA, or neither, while this field comes in.
+        if (C.HOLD_MACHINE_FOR_CROPS && next) next.ready = false;
+        if (C.HOLD_CAMERA_FOR_CROPS) E.camHold = true;
         E.held = true;
         const wait = () => {
             if (seg && !this._cropsDone(seg)) { this.time.delayedCall(300, wait); return; }
-            // Tick the job off, and only then let the machine bite again.
+            // Tick the job off, and only then release whatever was waiting.
             this._completeTask(() => {
                 E.held = false;
+                E.camHold = false;
                 if (next) next.ready = true;
             });
         };
@@ -4267,11 +4426,18 @@ console.log(
         if (!E || !this.camB || !this.tileGrid) return;
         const C = CONFIG.ROAD.ENDLESS || {};
         const ahead = (C.FILL_AHEAD !== undefined ? C.FILL_AHEAD : 0.75) * this.camB.height;
+        // Measured from the CAMERA or from the MACHINE, whichever has got
+        // further. With the camera held for a field the machine runs on alone,
+        // and building only ahead of the camera would let it dig off the end of
+        // the world.
+        const tn = this.tunnel;
+        const nose = tn ? tn.entryY - tn.progressPx : this.camB.scrollY;
+        const from = Math.min(this.camB.scrollY, nose);
         // Bounded: a map with no height would otherwise spin here forever.
         for (let guard = 0; guard < 16; guard++) {
             const top = this.segments[this.segments.length - 1];
             if (!top || top.top === undefined) return;
-            if (top.top <= this.camB.scrollY - ahead) return;
+            if (top.top <= from - ahead) return;
             E.segIndex++;
             const made = this._buildSegment(top.top);
             if (!made || made.top === undefined || made.top >= top.top) return;  // no progress
@@ -4291,8 +4457,31 @@ console.log(
         // past the boundary), so it stands exactly where that one parked rather
         // than dropping back to this level's floor.
         const tile = this.tileGrid ? this.tileGrid.tile : 0;
-        next.tunnel.progressPx = Math.min(next.tunnel.len,
-            (CONFIG.ROAD.TUNNEL.OVERRUN_TILES || 0) * tile);
+        const over = CONFIG.ROAD.TUNNEL.OVERRUN_TILES || 0;
+        next.tunnel.progressPx = Math.min(next.tunnel.len, over * tile);
+        // Those tiles were cut by the level below and paid for at ITS rate,
+        // so this level's own cost spreads over what is left of its span.
+        next.tunnel.digStart = over;
+        // ARM IT NOW. Levels are created dormant because they are built ahead of
+        // the machine and must not dig on their own; the moment one becomes the
+        // live level that reason is gone. Only an explicit request to hold the
+        // rig while the field below comes in keeps it dormant, and _finishStretch
+        // re-arms it when that field is done.
+        next.tunnel.ready = !(CONFIG.ROAD.ENDLESS || {}).HOLD_MACHINE_FOR_CROPS;
+        // Where the outgoing rig actually stands, and where the incoming one is
+        // about to. These must be the same point: the new level's floor IS the
+        // old level's top, and the new tunnel is seeded with exactly the overrun
+        // the old one drove out. Any gap here is a visible lurch.
+        if (CONFIG.DEBUG_POWER) {
+            const oldFace = seg.tunnel ? seg.tunnel.entryY - seg.tunnel.progressPx : NaN;
+            const newFace = next.tunnel.entryY - next.tunnel.progressPx;
+            const d = newFace - oldFace;
+            console.log(`[handover] lvl ${(seg.levelIndex || 0) + 1} -> ${(next.levelIndex || 0) + 1}  ` +
+                `parked at ${oldFace.toFixed(1)}  new cut line ${newFace.toFixed(1)}  ` +
+                `delta ${d.toFixed(1)}px` +
+                (Math.abs(d) > 0.6 ? `  <<< LURCH of ${(d / tile).toFixed(2)} tiles ` +
+                    (d > 0 ? '(BACKWARD)' : '(forward)') : '  (continuous)'));
+        }
         this._showBore(next);
         this._placeBore(next.tunnel);
         // Those overrun cells now sit on top of this level's own bottom rows —
@@ -4317,10 +4506,30 @@ console.log(
         const frac = C.FOLLOW_TOP !== undefined ? C.FOLLOW_TOP : 0.34;
         const cutY = tn.entryY - tn.progressPx;            // the machine's cut line
         // Highest the machine may sit before the camera answers.
-        const want = cutY - view * frac;
+        // While a finished field is coming in the camera stays on it and lets the
+        // machine carry on above — but only until the rig nears the top edge.
+        // A camera that falls a long way behind has to sprint to catch up, and a
+        // camera sprinting upward drags the world down the screen, which the eye
+        // reads as the machine reversing. Giving way early means there is never
+        // anything to catch up on.
+        const edge = E.camHold ? (C.HOLD_EDGE !== undefined ? C.HOLD_EDGE : 0.08)
+                               : frac;
+        const want = cutY - view * edge;
         if (want < this.camB.scrollY) {
-            const k = 1 - Math.exp(-(dtMs / 1000) * (C.FOLLOW_LERP || 2.2));
-            this.camB.scrollY += (want - this.camB.scrollY) * k;
+            const dt = dtMs / 1000;
+            const k  = 1 - Math.exp(-dt * (C.FOLLOW_LERP || 2.2));
+            let move = (want - this.camB.scrollY) * k;          // negative: upward
+            // NEVER OUTRUN THE MACHINE. The camera moving up drags the world down
+            // the screen, so any moment it travels faster than the rig, the rig
+            // looks like it is reversing. Capping it just above the machine's own
+            // pace means framing is reclaimed gradually and nothing ever appears
+            // to lose ground — which matters most right after a hold, where a
+            // quarter of a screen has to be won back.
+            const tile = (tn.flood && tn.flood.g) ? tn.flood.g.tile : 0;
+            const rig  = Math.abs(tn.travel || 0) * tile;        // px/sec
+            const cap  = rig * (C.CATCHUP !== undefined ? C.CATCHUP : 1.15) * dt;
+            if (cap > 0 && -move > cap) move = -cap;
+            this.camB.scrollY += move;
         }
         this._fillViewport();
         this._reapSegments();
@@ -4483,6 +4692,7 @@ console.log(
 
         // Show charge-rate label above the slot
         p.chargeRateText.setText(`${chargePerMinute}`).setVisible(true);
+        this._refreshTotalCharge(false);
         p.chargeRateBolt.setVisible(true);
 
         const batteryData = {
@@ -4511,6 +4721,7 @@ console.log(
         p.slotBgFilled.setVisible(false);
         p.chargeRateText.setVisible(false);
         p.chargeRateBolt.setVisible(false);
+        this._refreshTotalCharge(false);
         this.chargingSlots[slotIndex] = null;
     }
 
@@ -4531,6 +4742,26 @@ console.log(
         this._tunnelChargeCycle();
     }
 
+
+    // The slots' combined rate. Refreshed whenever a slot changes and on every
+    // charge tick, so it can never drift from what the machine is really drawing.
+    _refreshTotalCharge(pulse) {
+        const t = this.totalChargeText;
+        if (!t) return;
+        const total = this._slotPower();
+        t.setText(total > 0 ? this._bigNum(total) : '').setVisible(total > 0);
+        const TC = CONFIG.PLATFORM.TOTAL_CHARGE || {};
+        if (!pulse || total <= 0 || !(TC.PULSE > 1)) return;
+        // Same beat as the individual icons — the whole supply chain flashing
+        // together rather than four things blinking out of step.
+        this.tweens.killTweensOf(t);
+        t.setScale(1);
+        this.tweens.add({
+            targets: t, scale: TC.PULSE,
+            duration: CONFIG.PLATFORM.BATTERY_PULSE_DURATION,
+            yoyo: true, ease: 'Sine.easeInOut',
+        });
+    }
 
     _pulseBatteryIcon(p) {
         // Subtle pulse on the battery sprite each time it feeds the machine
@@ -5456,6 +5687,7 @@ console.log(
             p.batterySprite    = bd.sprite;
             p.batteryLevelText = bd.levelText;
             p.chargeRateText.setText(`${cpm}`).setVisible(true);
+            this._refreshTotalCharge(false);
             p.chargeRateBolt.setVisible(true);
         }
 

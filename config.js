@@ -76,7 +76,7 @@ var CONFIG = {
     DEBUG_PERF: true,        // log object / tween / timer / texture counts each
                              // time the world rebases (once per level). Climbing
                              // numbers = something is outliving its band
-    BATTERY_START_LEVEL: 1,
+    BATTERY_START_LEVEL: 5,
     BATTERY_IMAGE_EXTENSIONS: ['svg', 'png', 'jpg', 'webp'],
 
     // BACKGROUND: {
@@ -338,6 +338,21 @@ var CONFIG = {
                                        // background, which is the signal
         },
 
+        // The three slots' rates added up, shown beside the battery case. The
+        // per-slot numbers say what each cell contributes; this says what the
+        // machine is actually being fed, which is the number that decides how
+        // fast the ground gives way.
+        TOTAL_CHARGE: {
+            ENABLED: true,
+            GAP:     14,        // out from the case's terminal (px @ design)
+            SIZE:    30,        // font size @ design scale
+            COLOR:      '#ffe07a',
+            STROKE:     '#3a2a00',
+            STROKE_W:   4,
+            PULSE:   1.18,      // grows this much on each battery tick, in step
+                                // with the individual battery icons — the whole
+                                // supply chain flashing on the same beat
+        },
         SLOT_LABEL_W: 46,              // width reserved for a charge-rate label
                                        // (px @ design). PORTRAIT ONLY: the
                                        // battery stands on end there, so the
@@ -648,6 +663,26 @@ var CONFIG = {
             // scale the 128px tiles take: whatever a tile is on screen, divided
             // by FRAME. At 449x226 that puts it 3.5 tiles wide — the two canal
             // columns plus about three quarters of a tile onto each bank.
+            // The work left in this level, shown over the machine and counting
+            // down as the batteries chew through it. It includes the overrun —
+            // the 3.5 tiles into the level above — because that is genuinely
+            // part of what this dig has to pay for.
+            POWER_LABEL: {
+                ENABLED: true,
+                // Beside the DIG LINE, out to its left, rather than over the
+                // machine. The cut line is where the work is actually happening
+                // and where the eye already is; parked over the control unit the
+                // number rode ahead of it, on the ground still to be cut.
+                // Right-aligned, so it grows away from the rig instead of into it.
+                X:       0.4,       // clear of the rig's left flank, in rig widths
+                Y:       0,         // off the dig line, in tiles (+ is down)
+                SIZE:    26,        // font size @ design scale
+                COLOR:      '#ffffff',
+                STROKE:     '#1d2b16',
+                STROKE_W:   5,
+                DEPTH:   3.2,       // over the machine and its spoil
+            },
+
             BLOCK: {
                 ENABLED: true,
                 FILE:  'graphics/block.png',
@@ -666,14 +701,39 @@ var CONFIG = {
                                  // wall reads as a plank dropped on the surface.
                                  // Still above the machine (3.04-3.07), so the
                                  // rig passes behind it rather than through it
+                // DROPPED INTO PLACE, not blinked into existence. It starts
+                // slightly high and slightly LARGER, then settles down to its
+                // resting position and to full size. Bigger reads as nearer the
+                // camera, so shrinking as it descends is the whole illusion —
+                // the wall comes down out of the air and into the channel.
+                DROP_MS:    340,    // longer, because it now falls further
+                DROP_RISE:  1.3,    // how far above its resting place it starts,
+                                    // in tiles
+                DROP_SCALE: 1.45,   // and how much larger — i.e. how far toward
+                                    // the camera. Rise and scale have to climb
+                                    // together: more height with the same size
+                                    // reads as a slide down the screen, and more
+                                    // size without the height reads as a zoom.
+                                    // It is the two moving in step that makes it
+                                    // a descent
+                DROP_EASE:  'Back.easeIn',   // gathers speed downward and lands
+                                    // with a slight overshoot into the floor,
+                                    // which is what sells the weight
+
                 // Pulling one out is what lets the water through. A wall is
                 // removed the instant the level ABOVE it is about to flood — so
                 // the water does not merely appear beyond the boundary, it goes
                 // because the thing stopping it was taken away.
-                REMOVE_MS:   280,
-                REMOVE_RISE: 0.45,   // how far it lifts as it goes, in tiles.
-                                     // Lifted rather than faded in place: it is
-                                     // being pulled out of the channel
+                REMOVE_MS:   300,   // the placement run BACKWARDS — it rises the
+                                    // same distance it fell and swells by the
+                                    // same amount, withdrawing toward the camera
+                                    // exactly as it descended away from it.
+                                    // Height and swell are taken from DROP_RISE
+                                    // and DROP_SCALE above rather than repeated,
+                                    // so the two halves can never drift apart
+                REMOVE_EASE: 'Back.easeOut',   // the mirror of the drop's easeIn:
+                                    // it leaves quickly and slows, where the drop
+                                    // gathered speed on the way down
             },
 
             // ── Terrain sheet ───────────────────────────────────────────────
@@ -1296,16 +1356,24 @@ var CONFIG = {
                                         // reached 223 t/s), so it sits well above
                                         // what power normally buys and almost
                                         // never binds
-                BELT_MAX:        12,    // the belt's own top speed, cycles/sec.
-                                        // Five frames at 12 is 60fps, exactly the
-                                        // render rate — past this it skips frames
-                                        // and can appear to run backwards
-                BELT_HALF:       0.55,  // travel, in tiles/sec, at which the belt
-                                        // reaches HALF its top speed. Low, so the
-                                        // belt is already working hard at the
-                                        // speeds most of the game is played at,
-                                        // and climbs gently rather than linearly
-                                        // after that
+                BELT_CYCLES:     10,    // the belt runs at this, cycles/sec, and
+                                        // nothing changes it. Ten cycles of five
+                                        // frames is 50fps — the rate the art was
+                                        // calibrated at.
+                                        //
+                                        // Deliberately CONSTANT. Ground hardness
+                                        // is told entirely through how fast the
+                                        // machine travels: soft ground and it
+                                        // moves off, hard ground and it barely
+                                        // creeps while the belt keeps chewing at
+                                        // the same rate. One signal, unambiguous.
+                                        // A belt that also slowed down said the
+                                        // same thing twice and made neither
+                                        // reading clean.
+                                        //
+                                        // Ceiling is 12 (60fps, the render rate);
+                                        // past that it skips frames and can
+                                        // appear to run backwards
                 PULSE_DEPTH:     0,     // OFF. Speed used to swing +/-40% across
                                         // every second so the battery tick could
                                         // be felt. At the speeds the game is
@@ -1316,10 +1384,16 @@ var CONFIG = {
                                         // pulse back; the machinery is intact and
                                         // distance per second is unaffected
                                         // either way
-                SHAKE_MAX:       2.2,   // horizontal shake at full strain (px @
-                                        // platformScale). SPRITES ONLY — never
-                                        // the reveal line, which the cut edge,
-                                        // the spoil and the water all hang off
+                SHAKE_MAX:       0,     // OFF. Horizontal shudder at full strain
+                                        // (px @ platformScale). It oscillated at
+                                        // 4-6Hz, which on a rig this size read as
+                                        // the machine swinging side to side
+                                        // rather than as effort — a trencher
+                                        // tracks straight even when it is
+                                        // fighting. Raise it to bring it back;
+                                        // SPRITES ONLY either way, never the
+                                        // reveal line, which the cut edge, the
+                                        // spoil and the water all hang off
                 EASY_SPEED:      1.2,   // the pace a machine with power to spare
                                         // settles at, in tiles/sec. Strain is
                                         // measured against THIS, not against
@@ -1498,6 +1572,13 @@ var CONFIG = {
             // Grit and haze at the cutting face itself, falling back into the
             // trench rather than being thrown clear of it.
             FACE: {
+                CHIPS: false,      // OFF. Grit thrown straight up the middle at
+                                   // the cut line, from the same debris texture
+                                   // as the two side sprays — so it read as a
+                                   // third spray fired at the camera rather than
+                                   // as material coming off the face. The sides
+                                   // already say the trench is being emptied.
+                                   // The dust haze below is unaffected
                 QUANTITY: 2,
                 EVERY_MS: 45,
                 SPEED_MIN: 20,
@@ -1548,8 +1629,45 @@ var CONFIG = {
             // view, then eases up to put it back. A camera welded to the rig
             // would always be looking at bare soil and never at the crops
             // coming in behind it.
+            // What waits for a finished field to come in — the machine, the
+            // camera, or neither.
+            //
+            // The machine stopping wastes time but keeps it on screen. The
+            // camera stopping wastes nothing but lets the rig climb out of the
+            // top: a level needs about 10s to flood and grow, and at 1.8 tiles
+            // a second the machine covers 18 tiles in that time against 6.7
+            // tiles of headroom. It leaves the view after under four seconds.
+            HOLD_MACHINE_FOR_CROPS: false,  // the rig keeps digging regardless
+            HOLD_CAMERA_FOR_CROPS:  true,   // but the view stays on the field
+            HOLD_EDGE:   0.08,     // ...unless the machine is about to leave.
+                                   // The hold is SOFT: the camera stays on the
+                                   // finished field for as long as it can, then
+                                   // gives way once the rig reaches this fraction
+                                   // of the view from the top.
+                                   //
+                                   // Without this the camera falls behind by
+                                   // however far the machine got — twelve tiles
+                                   // is typical — and catching up afterwards
+                                   // drags the whole world down the screen, which
+                                   // reads as the MACHINE reversing. A camera
+                                   // that never falls behind has nothing to catch
+                                   // up on
+
             FOLLOW_TOP:  0.34,     // machine may climb to this fraction of the
                                    // view before the camera answers
+            CATCHUP:     1.15,     // the camera may never travel faster than this
+                                   // multiple of the MACHINE's own speed.
+                                   //
+                                   // This is what stops the rig appearing to
+                                   // reverse. A camera moving up drags the world
+                                   // down the screen, so any time it outruns the
+                                   // machine the machine looks like it is going
+                                   // backwards — most obviously after a hold,
+                                   // when it had a quarter of a screen of framing
+                                   // to reclaim and sprinted to get it. Capped
+                                   // just above the machine's pace, it reclaims
+                                   // the framing over several seconds and the rig
+                                   // never visibly loses ground
             FOLLOW_LERP: 2.2,      // how fast it closes on that, per second.
                                    // Low: the answer should read as the camera
                                    // catching up, not as a snap
