@@ -1703,10 +1703,18 @@ console.log(
         const g = F.g;
         const src = this.textures.get('block').getSourceImage();
         const k   = g.tile / (TM.FRAME || 128);
+        // ORIGIN is the point on the art that must land on the boundary — not
+        // its centre. The wall's own waterline sits well above its bottom edge,
+        // so centring it would bury the boundary somewhere inside the sprite and
+        // the water would appear to stop short of, or past, the line it is
+        // actually held at. setOrigin BEFORE setDisplaySize, so the size is
+        // applied about the pivot that will be used.
         const img = this._addB(this.add.image(
                 g.left + g.mainRightCol * g.tile,     // the seam between the main columns
                 tn.exitY + g.tile * (BK.Y || 0),      // the level's far edge
                 'block')
+            .setOrigin(BK.ORIGIN_X !== undefined ? BK.ORIGIN_X : 0.5,
+                       BK.ORIGIN_Y !== undefined ? BK.ORIGIN_Y : 0.18)
             .setDisplaySize(src.width * k, src.height * k)
             .setDepth(BK.DEPTH !== undefined ? BK.DEPTH : 3.11), F.seg);
         if (F.seg) F.seg.block = img;
@@ -3707,7 +3715,7 @@ console.log(
         // map's bottom the way the machine meets them.
         const rowNow = Math.floor(tn.progressPx / Math.max(1, gTile));
         const hard   = Math.max(1e-9, this._tileHardness(tn, rowNow));
-        const vFree  = (PW.BELT_FREE || 8) * (PW.TILES_PER_CYCLE || 0.0625);   // tiles/sec
+        const vFree  = PW.MAX_SPEED || 6;                                      // tiles/sec
         const vEnergy = power / hard;                                          // tiles/sec
         const vTiles  = vEnergy > 0 ? (vEnergy * vFree) / (vEnergy + vFree) : 0;
 
@@ -3734,10 +3742,25 @@ console.log(
         const depth = PW.PULSE_DEPTH !== undefined ? PW.PULSE_DEPTH : 0.4;
         const surge = 1 + depth * Math.cos(2 * Math.PI * (tn.tickT % 1));
 
-        // Belt and travel are locked by geometry — a bucket chain carries a
-        // fixed amount per cycle — so they can never disagree or appear to slide.
-        tn.beltRate = vTiles / (PW.TILES_PER_CYCLE || 0.0625);   // cycles/sec
-        tn.strain   = Math.max(0, Math.min(1, 1 - vTiles / vFree));
+        // The belt tracks travel, but on its OWN curve rather than a fixed
+        // cycles-per-tile ratio — those two demands fight each other through one
+        // constant and the belt loses.
+        //
+        // This rises steeply from a standstill and flattens toward the belt's top
+        // speed, so the belt is already visibly chewing at the speeds most of the
+        // game is played at, keeps climbing when power is added, and can never
+        // reach a frame rate that strobes. The surge reaches it too, so the belt
+        // and the rig always pulse together.
+        const vNow  = vTiles * surge;
+        const bMax  = PW.BELT_MAX || 12, bHalf = PW.BELT_HALF || 0.55;
+        tn.beltRate = bMax * vNow / (vNow + bHalf);              // cycles/sec
+        // Strain is how hard this looks, and it drives the shake. Measured against
+        // the pace a well-powered machine settles at — NOT against MAX_SPEED,
+        // which sits far above normal play precisely so it never binds. Against
+        // the cap, strain sat near 1 for the whole game and the rig shook at full
+        // amplitude permanently, which read as a stutter rather than as effort.
+        const easy  = PW.EASY_SPEED || 1.2;
+        tn.strain   = Math.max(0, Math.min(1, easy / (easy + vTiles * 2)));
         if (CONFIG.DEBUG_POWER && Math.floor(tn.tickT) !== tn._logT) {
             tn._logT = Math.floor(tn.tickT);
             const fmt = (v) => v >= 1e12 ? (v / 1e12).toFixed(1) + 'T'
@@ -3752,7 +3775,7 @@ console.log(
                 `-> ${vTiles.toFixed(3)} t/s (${vEnergy < vFree ? 'POWER-bound' : 'BELT-bound'})  ` +
                 `belt ${tn.beltRate.toFixed(1)} cyc/s  strain ${tn.strain.toFixed(2)}`);
         }
-        const step  = Math.min(remaining, vTiles * gTile * surge * dt);
+        const step  = Math.min(remaining, vNow * gTile * dt);
         tn.progressPx += step;
         tn.wheelPx = (tn.wheelPx || 0) + step;
 
@@ -3814,7 +3837,20 @@ console.log(
             ? limit
             : Math.max(0, tn.progressPx - lag);
         const gap = target - tn.wet;
-        if (gap > 0) {
+        if (gap > 0 && limit !== undefined) {
+            // THE FLOOD. `limit` is only passed for the final release, when the
+            // target is the whole level and is not moving. A gap-closing chase
+            // is wrong here: its speed is proportional to the distance left, so
+            // it starts fast and decelerates into the end — at 80% of the way it
+            // is down to 20% of its opening speed, which reads as the water
+            // giving up just as it arrives. A flood front travels; it does not
+            // ease off. So this runs at a flat speed.
+            const v = (WA.FLOOD_SPEED || 140) * this.layoutConfig.platformScale;
+            tn.wet = Math.min(target, tn.wet + v * dt);
+        } else if (gap > 0) {
+            // CHASING THE MACHINE (AFTER_DIG off). Here the target moves, and the
+            // damping is the point — the water lingers behind a lurch and is
+            // still creeping up the cut after the rig has gone quiet.
             const tau = Math.max(0.05, WA.FLOW_TAU || 0.9);
             // Exponential approach — frame-rate independent, and it can never
             // overtake the target however long the frame was. On its own it
@@ -3967,7 +4003,7 @@ console.log(
         const sc = this.layoutConfig.platformScale;
 
         // 0..1, how close the belt is to free-running.
-        const free = (PW.BELT_FREE || 8);
+        const free = (PW.BELT_MAX || 12);
         const work = tn ? Math.max(0, Math.min(1, (tn.beltRate || 0) / free)) : 1;
         const floor = PW.SPOIL_MIN !== undefined ? PW.SPOIL_MIN : 0.25;
         const k = floor + (1 - floor) * work;

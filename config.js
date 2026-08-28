@@ -76,7 +76,7 @@ var CONFIG = {
     DEBUG_PERF: true,        // log object / tween / timer / texture counts each
                              // time the world rebases (once per level). Climbing
                              // numbers = something is outliving its band
-    BATTERY_START_LEVEL: 3,
+    BATTERY_START_LEVEL: 1,
     BATTERY_IMAGE_EXTENSIONS: ['svg', 'png', 'jpg', 'webp'],
 
     // BACKGROUND: {
@@ -651,9 +651,21 @@ var CONFIG = {
             BLOCK: {
                 ENABLED: true,
                 FILE:  'graphics/block.png',
+                // Which point ON THE ART lands on the level boundary. Not the
+                // centre: the wall's waterline sits high in the image, so this
+                // is the pivot that puts the line where the water is actually
+                // stopped. Measured from the top-left of the sprite, 0..1.
+                ORIGIN_X: 0.5,
+                ORIGIN_Y: 0.25,
                 Y:     0,        // nudge off the boundary line, in tiles
-                DEPTH: 3.11,     // over the canal's water, so it reads as holding
-                                 // the water rather than sitting under it
+                DEPTH: 3.09,     // UNDER the canal's water (3.10). The wall is
+                                 // set into the channel, not laid across the top
+                                 // of it, so the water rises against its face and
+                                 // laps over it — which is what a dam holding
+                                 // water looks like. Drawn above it instead, the
+                                 // wall reads as a plank dropped on the surface.
+                                 // Still above the machine (3.04-3.07), so the
+                                 // rig passes behind it rather than through it
                 // Pulling one out is what lets the water through. A wall is
                 // removed the instant the level ABOVE it is about to flood — so
                 // the water does not merely appear beyond the boundary, it goes
@@ -1260,8 +1272,8 @@ var CONFIG = {
             //
             //   ENERGY      power / hardness  — you cannot cut faster than the
             //               batteries can pay for
-            //   MECHANICAL  BELT_FREE x TILES_PER_CYCLE — the belt cannot spin
-            //               faster than it spins, however much power you feed it
+            //   MECHANICAL  MAX_SPEED — the machine cannot travel
+            //               faster than that, however much power you feed it
             //
             // They are blended smoothly rather than hard-clamped, so approaching
             // the machine's limit reads as bogging down rather than hitting a
@@ -1272,36 +1284,50 @@ var CONFIG = {
             // between them barely moves — so speed lives in a narrow band across
             // all 65 levels with no per-level tuning at all.
             POWER: {
-                BELT_FREE:       12,    // belt cycles/sec with nothing to cut.
-                                        // Five frames at 12 cycles/sec is 60fps,
-                                        // exactly the render rate — past this the
-                                        // belt skips frames and strobes, so it is
-                                        // the real ceiling on the whole system
-                TILES_PER_CYCLE: 0.5,   // how far one belt cycle carries the rig
-                                        // — bucket-chain geometry. With
-                                        // BELT_FREE above this caps travel at
-                                        // 6 tiles/sec.
-                                        //
-                                        // This cap exists to stop the absurd
-                                        // (the old model reached 223 tiles/sec),
-                                        // NOT to slow the machine down. It has to
-                                        // sit well ABOVE what power normally
-                                        // buys, or it binds instead of the
-                                        // economy and every level runs at the
-                                        // same speed no matter what the player
-                                        // merged. At 0.5 it did exactly that:
-                                        // level 1 could not finish in under 16s
-                                        // however many batteries were in it
-                PULSE_DEPTH:     0.4,   // the battery tick becomes a SURGE, not
-                                        // a stop: speed swings +/- this much
-                                        // across each second instead of working
-                                        // 450ms and sitting dead. Distance owed
-                                        // per second is unchanged, so this is
-                                        // feel only. 0 = perfectly smooth
+                // TRAVEL CAP and BELT LOOK are separate numbers, because one
+                // constant cannot serve both. Tie the belt's cycles-per-tile to
+                // the cap and you must choose: a high cap (so the economy, not
+                // the machine, decides speed) or a busy-looking belt. Making
+                // each cycle carry half a tile gave the cap but left the belt
+                // turning twice per tile — a crawl, so the ground looked as
+                // though it were being cut by the rig reversing into it.
+                MAX_SPEED:       6,     // travel ceiling, tiles/sec. Exists only
+                                        // to stop the absurd (the old model
+                                        // reached 223 t/s), so it sits well above
+                                        // what power normally buys and almost
+                                        // never binds
+                BELT_MAX:        12,    // the belt's own top speed, cycles/sec.
+                                        // Five frames at 12 is 60fps, exactly the
+                                        // render rate — past this it skips frames
+                                        // and can appear to run backwards
+                BELT_HALF:       0.55,  // travel, in tiles/sec, at which the belt
+                                        // reaches HALF its top speed. Low, so the
+                                        // belt is already working hard at the
+                                        // speeds most of the game is played at,
+                                        // and climbs gently rather than linearly
+                                        // after that
+                PULSE_DEPTH:     0,     // OFF. Speed used to swing +/-40% across
+                                        // every second so the battery tick could
+                                        // be felt. At the speeds the game is
+                                        // actually played at that read as the
+                                        // machine stuttering rather than surging,
+                                        // and a trencher should grind steadily.
+                                        // Raise it (0.1 is subtle) to bring the
+                                        // pulse back; the machinery is intact and
+                                        // distance per second is unaffected
+                                        // either way
                 SHAKE_MAX:       2.2,   // horizontal shake at full strain (px @
                                         // platformScale). SPRITES ONLY — never
                                         // the reveal line, which the cut edge,
                                         // the spoil and the water all hang off
+                EASY_SPEED:      1.2,   // the pace a machine with power to spare
+                                        // settles at, in tiles/sec. Strain is
+                                        // measured against THIS, not against
+                                        // MAX_SPEED — that cap is deliberately
+                                        // far above normal play, so measuring
+                                        // against it pinned strain near 1 forever
+                                        // and the rig shook at full amplitude the
+                                        // entire game
                 WHEEL_TILES_PER_TURN: 0.6,  // ground covered per full wheel
                                         // rotation. The wheels are driven by
                                         // DISTANCE, not by a clock, so they can
@@ -1553,6 +1579,14 @@ var CONFIG = {
             LAG:        1.0,       // how much dry cut the blade keeps open ahead of
                                    // the water, in machine lengths. This is a LIMIT,
                                    // not a leash: 1 = the rig works on dry soil
+            FLOOD_SPEED: 140,      // the FINAL flood's speed (px/s @ platformScale),
+                                   // flat from the mouth to the wall. Flat because
+                                   // the target does not move: a gap-closing
+                                   // chase would start fast and crawl the last
+                                   // fifth, which reads as the water losing
+                                   // interest. Also makes a long level flood at
+                                   // the same speed as a short one, where the
+                                   // chase made longer levels start faster
             FLOW_TAU:   2.25,      // seconds for the level to close most of the gap
                                    // to that limit. This is what stops the water
                                    // reading as a strip towed by the auger — it
