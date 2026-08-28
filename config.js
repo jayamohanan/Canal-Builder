@@ -61,6 +61,11 @@ var CONFIG = {
         WIDTH:   1,        // px @ platformScale
         DEPTH:   9000,     // above everything the farm draws
     },
+    DEBUG_POWER: true,       // log what the machine is actually delivering, once
+                             // a second while it is cutting: hardness of the row
+                             // it is in, power from the slots, the two speed
+                             // limits, which one is binding, and the strain.
+                             // This is the readout for tuning the whole feature
     DEBUG_MAP:  true,        // report, per band, exactly what reached the
                              // renderer from the level's .tmj: which layers were
                              // found and whether they carry anything, which
@@ -582,6 +587,50 @@ var CONFIG = {
                                     // drawn at a non-integer scale, so one pixel
                                     // of headroom is not quite enough.
             MAIN_TILES: 2,          // the main canal is this many tiles wide
+
+            // ── What the ground costs ───────────────────────────────────────
+            // How much work a level's ground takes to cut through. This is the
+            // difficulty curve, and every number in it is DERIVED, not chosen:
+            // it is Blumgi Merge's combined monster HP per level times 1.18.
+            //
+            // The 1.18 is the pooling correction. Their level ends when the
+            // SLOWEST of three independent fights ends — a maximum. Ours ends
+            // when one machine finishes the total — an average. A mean is never
+            // larger than a max, so pooling is more forgiving; measured across
+            // all 65 levels the factor is 1.18. With it applied, our level
+            // durations match theirs exactly and there is no target time to
+            // pick: time = cost / power, on both sides.
+            //
+            // Per-tile hardness is this divided by the map's row count. Nothing
+            // authors it and nothing stores it.
+            LEVEL_COST: [
+                118, 413, 2124, 9440, 26550,                   // 1-5
+                49560, 17700, 112100, 271400, 708000,          // 6-10
+                1416000, 5310000, 6608000, 13924000, 32922000, // 11-15
+                69030000, 159300000, 265500000, 531000000, 885000000, // 16-20
+                1770000000, 2124000000, 2832000000, 3658000000, 4012000000, // 21-25
+                4248000000, 4956000000, 5900000000, 265500000, 7670000000, // 26-30
+                8496000000, 9322000000, 10620000000, 11564000000, 13334000000, // 31-35
+                16284000000, 18762000000, 21476000000, 23010000000, 26550000000, // 36-40
+                31860000000, 88500000000, 141600000000, 212400000000, 283200000000, // 41-45
+                336300000000, 460200000000, 566400000000, 796500000000, 1062000000000, // 46-50
+                1593000000000, 2183000000000, 3127000000000, 4425000000000, 6195000000000, // 51-55
+                7965000000000, 9735000000000, 12390000000000, 15930000000000, 19470000000000, // 56-60
+                24190000000000, 26550000000000, 1327500000000, 31860000000000, 31860000000000, // 61-65
+            ],
+            COST_SCALE: 1,          // multiplies the whole column. Dormant at 1.
+                                    // Rescaling preserves every ratio, so the
+                                    // numbers can be moved off Blumgi's literal
+                                    // values at any point without re-testing
+                                    // balance — it changes the display, nothing
+                                    // else
+            // How a level's cost divides ALONG the level: a soft opening, a
+            // medium middle, a hard final third. Taken from the split between
+            // Blumgi's three monsters, which is stable across their whole table
+            // (level 1 is 20/30/50, level 65 is 30/33/37, average 28/33/39).
+            // Keeps the texture of their three-monster structure inside our
+            // one-machine model — the rig visibly labours as a level closes.
+            STRETCHES: [0.28, 0.33, 0.39],
 
             // A temporary wall across the main canal — a water blocker.
             //
@@ -1200,10 +1249,67 @@ var CONFIG = {
             ENABLED: true,
 
             // ── Digging ───────────────────────────────────────────────────
-            PULSE_MS: 450,         // burst length: each 1s battery tick jolts the
-                                   // machine — it spins and advances for this long,
-                                   // then sits dead until the next tick
-            ADVANCE_PER_CHARGE: 2, // px of digging banked per unit of battery charge
+            // ── Power delivery ────────────────────────────────────────────
+            // Charge is POWER now, not distance. It used to convert straight to
+            // pixels at a flat rate, which meant nothing resisted it and dig
+            // speed tracked the battery ladder up forever — 1.7 tiles/sec at
+            // battery 3, 223 at battery 15, an 8-row level cut in 0.04s.
+            //
+            // Two limits now decide how fast the machine moves, and it obeys
+            // whichever is tighter:
+            //
+            //   ENERGY      power / hardness  — you cannot cut faster than the
+            //               batteries can pay for
+            //   MECHANICAL  BELT_FREE x TILES_PER_CYCLE — the belt cannot spin
+            //               faster than it spins, however much power you feed it
+            //
+            // They are blended smoothly rather than hard-clamped, so approaching
+            // the machine's limit reads as bogging down rather than hitting a
+            // wall. Travel is never set anywhere: the belt cuts, and the machine
+            // advances into what it cleared.
+            //
+            // Because hardness and power BOTH grow x1.5 per level, the ratio
+            // between them barely moves — so speed lives in a narrow band across
+            // all 65 levels with no per-level tuning at all.
+            POWER: {
+                BELT_FREE:       12,    // belt cycles/sec with nothing to cut.
+                                        // Five frames at 12 cycles/sec is 60fps,
+                                        // exactly the render rate — past this the
+                                        // belt skips frames and strobes, so it is
+                                        // the real ceiling on the whole system
+                TILES_PER_CYCLE: 0.5,   // how far one belt cycle carries the rig
+                                        // — bucket-chain geometry. With
+                                        // BELT_FREE above this caps travel at
+                                        // 6 tiles/sec.
+                                        //
+                                        // This cap exists to stop the absurd
+                                        // (the old model reached 223 tiles/sec),
+                                        // NOT to slow the machine down. It has to
+                                        // sit well ABOVE what power normally
+                                        // buys, or it binds instead of the
+                                        // economy and every level runs at the
+                                        // same speed no matter what the player
+                                        // merged. At 0.5 it did exactly that:
+                                        // level 1 could not finish in under 16s
+                                        // however many batteries were in it
+                PULSE_DEPTH:     0.4,   // the battery tick becomes a SURGE, not
+                                        // a stop: speed swings +/- this much
+                                        // across each second instead of working
+                                        // 450ms and sitting dead. Distance owed
+                                        // per second is unchanged, so this is
+                                        // feel only. 0 = perfectly smooth
+                SHAKE_MAX:       2.2,   // horizontal shake at full strain (px @
+                                        // platformScale). SPRITES ONLY — never
+                                        // the reveal line, which the cut edge,
+                                        // the spoil and the water all hang off
+                WHEEL_TILES_PER_TURN: 0.6,  // ground covered per full wheel
+                                        // rotation. The wheels are driven by
+                                        // DISTANCE, not by a clock, so they can
+                                        // never appear to slide at any speed
+                SPOIL_MIN:       0.25,  // spoil thrown at a standstill, as a
+                                        // fraction of the configured rate — the
+                                        // rest scales with how hard it is working
+            },
             OVERRUN_TILES: 3.5,    // keep cutting this far PAST the level's last
                                    // row before the level counts as dug. The belt
                                    // straddles the cut line — 40% ahead of it,

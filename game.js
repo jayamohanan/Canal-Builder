@@ -1313,8 +1313,8 @@ console.log(
 
         // This band's own level: the rotation advances per band, so the grid is
         // rebuilt here rather than once at startup.
+        const idx = this.endless ? this.endless.segIndex : 0;
         if (this.tileGrid) {
-            const idx = this.endless ? this.endless.segIndex : 0;
             this.tileGrid = this._makeGrid(idx, floorY, 0) || this.tileGrid;
         }
 
@@ -1325,6 +1325,8 @@ console.log(
             // createTunnel points this.tunnel at whatever it just made. That is
             // right for the FIRST level and wrong for every level built ahead of
             // the machine, so control is handed straight back to the live one.
+            seg.levelIndex = idx;
+            if (seg.tunnel) seg.tunnel.levelIndex = idx;
             if (!this.active) this.active = seg;
             else { this.tunnel = this.active.tunnel; this._retireBore(seg); }
             return seg;
@@ -3206,7 +3208,13 @@ console.log(
         // value drives the rig, the mask and the reveal.
         this.tunnel = {
             entryY, exitY, len, digLen, bladeLen, bodyH,
-            progressPx: 0, earnedPx: 0, open: false, lastTime: 0, pulseT: 0,
+            progressPx: 0, open: false, lastTime: 0,
+            // Power-delivery state, per tunnel — two levels' tunnels exist at
+            // once, so none of this can live on the scene.
+            tickT: 0,        // seconds since the last battery tick (the surge)
+            wheelPx: 0,      // ground covered, which is what turns the wheels
+            beltRate: 0,     // cycles/sec the load is currently allowing
+            strain: 0,       // 0 = free-running, 1 = stalled
             wet: 0,                          // how far the water has actually come
             bore, maskShape, foam: foamGfx, crack, crackW: beltW,
             flood: this._buildFlood(seg, band),   // canal water (tilemap only)
@@ -3454,13 +3462,50 @@ console.log(
     _setTrencherRunning(tn, cutting, moving) {
         const b = tn && tn.bore;
         if (!b || !b.belt) return;
-        const set = (spr, on) => {
-            if (!spr || !spr.anims) return;
-            if (on) { if (spr.anims.isPaused) spr.anims.resume(); }
-            else if (!spr.anims.isPaused) spr.anims.pause();
-        };
-        set(b.belt, cutting);
-        set(b.ctrl, moving);
+        const TR = CONFIG.ROAD.TUNNEL.TRENCHER, PW = CONFIG.ROAD.TUNNEL.POWER || {};
+
+        // THE BELT is no longer on a clock. Its animation is played at whatever
+        // rate the load allows, so a machine fighting hard ground visibly
+        // labours and one with power to spare runs away with itself. Rate is
+        // set by scaling playback against the animation's authored fps.
+        if (b.belt.anims) {
+            const authored = TR.BELT_FPS || 50;
+            const cyc = Math.max(0, tn.beltRate || 0);                 // cycles/sec
+            const fps = cyc * (TR.FRAMES || 5);
+            b.belt.anims.timeScale = Math.max(0.02, fps / authored);
+            if (cutting && cyc > 0.01) { if (b.belt.anims.isPaused) b.belt.anims.resume(); }
+            else if (!b.belt.anims.isPaused) b.belt.anims.pause();
+        }
+
+        // THE WHEELS are driven by DISTANCE, not by time, so they cannot slide
+        // at any speed. One full rotation per WHEEL_TILES_PER_TURN of ground.
+        if (b.ctrl) {
+            if (b.ctrl.anims && !b.ctrl.anims.isPaused) b.ctrl.anims.pause();
+            const tile  = this.tileGrid ? this.tileGrid.tile : 1;
+            const perTurn = Math.max(0.01, PW.WHEEL_TILES_PER_TURN || 0.6) * tile;
+            const frames  = TR.FRAMES || 5;
+            const f = Math.floor(((tn.wheelPx || 0) / perTurn) * frames) % frames;
+            if (f !== b.wheelFrame) { b.wheelFrame = f; b.ctrl.setFrame(f); }
+        }
+    }
+
+    // Horizontal shudder, scaled by how close the machine is to stalling. A rig
+    // that is coping sits steady; one that is fighting the ground shakes.
+    //
+    // SPRITES ONLY. The cut edge, the spoil emitters and the water all hang off
+    // the reveal line, so shaking that would wobble the whole trench — the rig
+    // is offset from its own x instead, and nothing else is touched.
+    _shakeBore(tn, strain) {
+        const b = tn && tn.bore;
+        if (!b || !b.belt) return;
+        const PW = CONFIG.ROAD.TUNNEL.POWER || {};
+        const max = (PW.SHAKE_MAX || 0) * this.layoutConfig.platformScale;
+        const amp = max * Math.max(0, Math.min(1, strain || 0));
+        // Two incommensurate frequencies, so it never settles into a visible
+        // repeat the way a single sine would.
+        const t = this.time.now;
+        const dx = amp * (Math.sin(t / 41) * 0.6 + Math.sin(t / 27) * 0.4);
+        for (const o of [b.belt, b.ctrl]) if (o) o.x = b.x + dx;
     }
 
     _makeTunnelTextures(cutW) {
@@ -3533,28 +3578,78 @@ console.log(
         puff.refresh();
     }
 
-    // One charge tick: slotted batteries bank digging distance.
-    // update() spends it — the blade only advances while it's owed distance, so
-    // pulling the batteries out visibly stalls the machine.
-    _tunnelChargeCycle() {
-        const tn = this.tunnel;
-        if (!tn || tn.open || !tn.ready) return;
-
+    // What the slots are delivering, per second. This is POWER — it is not
+    // converted to distance anywhere. How far that power moves the machine
+    // depends on what it is cutting through, which is the whole point.
+    _slotPower() {
         let total = 0;
         for (let i = 0; i < 3; i++) {
             const slot = this.chargingSlots[i];
             if (slot) total += slot.chargePerMinute;
         }
-        if (total <= 0) return;
+        return total;
+    }
 
-        tn.earnedPx += total * CONFIG.ROAD.TUNNEL.ADVANCE_PER_CHARGE
-                     * this.layoutConfig.platformScale;
-        // Trigger one work burst: the machine follows the same 1-second pulse
-        // as the battery icons — a jolt of rotation and advance per tick.
-        tn.pulseT = Math.max(0.05, (CONFIG.ROAD.TUNNEL.PULSE_MS || 450) / 1000);
+    // One charge tick. The batteries no longer bank distance — the machine
+    // draws on them continuously — so this only marks WHEN the tick landed, for
+    // the surge, and pulses the icons.
+    _tunnelChargeCycle() {
+        const tn = this.tunnel;
+        if (!tn || tn.open || !tn.ready) return;
+        if (this._slotPower() <= 0) return;
+        tn.tickT = 0;                    // the surge restarts on every tick
         for (let i = 0; i < 3; i++) {
             if (this.chargingSlots[i]) this._pulseBatteryIcon(this.platforms[i]);
         }
+    }
+
+    // What this level's ground costs to cut, in work per tile.
+    //
+    // Derived, never authored: the level's total cost divided among its rows,
+    // weighted by STRETCHES so the last third is harder than the first. Rows are
+    // counted from the map's BOTTOM, the way the machine meets them, and the
+    // overrun rows past the level's top carry the last stretch's value so the
+    // machine does not suddenly find the ground free on its way out.
+    _tileHardness(tn, rowFromBottom) {
+        const TM = CONFIG.ROAD.TILEMAP;
+        // The tunnel's OWN grid and OWN level — never this.tileGrid or
+        // endless.segIndex. Levels are built ahead of the machine, so both of
+        // those globals belong to the newest level, not the one being dug: at
+        // boot four levels exist and the machine on level 1 would be charged
+        // level 4's ground, which is 80x harder.
+        const g = (tn && tn.flood && tn.flood.g) || this.tileGrid;
+        const costs = TM.LEVEL_COST || [];
+        if (!g || !costs.length) return 1;
+        const idx  = ((tn && tn.levelIndex) || 0) % costs.length;
+        const cost = costs[idx] * (TM.COST_SCALE || 1);
+        const st   = TM.STRETCHES || [1];
+        const rows = Math.max(1, g.rows);
+        // Past this level's last row the machine is not driving clear of finished
+        // work — levels stack flush, so it is already cutting the OPENING of the
+        // field above. It meets that level's ground and slows accordingly, which
+        // is why the rig labours as it crosses a boundary instead of coasting.
+        //
+        // Nothing is paid twice: the level above starts its own dig with exactly
+        // these tiles already marked cut (_advanceToNextLevel seeds it with the
+        // overrun), so each tile is charged once, at its own level's rate.
+        if (rowFromBottom >= rows) {
+            const seg   = tn && tn.flood && tn.flood.seg;
+            const above = seg ? this.segments[this.segments.indexOf(seg) + 1] : null;
+            const aG    = above && above.tunnel && above.tunnel.flood
+                        && above.tunnel.flood.g;
+            if (aG) {
+                const aCost = costs[(above.levelIndex || 0) % costs.length]
+                            * (TM.COST_SCALE || 1);
+                return aCost * st[0] / (Math.max(1, aG.rows) / st.length);
+            }
+            // Nothing built above yet — charge this level's own opening rather
+            // than nothing, so the machine never gets a free run.
+            return cost * st[0] / (rows / st.length);
+        }
+        const f = Math.max(0, rowFromBottom / rows);
+        const s = Math.min(st.length - 1, Math.floor(f * st.length));
+        // That stretch's share of the cost, spread over the rows it covers.
+        return cost * st[s] / (rows / st.length);
     }
 
     // Advance the blade while it owes banked distance. Reveal = growing the
@@ -3590,23 +3685,76 @@ console.log(
         // so it keeps creeping up the cut and rippling while the blade rests.
         this._advanceWater(tn, dt, time);
 
-        const remaining = Math.min(tn.earnedPx, tn.digLen || tn.len) - tn.progressPx;
+        const remaining = (tn.digLen || tn.len) - tn.progressPx;
+        const TN = CONFIG.ROAD.TUNNEL, PW = TN.POWER || {};
+        // This tunnel's own tile size, for the same reason as the hardness above.
+        const tGrid = (tn.flood && tn.flood.g) || this.tileGrid;
+        const gTile = tGrid ? tGrid.tile : 1;
 
-        // The machine runs on the battery's 1-second pulse: each charge tick
-        // arms a short burst (pulseT). Outside a burst — or with nothing owed —
-        // it sits completely dead: belt stopped, tracks stopped, no advance.
-        if (remaining <= 0.01 || tn.pulseT <= 0) {
+        // ── How fast this machine can move, right now ────────────────────────
+        // Two limits, and it obeys whichever is tighter.
+        //
+        //   ENERGY      power / hardness — you cannot cut faster than the
+        //               batteries can pay for
+        //   MECHANICAL  the belt's free-running speed — it cannot spin faster
+        //               than it spins, however much power you feed it
+        //
+        // Blended rather than hard-clamped, so nearing the machine's limit reads
+        // as bogging down instead of hitting a wall. Travel is never chosen
+        // anywhere: the belt cuts, and the rig advances into what it cleared.
+        const power = tn.ready ? this._slotPower() : 0;
+        // Hardness of the row the cut line is standing in, counted from the
+        // map's bottom the way the machine meets them.
+        const rowNow = Math.floor(tn.progressPx / Math.max(1, gTile));
+        const hard   = Math.max(1e-9, this._tileHardness(tn, rowNow));
+        const vFree  = (PW.BELT_FREE || 8) * (PW.TILES_PER_CYCLE || 0.0625);   // tiles/sec
+        const vEnergy = power / hard;                                          // tiles/sec
+        const vTiles  = vEnergy > 0 ? (vEnergy * vFree) / (vEnergy + vFree) : 0;
+
+        // Nothing owed, nothing left, or the batteries pulled out: the machine
+        // stops — but smoothly, because vTiles goes to zero rather than a flag
+        // being thrown.
+        if (remaining <= 0.01 || vTiles <= 1e-6) {
+            // Idle, not straining. A machine with no power at all — batteries
+            // pulled, or a level held waiting on the field below — is stopped;
+            // only one that is fighting ground it can barely cut should shake,
+            // and that case has vTiles above zero and never reaches here.
+            tn.strain   = 0;
+            tn.beltRate = 0;
             this._setTrencherRunning(tn, false, false);
-            this._runSpoil(tn.bore, tn.entryY - tn.progressPx, false);
+            this._runSpoil(tn.bore, tn.entryY - tn.progressPx, false, tn);
+            this._shakeBore(tn, 0);
             return;
         }
 
-        const TN = CONFIG.ROAD.TUNNEL;
-        // Spend what's owed evenly across the rest of the burst, so each tick's
-        // banked distance is fully consumed by the time the burst ends.
-        const step = Math.min(remaining, remaining * dt / tn.pulseT);
-        tn.pulseT = Math.max(0, tn.pulseT - dt);
+        // The battery tick becomes a SURGE, not a stop. It redistributes speed
+        // inside the second without changing the distance covered, so the
+        // economy is untouched and only the feel changes.
+        tn.tickT = (tn.tickT || 0) + dt;
+        const depth = PW.PULSE_DEPTH !== undefined ? PW.PULSE_DEPTH : 0.4;
+        const surge = 1 + depth * Math.cos(2 * Math.PI * (tn.tickT % 1));
+
+        // Belt and travel are locked by geometry — a bucket chain carries a
+        // fixed amount per cycle — so they can never disagree or appear to slide.
+        tn.beltRate = vTiles / (PW.TILES_PER_CYCLE || 0.0625);   // cycles/sec
+        tn.strain   = Math.max(0, Math.min(1, 1 - vTiles / vFree));
+        if (CONFIG.DEBUG_POWER && Math.floor(tn.tickT) !== tn._logT) {
+            tn._logT = Math.floor(tn.tickT);
+            const fmt = (v) => v >= 1e12 ? (v / 1e12).toFixed(1) + 'T'
+                             : v >= 1e9  ? (v / 1e9).toFixed(1)  + 'B'
+                             : v >= 1e6  ? (v / 1e6).toFixed(1)  + 'M'
+                             : v >= 1e3  ? (v / 1e3).toFixed(1)  + 'K' : v.toFixed(0);
+            const tg = (tn.flood && tn.flood.g) || this.tileGrid;
+            console.log(`[power] lvl ${(tn.levelIndex || 0) + 1} ` +
+                `row ${rowNow}/${tg ? tg.rows : '?'}  ` +
+                `hardness ${fmt(hard)}  power ${fmt(power)}/s  |  ` +
+                `energy ${vEnergy.toFixed(2)} t/s, belt limit ${vFree.toFixed(2)} t/s ` +
+                `-> ${vTiles.toFixed(3)} t/s (${vEnergy < vFree ? 'POWER-bound' : 'BELT-bound'})  ` +
+                `belt ${tn.beltRate.toFixed(1)} cyc/s  strain ${tn.strain.toFixed(2)}`);
+        }
+        const step  = Math.min(remaining, vTiles * gTile * surge * dt);
         tn.progressPx += step;
+        tn.wheelPx = (tn.wheelPx || 0) + step;
 
         // The face climbs from the mouth the machine started at.
         const cutH  = tn.progressPx;
@@ -3633,13 +3781,14 @@ console.log(
             }
         }
         this._setTrencherRunning(tn, true, step > 0.01);
+        this._shakeBore(tn, tn.strain);
         // The soil strip in the wake is no longer shown — the ditch sprite is
         // what gets uncovered as the grass recedes. (The cut sprite is kept only
         // so its width still feeds the foam-finger layout.)
 
-        // Soil chips off the face while cutting.
-        // Spoil: the emitters follow the cut line and run only while cutting.
-        this._runSpoil(b, faceY, true);
+        // Soil chips off the face while cutting. How much, and how far it is
+        // thrown, follows the belt — the belt is what flings it.
+        this._runSpoil(b, faceY, true, tn);
 
         if (tn.progressPx >= (tn.digLen || tn.len) - 0.5) this._breakthrough();
     }
@@ -3806,11 +3955,34 @@ console.log(
     }
 
     // Point the emitters at the machine and switch them on only while it cuts.
-    _runSpoil(b, faceY, cutting) {
+    // `tn` is optional: with it, the spray reports how hard the machine is
+    // working. Volume and throw both follow the BELT, because the belt is what
+    // flings the soil — so a rig with power to spare throws a wide, fast fan and
+    // one bogged down in hard ground barely dribbles.
+    _runSpoil(b, faceY, cutting, tn) {
         const sp = b.spoil;
         if (!sp) return;
         const S  = CONFIG.ROAD.TUNNEL.SPRAY || {};
+        const PW = CONFIG.ROAD.TUNNEL.POWER || {};
         const sc = this.layoutConfig.platformScale;
+
+        // 0..1, how close the belt is to free-running.
+        const free = (PW.BELT_FREE || 8);
+        const work = tn ? Math.max(0, Math.min(1, (tn.beltRate || 0) / free)) : 1;
+        const floor = PW.SPOIL_MIN !== undefined ? PW.SPOIL_MIN : 0.25;
+        const k = floor + (1 - floor) * work;
+        if (tn && sp.k !== undefined && Math.abs(k - sp.k) < 0.02) {
+            // Unchanged enough not to be worth touching the emitters — this runs
+            // every frame and each setter walks the emitter's op list.
+        } else if (tn) {
+            sp.k = k;
+            const q = Math.max(1, Math.round((S.QUANTITY || 3) * k));
+            for (const e of [sp.sprayL, sp.sprayR]) {
+                e.setQuantity(q);
+                e.setParticleSpeed((S.SPEED_MIN || 90) * sc * k,
+                                   (S.SPEED_MAX || 260) * sc * k);
+            }
+        }
         // Thrown from the cut line, nudged the way the rig travels, and from just
         // inside each flank — the rig itself hides where it leaves the belt.
         const y = faceY + (S.OFFSET_Y || 0) * sc;
