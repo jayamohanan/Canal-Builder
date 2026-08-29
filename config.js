@@ -46,6 +46,17 @@ var CONFIG = {
         REF_H: 778,
     },
 
+    // Play / pause, top-right of the screen. The icon shows what pressing it
+    // will DO — a pause bar while running, a play arrow while stopped — which is
+    // the convention every media player uses.
+    PAUSE: {
+        ENABLED: true,
+        SIZE:    44,        // px @ design scale
+        MARGIN:  16,        // from the screen's top-right corner, px @ design
+        ALPHA:   0.85,
+        DEPTH:   100000,    // above everything, including the debug grid
+    },
+
     RESET_PROGRESS: false,
     DEBUG_HALF_LINE: false,  // draw a line splitting partA / partB (vertical in
                              // landscape, horizontal in portrait)
@@ -606,32 +617,32 @@ var CONFIG = {
             // ── What the ground costs ───────────────────────────────────────
             // How much work a level's ground takes to cut through. This is the
             // difficulty curve, and every number in it is DERIVED, not chosen:
-            // it is Blumgi Merge's combined monster HP per level times 1.18.
+            // it is Blumgi Merge's combined monster HP per level, verbatim.
             //
-            // The 1.18 is the pooling correction. Their level ends when the
-            // SLOWEST of three independent fights ends — a maximum. Ours ends
-            // when one machine finishes the total — an average. A mean is never
-            // larger than a max, so pooling is more forgiving; measured across
-            // all 65 levels the factor is 1.18. With it applied, our level
-            // durations match theirs exactly and there is no target time to
-            // pick: time = cost / power, on both sides.
+            // A x1.18 "pooling correction" used to be applied here and has been
+            // DISCARDED. The reasoning was that their level ends when the
+            // slowest of three independent fights ends (a maximum) while ours
+            // ends when one machine finishes the total (an average), so pooling
+            // is more forgiving. True, but it made our numbers stop matching the
+            // sheet, which is not worth 15% of duration. Levels now run at about
+            // 0.85x Blumgi's, and COST_SCALE is the knob if that wants changing.
             //
             // Per-tile hardness is this divided by the map's row count. Nothing
             // authors it and nothing stores it.
             LEVEL_COST: [
-                118, 413, 2124, 9440, 26550,                   // 1-5
-                49560, 17700, 112100, 271400, 708000,          // 6-10
-                1416000, 5310000, 6608000, 13924000, 32922000, // 11-15
-                69030000, 159300000, 265500000, 531000000, 885000000, // 16-20
-                1770000000, 2124000000, 2832000000, 3658000000, 4012000000, // 21-25
-                4248000000, 4956000000, 5900000000, 265500000, 7670000000, // 26-30
-                8496000000, 9322000000, 10620000000, 11564000000, 13334000000, // 31-35
-                16284000000, 18762000000, 21476000000, 23010000000, 26550000000, // 36-40
-                31860000000, 88500000000, 141600000000, 212400000000, 283200000000, // 41-45
-                336300000000, 460200000000, 566400000000, 796500000000, 1062000000000, // 46-50
-                1593000000000, 2183000000000, 3127000000000, 4425000000000, 6195000000000, // 51-55
-                7965000000000, 9735000000000, 12390000000000, 15930000000000, 19470000000000, // 56-60
-                24190000000000, 26550000000000, 1327500000000, 31860000000000, 31860000000000, // 61-65
+                100, 350, 1800, 8000, 22500,                   // 1-5
+                42000, 15000, 95000, 230000, 600000,           // 6-10
+                1200000, 4500000, 5600000, 11800000, 27900000, // 11-15
+                58500000, 135000000, 225000000, 450000000, 750000000, // 16-20
+                1500000000, 1800000000, 2400000000, 3100000000, 3400000000, // 21-25
+                3600000000, 4200000000, 5000000000, 225000000, 6500000000, // 26-30
+                7200000000, 7900000000, 9000000000, 9800000000, 11300000000, // 31-35
+                13800000000, 15900000000, 18200000000, 19500000000, 22500000000, // 36-40
+                27000000000, 75000000000, 120000000000, 180000000000, 240000000000, // 41-45
+                285000000000, 390000000000, 480000000000, 675000000000, 900000000000, // 46-50
+                1350000000000, 1850000000000, 2650000000000, 3750000000000, 5250000000000, // 51-55
+                6750000000000, 8250000000000, 10500000000000, 13500000000000, 16500000000000, // 56-60
+                20500000000000, 22500000000000, 1125000000000, 27000000000000, 27000000000000, // 61-65
             ],
             COST_SCALE: 1,          // multiplies the whole column. Dormant at 1.
                                     // Rescaling preserves every ratio, so the
@@ -663,6 +674,33 @@ var CONFIG = {
             // scale the 128px tiles take: whatever a tile is on screen, divided
             // by FRAME. At 449x226 that puts it 3.5 tiles wide — the two canal
             // columns plus about three quarters of a tile onto each bank.
+            // ── The farmer ──────────────────────────────────────────────────
+            // Somebody lives here. One per level, wandering the crops, so the
+            // irrigation reads as being FOR someone rather than happening to an
+            // empty field.
+            //
+            // graphics/farmers.webp is 768x128 — six 128px frames in one row:
+            //   0,1  idle (a two-frame breathe)
+            //   2-5  walk, drawn facing RIGHT
+            // Every frame faces the camera. Direction is read from travel and
+            // shown by mirroring, so walking up or down uses the same cycle —
+            // there is no separate vertical pose and none is needed.
+            FARMER: {
+                ENABLED: true,
+                FILE:  'graphics/farmers.webp',
+                SIZE:  1.9,         // height as a fraction of a tile
+                IDLE_FPS: 3,        // the two idle frames, slow — a breathe
+                WALK_FPS: 9,
+                SPEED: 1.1,         // tiles/sec
+                PAUSE_MS: [1800, 6500],   // he mostly stands still; this is the
+                                          // wait between walks, weighted long
+                TRIP_TILES: [1.5, 5],     // how far he goes when he does move
+                EDGE_COLS: 1,       // columns kept clear at each side of the map
+                MACHINE_COLS: 1,    // columns kept clear either side of the canal
+                                    // for the trencher. With the canal's own two
+                                    // that is the four middle columns
+            },
+
             // The work left in this level, shown over the machine and counting
             // down as the batteries chew through it. It includes the overrun —
             // the 3.5 tiles into the level above — because that is genuinely

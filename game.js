@@ -466,6 +466,15 @@ class GameScene extends Phaser.Scene {
             }
             // The watering splash: one row of square frames, sliced at the
             // tilemap's own frame size since that is what the art is drawn to.
+            if ((CONFIG.PAUSE || {}).ENABLED !== false) {
+                this.load.image('icon_play',  'graphics/pause/play.png');
+                this.load.image('icon_pause', 'graphics/pause/pause.png');
+            }
+            const FR = TM.FARMER || {};
+            if (FR.ENABLED !== false && FR.FILE) {
+                this.load.spritesheet('farmers', FR.FILE,
+                    { frameWidth: TM.FRAME, frameHeight: TM.FRAME });
+            }
             const BK = TM.BLOCK || {};
             if (BK.ENABLED !== false && BK.FILE) this.load.image('block', BK.FILE);
             const PW = TM.PLANT_WATER || {};
@@ -576,6 +585,8 @@ console.log(
                 dl.lineBetween(x, 0, x, H);
             }
         }
+
+        this._buildPauseButton();
 
         // Endless mode: the landscape camera must ignore every UI/fixed
         // object created above — one-time snapshot now that create() is done.
@@ -1492,6 +1503,7 @@ console.log(
         // crop records have to exist before it runs.
         this._buildCrops(seg, band);
         this._buildWetGround(seg);
+        this._buildFarmer(seg, gTop);
         this._buildPonds(seg, band);
     }
 
@@ -1847,6 +1859,167 @@ console.log(
             console.log(`[grid] ${g.cols} cols x ${n - 1} rows visible @ ${g.tile.toFixed(1)}px` +
                 `  (map is ${g.cols}x${g.rows})`);
         }
+    }
+
+    // ── The farmer ───────────────────────────────────────────────────────────
+    // One per level, wandering his crops. Built with the segment so he is torn
+    // down with it, and registered through _addB so the farm camera draws him
+    // and the UI camera does not.
+    //
+    // Placement is DETERMINISTIC, from the cell hash rather than Math.random():
+    // the scene is rebuilt from scratch on every window resize, and a random
+    // spawn would teleport every farmer each time the player dragged a corner.
+    _buildFarmer(seg, gTop) {
+        const TM = CONFIG.ROAD.TILEMAP, F = TM.FARMER || {};
+        if (F.ENABLED === false || !this.textures.exists('farmers')) return;
+        const g = this.tileGrid;
+        if (!g) return;
+        this._makeFarmerAnims();
+
+        // Planted cells inside a roam band — nowhere else is worth standing.
+        const spots = [];
+        for (let r = 0; r < g.rows; r++) {
+            for (let c = 0; c < g.cols; c++) {
+                if (!g.cropsData[r * g.cols + c]) continue;
+                if (this._farmerBand(c) === 0) continue;
+                spots.push({ c, r });
+            }
+        }
+        // A level with an empty crops layer has nowhere sensible to put him.
+        if (!spots.length) return;
+
+        const idx = this.endless ? this.endless.segIndex : 0;
+        const pick = spots[Math.floor(this._cellHash(idx, 7, 11) * spots.length) % spots.length];
+        const h = g.tile * (F.SIZE !== undefined ? F.SIZE : 0.95);
+        const spr = this._addB(this.add.sprite(
+                g.left + (pick.c + 0.5) * g.tile,
+                gTop + (pick.r + 0.5) * g.tile, 'farmers', 0)
+            .setDisplaySize(h, h)                  // frames are square
+            .setOrigin(0.5, 0.85), seg);       // stands on his feet, not his middle
+        spr.play('farmer_idle');
+
+        seg.farmer = {
+            spr, gTop,
+            band: this._farmerBand(pick.c),
+            walking: false,
+            tx: spr.x, ty: spr.y,
+            waitT: this._rndRange(F.PAUSE_MS || [1800, 6500]),
+            row: -1,                            // forces the first depth cut
+        };
+        this._cutFarmerDepth(seg.farmer);
+    }
+
+    // Which roam band a column is in: -1 west of the canal, +1 east, 0 forbidden.
+    //
+    // The forbidden middle is the canal's own two columns plus MACHINE_COLS
+    // either side, because the trencher stands there — taken from the grid's own
+    // main columns, so it follows the map rather than being a hardcoded number.
+    // The outermost columns are excluded too; there is nothing out there.
+    _farmerBand(col) {
+        const g = this.tileGrid, F = CONFIG.ROAD.TILEMAP.FARMER || {};
+        if (!g) return 0;
+        const edge = F.EDGE_COLS !== undefined ? F.EDGE_COLS : 1;
+        const pad  = F.MACHINE_COLS !== undefined ? F.MACHINE_COLS : 1;
+        if (col < edge || col > g.cols - 1 - edge) return 0;
+        if (col >= g.mainLeftCol - pad && col <= g.mainRightCol + pad) return 0;
+        return col < g.mainLeftCol ? -1 : 1;
+    }
+
+    _rndRange(r) { return r[0] + Math.random() * (r[1] - r[0]); }
+
+    // Built once and shared by every farmer, the same way the trencher's are.
+    _makeFarmerAnims() {
+        if (this.anims.exists('farmer_idle')) return;
+        const F = CONFIG.ROAD.TILEMAP.FARMER || {};
+        this.anims.create({ key: 'farmer_idle', repeat: -1,
+            frameRate: F.IDLE_FPS || 3,
+            frames: this.anims.generateFrameNumbers('farmers', { start: 0, end: 1 }) });
+        this.anims.create({ key: 'farmer_walk', repeat: -1,
+            frameRate: F.WALK_FPS || 9,
+            frames: this.anims.generateFrameNumbers('farmers', { start: 2, end: 5 }) });
+    }
+
+    // Sort him against the crops by Y, using THEIR scheme (3 + row * 0.001) so
+    // the two orderings cannot disagree. Half a step above the row's crops, so
+    // he never ties one and flickers.
+    //
+    // ROW-QUANTISED, and that is the whole performance story: a depth change
+    // marks the entire display list dirty and forces a re-sort of every object
+    // in the scene. Recomputing it continuously would do that sixty times a
+    // second; doing it only when he crosses a row does it a handful of times per
+    // walk.
+    _cutFarmerDepth(f) {
+        const g = this.tileGrid;
+        if (!g) return;
+        const row = Math.floor((f.spr.y - f.gTop) / g.tile);
+        if (row === f.row) return;
+        f.row = row;
+        f.spr.setDepth(3 + row * 0.001 + 0.0005);
+    }
+
+    // Walk the farmers. Point to point, straight line, any angle — no grid and
+    // no axis-locked paths. Crops and branch canals are not obstacles; he walks
+    // over both. Only the canal's middle columns and the map's edges are out of
+    // bounds, and because he only ever picks destinations inside the band he is
+    // already in, no straight line he takes can cross the machine.
+    _updateFarmers(dtMs) {
+        const TM = CONFIG.ROAD.TILEMAP, F = TM.FARMER || {};
+        if (F.ENABLED === false) return;
+        const g = this.tileGrid;
+        if (!g) return;
+        const dt = Math.min(dtMs, 100) / 1000;
+        for (const seg of this.segments) {
+            const f = seg.farmer;
+            if (!f || !f.spr || !f.spr.scene) continue;
+
+            if (!f.walking) {
+                f.waitT -= dtMs;
+                if (f.waitT > 0) continue;
+                this._sendFarmer(seg, f);
+                continue;
+            }
+
+            const dx = f.tx - f.spr.x, dy = f.ty - f.spr.y;
+            const d  = Math.hypot(dx, dy);
+            const stepPx = (F.SPEED || 1.1) * g.tile * dt;
+            if (d <= stepPx) {
+                f.spr.setPosition(f.tx, f.ty);
+                f.walking = false;
+                f.waitT = this._rndRange(F.PAUSE_MS || [1800, 6500]);
+                f.spr.play('farmer_idle');
+            } else {
+                f.spr.x += (dx / d) * stepPx;
+                f.spr.y += (dy / d) * stepPx;
+                // Facing follows the x component only. A straight vertical walk
+                // has none, so he keeps whatever way he was already facing
+                // rather than snapping to a default.
+                if (Math.abs(dx) > g.tile * 0.05) f.spr.setFlipX(dx < 0);
+            }
+            this._cutFarmerDepth(f);
+        }
+    }
+
+    // Choose somewhere to go: a point in his own band, a short walk away, and
+    // inside the level. Tries a few times and simply stays put if it cannot find
+    // one, which is what happens on a very narrow or very short map.
+    _sendFarmer(seg, f) {
+        const g = this.tileGrid, F = CONFIG.ROAD.TILEMAP.FARMER || {};
+        const trip = F.TRIP_TILES || [1.5, 5];
+        for (let i = 0; i < 8; i++) {
+            const a = Math.random() * Math.PI * 2;
+            const r = this._rndRange(trip) * g.tile;
+            const x = f.spr.x + Math.cos(a) * r;
+            const y = f.spr.y + Math.sin(a) * r;
+            const col = Math.floor((x - g.left) / g.tile);
+            const row = Math.floor((y - f.gTop) / g.tile);
+            if (this._farmerBand(col) !== f.band) continue;      // wrong side, or forbidden
+            if (row < 0 || row > g.rows - 1) continue;           // off the level
+            f.tx = x; f.ty = y;
+            f.walking = true;
+            f.spr.play('farmer_walk');
+            return;
+        }
+        f.waitT = this._rndRange(F.PAUSE_MS || [1800, 6500]);
     }
 
     // ── Ponds ────────────────────────────────────────────────────────────────
@@ -3685,12 +3858,21 @@ console.log(
     _digWorkRemaining(tn) {
         const g = tn && tn.flood && tn.flood.g;
         if (!g || !g.tile) return 0;
-        const over  = Math.ceil(CONFIG.ROAD.TUNNEL.OVERRUN_TILES || 0);
-        const atRow = (tn.progressPx || 0) / g.tile;
+        // The RAW overrun, not rounded up. _tileHardness normalises against a dig
+        // of rows + 3.5 tiles; summing to rows + 4 here ran half a tile past what
+        // the normalisation covered and inflated every level's opening figure by
+        // that half row — 124 where the economy says 118. Only the LOOP BOUND
+        // needs rounding, to visit the part-row at the end.
+        const over   = CONFIG.ROAD.TUNNEL.OVERRUN_TILES || 0;
+        const atRow  = (tn.progressPx || 0) / g.tile;
+        const digEnd = g.rows + over;
         let sum = 0;
-        for (let r = 0; r < g.rows + over; r++) {
-            // How much of row r is still ahead of the machine, 0..1.
-            const left = Math.max(0, Math.min(1, r + 1 - atRow));
+        for (let r = 0; r < Math.ceil(digEnd); r++) {
+            // How much of row r is still ahead of the machine AND inside the dig.
+            // Capping at digEnd matters: the dig ends 11.5 tiles in, so the last
+            // row is only half cut and must only count half.
+            const lo = Math.max(r, atRow), hi = Math.min(r + 1, digEnd);
+            const left = hi - lo;
             if (left > 0) sum += this._tileHardness(tn, r) * left;
         }
         return sum;
@@ -3788,10 +3970,34 @@ console.log(
         // never reached by this dig anyway, and the work sum weights each row by
         // how much of it is still ahead, so clamping costs nothing there.
         const at    = Math.max(0, rowFromBottom - start);
-        // Which stretch of THIS DIG the row falls in. The stretches run across
-        // the whole span, so they still sum to the level's cost exactly.
+        // Which stretch of THIS DIG the row falls in.
         const s = Math.min(st.length - 1, Math.max(0, Math.floor((at / span) * st.length)));
-        return cost * st[s] / (span / st.length);
+        const raw = cost * st[s] / (span / st.length);
+        // NORMALISED, because rows are whole and the span is not. A dig of 11.5
+        // tiles covers 12 rows, the last one only half, and the stretch
+        // boundaries at 3.83 tiles fall inside rows rather than between them. Row
+        // values alone therefore summed to 123 where the economy says 118. The
+        // factor is worked out once per tunnel and makes the total exact.
+        if (tn && tn.hardNorm === undefined) {
+            tn.hardNorm = this._hardnessNorm(cost, st, span, start, g.rows + over);
+        }
+        return raw * ((tn && tn.hardNorm) || 1);
+    }
+
+    // What to scale the raw row values by so the dig sums to `cost` exactly.
+    // Each row contributes only the fraction of itself that is actually cut, so
+    // a half-row at either end counts half.
+    _hardnessNorm(cost, st, span, start, digEnd) {
+        let sum = 0;
+        for (let r = 0; r < Math.ceil(digEnd); r++) {
+            const lo = Math.max(r, start), hi = Math.min(r + 1, digEnd);
+            const len = hi - lo;
+            if (len <= 0) continue;
+            const at = Math.max(0, r - start);
+            const s = Math.min(st.length - 1, Math.floor((at / span) * st.length));
+            sum += cost * st[s] / (span / st.length) * len;
+        }
+        return sum > 0 ? cost / sum : 1;
     }
 
     // Advance the blade while it owes banked distance. Reveal = growing the
@@ -4607,6 +4813,90 @@ console.log(
             if (cell.dry) cell.dry.destroy();
             F.cells.delete(key);
         }
+    }
+
+    // ── Play / pause ─────────────────────────────────────────────────────────
+    // Drawn by the FARM camera, not the UI one — the same trap the task panel
+    // documents. Added cameras render ABOVE the main camera, so a button the
+    // main camera puts in the top-right is buried by the field, which occupies
+    // that corner in both orientations. It stayed clickable while invisible.
+    //
+    // Registering it as world content and pinning its scroll factor to zero gets
+    // it drawn by the farm camera and held still while that camera pans. The
+    // catch is that a zero-scroll object's coordinates are measured from the
+    // CAMERA VIEWPORT's edge, not the screen's — so x starts at 0 at the left of
+    // the farm half.
+    _buildPauseButton() {
+        const P = CONFIG.PAUSE || {};
+        if (P.ENABLED === false || !this.textures.exists('icon_pause')) return;
+        const s = this.layoutConfig.scale, B = this.layoutConfig.partB;
+        const size = Math.max(18, (P.SIZE || 44) * s);
+        const m    = (P.MARGIN || 16) * s;
+        this.gamePaused = false;
+        this.pauseBtn = this._addB(this.add.image(
+                B.width - m - size / 2, m + size / 2, 'icon_pause')
+            .setDisplaySize(size, size)
+            .setScrollFactor(0)
+            .setAlpha(P.ALPHA !== undefined ? P.ALPHA : 0.85)
+            .setDepth(P.DEPTH !== undefined ? P.DEPTH : 100000)
+            , null);
+
+        // Hit-tested from the SCENE, not by making the image interactive.
+        //
+        // An interactive object drawn by a non-default camera has to be matched
+        // to that camera by the input system, and its hit area is re-derived
+        // whenever the texture changes — which this button does on every press.
+        // Between them the first click landed and the second did not. A plain
+        // rectangle test against the pointer has no such moving parts.
+        //
+        // The button hangs off camB with a zero scroll factor, so its position on
+        // SCREEN is that camera's corner plus its own — worked out once here.
+        const pad = size * 0.45;                 // generous: small icon, big thumb
+        this.pauseHit = new Phaser.Geom.Rectangle(
+            this.camB ? this.camB.x + this.pauseBtn.x - size / 2 - pad : this.pauseBtn.x,
+            this.camB ? this.camB.y + this.pauseBtn.y - size / 2 - pad : this.pauseBtn.y,
+            size + pad * 2, size + pad * 2);
+        this.input.on('pointerdown', (p) => {
+            if (this.pauseHit && this.pauseHit.contains(p.x, p.y)) {
+                this._setPaused(!this.gamePaused);
+            }
+        });
+    }
+
+    // Stop the world, or start it again.
+    //
+    // update() returning early is only half of it. Tweens, the clock, the
+    // animations and the particle emitters all run on their own and would carry
+    // on regardless — lilies drifting, the belt turning, charge still arriving —
+    // so each is stopped explicitly. Anything missed here reads as a bug rather
+    // than as a pause.
+    _setPaused(on) {
+        if (this.gamePaused === on) return;
+        this.gamePaused = on;
+
+        if (on) { this.tweens.pauseAll(); this.anims.pauseAll(); }
+        else    { this.tweens.resumeAll(); this.anims.resumeAll(); }
+        this.time.paused = on;                 // the 1s charge tick, and every
+                                               // delayedCall waiting on crops
+
+        // Particle emitters keep emitting on their own clock. Guarded: a throw
+        // in here would leave the toggle half-applied and the button dead, which
+        // is worse than an emitter that keeps puffing.
+        for (const seg of this.segments || []) {
+            const sp = seg.tunnel && seg.tunnel.bore && seg.tunnel.bore.spoil;
+            if (!sp) continue;
+            for (const e of [sp.sprayL, sp.sprayR, sp.chips, sp.dust]) {
+                if (!e) continue;
+                if (typeof e.pause === 'function') { on ? e.pause() : e.resume(); }
+                else e.emitting = !on && e.emitting;
+            }
+        }
+
+        // The icon shows what pressing it will DO, not what the game is doing.
+        if (this.pauseBtn) this.pauseBtn.setTexture(on ? 'icon_play' : 'icon_pause');
+
+        // A frozen machine should look stopped, not caught mid-stride.
+        if (on && this.tunnel) this._setTrencherRunning(this.tunnel, false, false);
     }
 
     // ── Color lerp helper ────────────────────────────────────────────────────
@@ -5882,6 +6172,11 @@ console.log(
     // UPDATE
     // ================================================================
     update(time, delta) {
+        // Paused: nothing advances. The tweens, timers, animations and emitters
+        // are stopped separately in _setPaused — returning here alone would
+        // freeze the simulation while leaving lilies drifting and the belt
+        // turning, which reads as a bug rather than a pause.
+        if (this.gamePaused) return;
         // Drive the boring machine — and the water it leaves behind.
         if (this.tunnel) this._updateTunnel(time);
         // …and keep it in frame. The world scrolls continuously now; there is no
@@ -5892,6 +6187,7 @@ console.log(
         // Grow crops as the water reaches them.
         this._updateCrops(time);
         this._updateWetGround();
+        this._updateFarmers(delta || 16);
     }
 }
 
