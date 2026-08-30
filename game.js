@@ -470,11 +470,15 @@ class GameScene extends Phaser.Scene {
                 this.load.image('icon_play',  'graphics/pause/play.png');
                 this.load.image('icon_pause', 'graphics/pause/pause.png');
             }
-            const FR = TM.FARMER || {};
-            if (FR.ENABLED !== false && FR.FILE) {
-                this.load.spritesheet('farmers', FR.FILE,
-                    { frameWidth: TM.FRAME, frameHeight: TM.FRAME });
+            const FR2 = TM.FARMER || {};
+            if (FR2.ENABLED !== false) {
+                for (const n of (FR2.CYCLE || [])) {
+                    this.load.spritesheet(n, (FR2.DIR || '') + n + (FR2.EXT || '.webp'),
+                        { frameWidth: TM.FRAME, frameHeight: TM.FRAME });
+                }
             }
+            const FN = TM.FENCE || {};
+            if (FN.ENABLED !== false && FN.FILE) this.load.image('fence_pole', FN.FILE);
             const BK = TM.BLOCK || {};
             if (BK.ENABLED !== false && BK.FILE) this.load.image('block', BK.FILE);
             const PW = TM.PLANT_WATER || {};
@@ -973,6 +977,9 @@ console.log(
         // push — behaviour is identical to before.
         this.segments  = [];
         this.active    = null;        // the level being dug (not always the newest)
+        // Fixed reference for every world-Y depth (see _yDepth). Set once, so
+        // depths stay stable as the world scrolls and levels come and go.
+        this._depthOrigin = bottom;
         this._plantWaterN = 0;        // splash rotation counter (see _playPlantWater)
         this._worldBSet = new Set();
         this._camBSnapDone = false;   // fresh build (incl. scene.restart on resize) → the set must refill
@@ -1504,6 +1511,7 @@ console.log(
         this._buildCrops(seg, band);
         this._buildWetGround(seg);
         this._buildFarmer(seg, gTop);
+        this._buildFence(seg, gTop);
         this._buildPonds(seg, band);
     }
 
@@ -1607,7 +1615,7 @@ console.log(
             // Above the tilled soil and below the plant, on the same row
             // ordering both use — the water pools at the stem and the plant
             // stands in it rather than behind it.
-            .setDepth(2.95 + e.cr.row * 0.001), seg);
+            .setDepth(this._yDepth(base.y, -0.05)), seg);
         const dampAt = Math.max(1, PW.DAMP_AT || 4);
         let handed = false;
         const hand = () => {
@@ -1871,17 +1879,25 @@ console.log(
     // spawn would teleport every farmer each time the player dragged a corner.
     _buildFarmer(seg, gTop) {
         const TM = CONFIG.ROAD.TILEMAP, F = TM.FARMER || {};
-        if (F.ENABLED === false || !this.textures.exists('farmers')) return;
+        if (F.ENABLED === false) return;
         const g = this.tileGrid;
         if (!g) return;
-        this._makeFarmerAnims();
+        // Which farmer owns this farm — the rotation, wrapping at the end, the
+        // same way the crop cycle picks a level's plant.
+        const cycle = F.CYCLE || [];
+        if (!cycle.length) return;
+        const idx0 = this.endless ? this.endless.segIndex : 0;
+        const who  = cycle[idx0 % cycle.length];
+        if (!this.textures.exists(who)) return;
+        const walkKey = this._makeFarmerAnims(who);
 
         // Planted cells inside a roam band — nowhere else is worth standing.
         const spots = [];
         for (let r = 0; r < g.rows; r++) {
             for (let c = 0; c < g.cols; c++) {
                 if (!g.cropsData[r * g.cols + c]) continue;
-                if (this._farmerBand(c) === 0) continue;
+                if (this._farmerBand(g, c) === 0) continue;
+                if (this._canalCell(g, c, r)) continue;      // never on water
                 spots.push({ c, r });
             }
         }
@@ -1893,14 +1909,16 @@ console.log(
         const h = g.tile * (F.SIZE !== undefined ? F.SIZE : 0.95);
         const spr = this._addB(this.add.sprite(
                 g.left + (pick.c + 0.5) * g.tile,
-                gTop + (pick.r + 0.5) * g.tile, 'farmers', 0)
+                gTop + (pick.r + 0.5) * g.tile, who, F.IDLE_FRAME || 0)
             .setDisplaySize(h, h)                  // frames are square
             .setOrigin(0.5, 0.85), seg);       // stands on his feet, not his middle
         spr.setFrame(F.IDLE_FRAME || 0);  // idle is a still pose, not a loop
 
         seg.farmer = {
             spr, gTop,
-            band: this._farmerBand(pick.c),
+            g,                                  // HIS level's grid, not the global one
+            walkKey,                            // his own walk animation
+            band: this._farmerBand(g, pick.c),
             walking: false,
             tx: spr.x, ty: spr.y,
             waitT: this._rndRange(F.PAUSE_MS || [1800, 6500]),
@@ -1909,14 +1927,81 @@ console.log(
         this._cutFarmerDepth(seg.farmer);
     }
 
+    // The fence along a farm's near boundary — where it meets the level below.
+    //
+    // TWO pieces, not one. The middle is left open so the machine drives through
+    // rather than over it: the gap is the canal's own columns plus GAP_COLS
+    // either side, which is the same corridor the farmer is kept out of, so the
+    // two read as the same rule rather than two arbitrary ones.
+    //
+    // Each piece is pinned by its INNER edge to the gap and stretched out to the
+    // map's edge, so the run always meets the gap exactly however wide the map
+    // is. The art's aspect is kept, so the poles never squash.
+    //
+    // Never on the first level — what lies below that is the lake, not a farm.
+    _buildFence(seg, gTop) {
+        const TM = CONFIG.ROAD.TILEMAP, F = TM.FENCE || {};
+        if (F.ENABLED === false || !this.textures.exists('fence_pole')) return;
+        if (this.endless && this.endless.segIndex === 0) return;
+        const g = this.tileGrid;
+        if (!g) return;
+
+        const pad = F.GAP_COLS !== undefined ? F.GAP_COLS : 1;
+        const p1  = g.left + (g.mainLeftCol - pad) * g.tile;          // gap's left edge
+        const p2  = g.left + (g.mainRightCol + pad + 1) * g.tile;     // gap's right edge
+        const right = g.left + g.cols * g.tile;
+        // The level's FLOOR: its first row's bottom edge, which is the boundary
+        // it shares with the level below. The poles stand ON that line, so the
+        // sprite is anchored by its bottom rather than its middle.
+        const y = gTop + g.h + (F.Y || 0) * g.tile;
+
+        const src = this.textures.get('fence_pole').getSourceImage();
+        const ar  = src.height / src.width;                 // keep the poles' proportions
+        const put = (x, w, originX) => {
+            if (w <= 1) return;
+            this._addB(this.add.image(x, y, 'fence_pole')
+                .setOrigin(originX, 1)                      // bottom edge on the boundary
+                .setDisplaySize(w, w * ar)
+                // !== undefined, not ||. The bias is legitimately ZERO, and
+                // `0 || 0.0008` is 0.0008 — which put the fence 0.8 of a tile
+                // in front of itself and let it cover a tree rooted half a tile
+                // below it.
+                .setDepth(this._yDepth(y,
+                    F.DEPTH_BIAS !== undefined ? F.DEPTH_BIAS : 0)), seg);
+        };
+        put(p1, p1 - g.left, 1);      // runs LEFT from the gap, right edge touching it
+        put(p2, right - p2, 0);       // runs RIGHT from the gap, left edge touching it
+    }
+
+    // Depth from WORLD Y, for anything tall enough to overlap something in a
+    // different level.
+    //
+    // Depth used to be `3 + rowWithinLevel * 0.001`, which orders a level's own
+    // contents correctly and says nothing at all about two levels. Every level
+    // reused the same 3.000-3.007 band, so at a seam — where a fence stands on
+    // the boundary and the crops below reach up across it — the winner was
+    // whichever happened to be built last. Measuring from world Y instead gives
+    // one ordering for the whole world: further down the screen is nearer the
+    // camera, always, whichever level it belongs to.
+    //
+    // The origin is the first band's floor, fixed for the session, so a level's
+    // depths never shift under it. One tile of world equals one step of 0.001,
+    // matching the old per-row spacing, so biases tuned against that still read
+    // the same.
+    _yDepth(worldY, bias) {
+        const g = this.tileGrid;
+        const o = this._depthOrigin !== undefined ? this._depthOrigin : worldY;
+        const t = (g && g.tile) || 1;
+        return 3 + ((worldY - o) / t) * 0.001 + (bias || 0);
+    }
+
     // Which roam band a column is in: -1 west of the canal, +1 east, 0 forbidden.
     //
-    // The forbidden middle is the canal's own two columns plus MACHINE_COLS
-    // either side, because the trencher stands there — taken from the grid's own
-    // main columns, so it follows the map rather than being a hardcoded number.
-    // The outermost columns are excluded too; there is nothing out there.
-    _farmerBand(col) {
-        const g = this.tileGrid, F = CONFIG.ROAD.TILEMAP.FARMER || {};
+    // Takes the grid explicitly — several levels are alive at once and each
+    // farmer must be judged against HIS OWN, not against this.tileGrid, which
+    // belongs to whichever level was built last.
+    _farmerBand(g, col) {
+        const F = CONFIG.ROAD.TILEMAP.FARMER || {};
         if (!g) return 0;
         const edge = F.EDGE_COLS !== undefined ? F.EDGE_COLS : 1;
         const pad  = F.MACHINE_COLS !== undefined ? F.MACHINE_COLS : 1;
@@ -1925,22 +2010,92 @@ console.log(
         return col < g.mainLeftCol ? -1 : 1;
     }
 
+    // Is there a canal — of any kind — on this cell? He wades through crops
+    // happily but not through water, so branch and main alike are solid to him.
+    _canalCell(g, col, row) {
+        if (!g || col < 0 || col >= g.cols || row < 0 || row >= g.rows) return true;
+        const i = row * g.cols + col;
+        const open = (c) => !!(c.n || c.e || c.s || c.w);
+        return open(this._connOfGid(g.branchData[i] || 0))
+            || open(this._connOfGid(g.mainData[i] || 0));
+    }
+
+    // Can he stand here, and can he get here in a straight line?
+    //
+    // Checking only the destination is not enough: branch canals run ACROSS the
+    // field, so a legal start and a legal finish can still have a ditch between
+    // them. The line is sampled instead — cheap, since this runs once per trip
+    // and not per frame, and it keeps him inside a connected patch without any
+    // real pathfinding.
+    _farmerCanReach(f, tx, ty) {
+        const g = f.g, F = CONFIG.ROAD.TILEMAP.FARMER || {};
+        const inset = (F.ROW_INSET !== undefined ? F.ROW_INSET : 0.5) * g.tile;
+        if (ty < f.gTop + inset || ty > f.gTop + g.h - inset) return false;
+        const dx = tx - f.spr.x, dy = ty - f.spr.y;
+        const steps = Math.max(2, Math.ceil(Math.hypot(dx, dy) / (g.tile * 0.5)));
+        for (let i = 1; i <= steps; i++) {
+            const x = f.spr.x + dx * (i / steps), y = f.spr.y + dy * (i / steps);
+            const col = Math.floor((x - g.left) / g.tile);
+            const row = Math.floor((y - f.gTop) / g.tile);
+            if (this._farmerBand(g, col) !== f.band) return false;
+            if (this._canalCell(g, col, row)) return false;
+        }
+        return true;
+    }
+
+    // May he STOP here? He crosses anything he can walk on, but a seed is a bare
+    // patch of tilled soil — settling on one reads as trampling it. Once it is
+    // watered and growing there is something to tend, and he is welcome.
+    _farmerMayStop(seg, f, x, y) {
+        const g = f.g;
+        const col = Math.floor((x - g.left) / g.tile);
+        const row = Math.floor((y - f.gTop) / g.tile);
+        const rec = seg.cropAt && seg.cropAt.get(col + ',' + row);
+        if (!rec) return true;                       // bare ground: fine
+        const F = CONFIG.ROAD.TILEMAP.FARMER || {};
+        return rec.stage >= (F.STOP_MIN_STAGE !== undefined ? F.STOP_MIN_STAGE : 2);
+    }
+
+    // Turn him toward the crops he is standing among, so a stop reads as tending
+    // the field rather than stopping at random. Averaged over what is nearby, so
+    // he faces the bulk of the patch rather than snapping to one plant.
+    _faceCrops(f) {
+        const g = f.g;
+        const col = Math.floor((f.spr.x - g.left) / g.tile);
+        const row = Math.floor((f.spr.y - f.gTop) / g.tile);
+        let sum = 0, n = 0;
+        for (let r = row - 2; r <= row + 2; r++) {
+            for (let c = col - 2; c <= col + 2; c++) {
+                if (c < 0 || c >= g.cols || r < 0 || r >= g.rows) continue;
+                if (!g.cropsData[r * g.cols + c]) continue;
+                sum += (g.left + (c + 0.5) * g.tile) - f.spr.x; n++;
+            }
+        }
+        if (n && Math.abs(sum) > g.tile * 0.15) f.spr.setFlipX(sum < 0);
+    }
+
     _rndRange(r) { return r[0] + Math.random() * (r[1] - r[0]); }
 
     // Built once and shared by every farmer, the same way the trencher's are.
     // Only WALK is an animation — standing still is a held frame, so there is
     // nothing to build for it and nothing for the animation system to step.
-    _makeFarmerAnims() {
-        if (this.anims.exists('farmer_walk')) return;
+    _makeFarmerAnims(name) {
+        const key = name + '_walk';
+        if (this.anims.exists(key)) return key;
         const F = CONFIG.ROAD.TILEMAP.FARMER || {};
-        this.anims.create({ key: 'farmer_walk', repeat: -1,
+        // One per farmer, because an animation is bound to the frames of one
+        // texture. The definition is a handful of indices, so this costs nothing
+        // however long the rotation grows.
+        this.anims.create({ key, repeat: -1,
             frameRate: F.WALK_FPS || 9,
-            frames: this.anims.generateFrameNumbers('farmers', { start: 2, end: 5 }) });
+            frames: this.anims.generateFrameNumbers(name,
+                { start: 1, end: (F.FRAMES || 5) - 1 }) });
+        return key;
     }
 
-    // Sort him against the crops by Y, using THEIR scheme (3 + row * 0.001) so
-    // the two orderings cannot disagree. Half a step above the row's crops, so
-    // he never ties one and flickers.
+    // Sort him against the crops by WORLD Y, the same measure they use, so the
+    // two orderings cannot disagree — including against crops in the level below
+    // him. Half a step above his own row, so he never ties one and flickers.
     //
     // ROW-QUANTISED, and that is the whole performance story: a depth change
     // marks the entire display list dirty and forces a re-sort of every object
@@ -1948,12 +2103,12 @@ console.log(
     // second; doing it only when he crosses a row does it a handful of times per
     // walk.
     _cutFarmerDepth(f) {
-        const g = this.tileGrid;
+        const g = f.g;                    // his level's grid, not the newest
         if (!g) return;
         const row = Math.floor((f.spr.y - f.gTop) / g.tile);
         if (row === f.row) return;
         f.row = row;
-        f.spr.setDepth(3 + row * 0.001 + 0.0005);
+        f.spr.setDepth(this._yDepth(f.gTop + (row + 0.5) * g.tile, 0.0005));
     }
 
     // Walk the farmers. Point to point, straight line, any angle — no grid and
@@ -1964,12 +2119,10 @@ console.log(
     _updateFarmers(dtMs) {
         const TM = CONFIG.ROAD.TILEMAP, F = TM.FARMER || {};
         if (F.ENABLED === false) return;
-        const g = this.tileGrid;
-        if (!g) return;
         const dt = Math.min(dtMs, 100) / 1000;
         for (const seg of this.segments) {
             const f = seg.farmer;
-            if (!f || !f.spr || !f.spr.scene) continue;
+            if (!f || !f.spr || !f.spr.scene || !f.g) continue;
 
             if (!f.walking) {
                 f.waitT -= dtMs;
@@ -1980,20 +2133,23 @@ console.log(
 
             const dx = f.tx - f.spr.x, dy = f.ty - f.spr.y;
             const d  = Math.hypot(dx, dy);
-            const stepPx = (F.SPEED || 1.1) * g.tile * dt;
+            const stepPx = (F.SPEED || 1.1) * f.g.tile * dt;
             if (d <= stepPx) {
                 f.spr.setPosition(f.tx, f.ty);
                 f.walking = false;
-                f.waitT = this._rndRange(F.PAUSE_MS || [1800, 6500]);
+                // He stays longer where there is something to tend.
+                f.waitT = this._rndRange(F.PAUSE_MS || [1800, 6500])
+                        * (f.toCrop ? (F.CROP_PAUSE_MUL || 1.7) : 1);
                 f.spr.anims.stop();
                 f.spr.setFrame(F.IDLE_FRAME || 0);
+                this._faceCrops(f);           // turn toward what he came for
             } else {
                 f.spr.x += (dx / d) * stepPx;
                 f.spr.y += (dy / d) * stepPx;
                 // Facing follows the x component only. A straight vertical walk
                 // has none, so he keeps whatever way he was already facing
                 // rather than snapping to a default.
-                if (Math.abs(dx) > g.tile * 0.05) f.spr.setFlipX(dx < 0);
+                if (Math.abs(dx) > f.g.tile * 0.05) f.spr.setFlipX(dx < 0);
             }
             this._cutFarmerDepth(f);
         }
@@ -2003,20 +2159,53 @@ console.log(
     // inside the level. Tries a few times and simply stays put if it cannot find
     // one, which is what happens on a very narrow or very short map.
     _sendFarmer(seg, f) {
-        const g = this.tileGrid, F = CONFIG.ROAD.TILEMAP.FARMER || {};
+        const g = f.g, F = CONFIG.ROAD.TILEMAP.FARMER || {};
         const trip = F.TRIP_TILES || [1.5, 5];
+        const far  = trip[1] * g.tile;
+
+        // MOSTLY HE GOES TO A CROP. He is looking after the field, so a trip
+        // should have a reason — a destination picked out of the air reads as
+        // pacing. Gather the plants within range that he can actually reach and
+        // take one; only fall back to wandering if there are none.
+        if (Math.random() < (F.CROP_SEEK !== undefined ? F.CROP_SEEK : 0.85)) {
+            const near = [];
+            const c0 = Math.floor((f.spr.x - g.left) / g.tile);
+            const r0 = Math.floor((f.spr.y - f.gTop) / g.tile);
+            const span = Math.ceil(trip[1]);
+            for (let r = r0 - span; r <= r0 + span; r++) {
+                for (let c = c0 - span; c <= c0 + span; c++) {
+                    if (c < 0 || c >= g.cols || r < 0 || r >= g.rows) continue;
+                    if (!g.cropsData[r * g.cols + c]) continue;
+                    const x = g.left + (c + 0.5) * g.tile, y = f.gTop + (r + 0.5) * g.tile;
+                    const d = Math.hypot(x - f.spr.x, y - f.spr.y);
+                    if (d < g.tile * 0.6 || d > far) continue;   // not where he stands
+                    near.push({ x, y });
+                }
+            }
+            // Shuffled by pick rather than sorted, so he does not always take the
+            // nearest and end up shuffling between two plants forever.
+            while (near.length) {
+                const i = Math.floor(Math.random() * near.length);
+                const t = near.splice(i, 1)[0];
+                if (!this._farmerCanReach(f, t.x, t.y)) continue;
+                if (!this._farmerMayStop(seg, f, t.x, t.y)) continue;   // still a seed
+                f.tx = t.x; f.ty = t.y; f.toCrop = true;
+                f.walking = true; f.spr.play(f.walkKey);
+                return;
+            }
+        }
+
+        // Otherwise a short wander, still inside his band and still clear of
+        // every canal along the way.
         for (let i = 0; i < 8; i++) {
             const a = Math.random() * Math.PI * 2;
             const r = this._rndRange(trip) * g.tile;
             const x = f.spr.x + Math.cos(a) * r;
             const y = f.spr.y + Math.sin(a) * r;
-            const col = Math.floor((x - g.left) / g.tile);
-            const row = Math.floor((y - f.gTop) / g.tile);
-            if (this._farmerBand(col) !== f.band) continue;      // wrong side, or forbidden
-            if (row < 0 || row > g.rows - 1) continue;           // off the level
-            f.tx = x; f.ty = y;
-            f.walking = true;
-            f.spr.play('farmer_walk');
+            if (!this._farmerCanReach(f, x, y)) continue;
+            if (!this._farmerMayStop(seg, f, x, y)) continue;           // still a seed
+            f.tx = x; f.ty = y; f.toCrop = false;
+            f.walking = true; f.spr.play(f.walkKey);
             return;
         }
         f.waitT = this._rndRange(F.PAUSE_MS || [1800, 6500]);
@@ -2366,6 +2555,9 @@ console.log(
         // the cell centre.
         const stemY = TM.CROP_STEM_Y !== undefined ? TM.CROP_STEM_Y : 1;
         const crops = seg.crops = [];
+        // Cell -> crop, for anything that needs to ask what is growing at a spot.
+        // Holds the record itself, so a stage read through it is always current.
+        const cropAt = seg.cropAt = new Map();
         // The CROPS layer is the single source of truth: one plant per marked
         // cell, at that cell's centre. Which gid was used doesn't matter — the
         // layer is never drawn, only tested for a tile. Cells left blank stay
@@ -2425,10 +2617,11 @@ console.log(
                 const h1    = this._cellHash(c, r, 1), h2 = this._cellHash(c, r, 2);
                 const h3    = this._cellHash(c, r, 3);
                 const jit   = 1 + (h1 - 0.5) * 2 * (V.SCALE_VAR || 0);
-                const psc   = sc * jit;               // the spring settles back to THIS
+                const psc   = sc * jit;               // this plant's own base size
                 const spr = this._addB(this.add.image(
                         g.left + (c + 0.5) * g.tile, gTop + (r + 0.5) * g.tile, key, 0)
-                    .setOrigin(0.5, stemY).setScale(psc).setDepth(3 + r * 0.001), seg);
+                    .setOrigin(0.5, stemY).setScale(psc)
+                    .setDepth(this._yDepth(gTop + (r + 0.5) * g.tile)), seg);
                 // Mirroring is safe here: the art's shadow sits centred under the
                 // stem, so a flipped plant is not lit from the wrong side.
                 if (V.FLIP !== false && h2 < 0.5) spr.setFlipX(true);
@@ -2440,12 +2633,14 @@ console.log(
                 // growMul: this plant's own pace. A patch that reaches each stage
                 // in lockstep is what really reads as stamped — more than any
                 // silhouette repeat — so every plant runs a little fast or slow.
-                crops.push({ watch: best, stage: 1, timer: 0, sprite: spr, sc: psc, crop, edge,
+                const rec = { watch: best, stage: 1, timer: 0, sprite: spr, sc: psc, crop, edge,
                              col: c, row: r,
                              tilled, tilledOff: ev.off, tilledAngle: ev.angle,
                              growMul: 1 + (this._cellHash(c, r, 4) - 0.5) * 2 * (V.GROW_VAR || 0),
                              ground: (seg.groundSprites || [])[r * g.cols + c] || null,
-                             ovl: 0, done: false });
+                             ovl: 0, done: false };
+                crops.push(rec);
+                cropAt.set(c + ',' + r, rec);
             }
         }
     }
@@ -2507,6 +2702,16 @@ console.log(
         return spr;
     }
 
+    // What a plant settles back to at a given stage — its own base size times
+    // that stage's spread. Kept in one place because three things read it: the
+    // sprite when a stage lands, the spring that springs back to it, and the
+    // squash it springs up from.
+    _cropScale(cr, stage) {
+        const s = CONFIG.ROAD.TILEMAP.CROP_STAGE_SCALE;
+        const k = (s && s[stage - 1] !== undefined) ? s[stage - 1] : 1;
+        return cr.sc * k;
+    }
+
     // Grow crops whose nearest canal cell has been watered: advance one stage
     // every CROP_GROW_MS, swapping the sprite, until the last stage.
     _updateCrops(time) {
@@ -2556,16 +2761,23 @@ console.log(
                     }
                     // Spring the new frame up from a squashed y-scale. Only
                     // reachable for stage 2+, so the seed never animates.
+                    // A stage can be WIDER as well as taller: x is set outright
+                    // so the spread arrives with the frame, and y springs into it
+                    // so the growth still pops.
+                    const target = this._cropScale(cr, st);
+                    cr.sprite.scaleX = target;
                     if (popFr < 1 && popMs > 0) {
                         if (cr.tw) cr.tw.stop();        // stage skipped mid-spring
-                        cr.sprite.scaleY = cr.sc * popFr;
+                        cr.sprite.scaleY = target * popFr;
                         cr.tw = this.tweens.add({
                             targets:  cr.sprite,
-                            scaleY:   cr.sc,
+                            scaleY:   target,
                             duration: popMs,
                             ease:     'Back.easeOut',
                             onComplete: () => { cr.tw = null; }
                         });
+                    } else {
+                        cr.sprite.scaleY = target;
                     }
                     if (st >= stages) cr.done = true;
                 }

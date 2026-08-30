@@ -678,6 +678,32 @@ var CONFIG = {
             // scale the 128px tiles take: whatever a tile is on screen, divided
             // by FRAME. At 449x226 that puts it 3.5 tiles wide — the two canal
             // columns plus about three quarters of a tile onto each bank.
+            // ── The fence ───────────────────────────────────────────────────
+            // A run of close-set wooden poles marking where one farm ends and
+            // the next begins. graphics/fence-pole.webp is one long horizontal
+            // strip of poles, no rails.
+            //
+            // It sits on a level's FLOOR — the boundary it shares with the level
+            // below — and is drawn in TWO pieces with a gap in the middle, so the
+            // machine drives through rather than over it. The gap is the canal's
+            // own columns plus GAP_COLS either side, the same span the farmer is
+            // kept out of, so both read as "the machine's corridor".
+            //
+            // Never on the first level: below that is the lake, not a farm.
+            FENCE: {
+                ENABLED: true,
+                FILE:  'graphics/fence-pole.webp',
+                GAP_COLS: 1,        // columns kept clear either side of the canal
+                Y:     0,           // nudge off the boundary line, in tiles
+                DEPTH_BIAS: 0,      // none needed. Depth comes from world Y, and
+                                    // the fence stands on the boundary line, so
+                                    // a crop rooted below it is already nearer
+                                    // the camera and a crop rooted above it is
+                                    // already further. Any bias here overrides
+                                    // that — at 0.0008 it beat a crop half a tile
+                                    // below, which is what hid them
+            },
+
             // ── The farmer ──────────────────────────────────────────────────
             // Somebody lives here. One per level, wandering the crops, so the
             // irrigation reads as being FOR someone rather than happening to an
@@ -691,15 +717,45 @@ var CONFIG = {
             // there is no separate vertical pose and none is needed.
             FARMER: {
                 ENABLED: true,
-                FILE:  'graphics/farmers.webp',
+                // ── The rotation ────────────────────────────────────────
+                // Different farms, different farmers. One sheet per farmer in
+                // DIR, named here in PLAY ORDER, wrapping at the end — level 1
+                // gets the first, level 2 the second, and so on. Add a sheet and
+                // its name here; nothing else needs to know.
+                //
+                // Each is one row of FRAMES square frames:
+                //   0        idle — a STILL pose, not a loop
+                //   1 .. 4   the walk cycle, drawn facing RIGHT
+                DIR:    'graphics/farmers/',
+                CYCLE:  ['farmer1', 'farmer2'],
+                EXT:    '.webp',
+                FRAMES: 5,
                 SIZE:  1.9,         // height as a fraction of a tile
                 IDLE_FRAME: 0,      // standing still is a STILL POSE, not a
                                     // loop — this frame is held. Frame 1 unused
                 WALK_FPS: 8,
                 SPEED: 1.1,         // tiles/sec
+                CROP_SEEK: 0.85,    // how often he heads for a CROP rather than
+                                    // wandering. He is looking after the field,
+                                    // so most trips should have a reason
+                CROP_PAUSE_MUL: 1.7,// and he lingers this much longer once he is
+                                    // standing among them
+                STOP_MIN_STAGE: 2,  // he will WALK across a crop at any stage but
+                                    // only STOP on one that has got going. A seed
+                                    // is a bare patch of soil — standing on it
+                                    // looks like trampling it. Once watered and
+                                    // growing there is a plant to tend, so he can
+                                    // settle there
                 PAUSE_MS: [1800, 6500],   // he mostly stands still; this is the
                                           // wait between walks, weighted long
                 TRIP_TILES: [1.5, 5],     // how far he goes when he does move
+                ROW_INSET: 0.5,     // tiles kept clear at the TOP and BOTTOM of
+                                    // his level, so he cannot reach either
+                                    // boundary. Half a tile puts his limit on the
+                                    // CENTRE of the first and last rows — far
+                                    // enough back from the fence standing on the
+                                    // floor that he never walks through it, which
+                                    // a solid fence should not allow
                 EDGE_COLS: 1,       // columns kept clear at each side of the map
                 MACHINE_COLS: 1,    // columns kept clear either side of the canal
                                     // for the trencher. With the canal's own two
@@ -921,6 +977,17 @@ var CONFIG = {
                                  // is plain NAMES. An entry may still spell out
                                  // its own extension if one ever differs.
             CROP:         'tomato.png',  // fallback when CROP_CYCLE is empty
+            // How big each stage stands, as a multiple of one tile. A mature
+            // plant confined to its own cell — leaves stopping dead on the tile
+            // boundary — reads as a diagram rather than a field, so the last two
+            // stages spill over their neighbours the way real foliage does.
+            //
+            // Scaling rather than re-drawing wider costs nothing: the art is
+            // 128px drawn at roughly half that, so 1.2x is still downsampling and
+            // nothing softens. The stem is anchored at the plant's base, so the
+            // extra size grows UP and OUT from where it is rooted rather than
+            // moving the plant.
+            CROP_STAGE_SCALE: [1, 1, 1, 1.5, 1.5],
             CROP_STAGES:  5,
             CROP_GROW_MS: 2000,     // time between growth stages
             CROP_WET:     0.15,     // canal-cell fill fraction that counts as "watered"
