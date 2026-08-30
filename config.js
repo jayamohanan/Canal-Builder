@@ -452,7 +452,11 @@ var CONFIG = {
             // plain ground, so short levels read as a field with open land
             // beyond it rather than leaving a hole between levels.
             LEVELS: [
+                { FILE: 'level_maps/level_01.tmj' },
                 { FILE: 'level_maps/level_02.tmj' },
+                { FILE: 'level_maps/level_03.tmj' },
+                { FILE: 'level_maps/level_04.tmj' },
+                { FILE: 'level_maps/level_05.tmj' },
                 // { FILE: 'level_maps/level_02.tmj' },
                 //  {
                 //     FILE: 'level_maps/level_03.tmj',
@@ -689,8 +693,9 @@ var CONFIG = {
                 ENABLED: true,
                 FILE:  'graphics/farmers.webp',
                 SIZE:  1.9,         // height as a fraction of a tile
-                IDLE_FPS: 3,        // the two idle frames, slow — a breathe
-                WALK_FPS: 9,
+                IDLE_FRAME: 0,      // standing still is a STILL POSE, not a
+                                    // loop — this frame is held. Frame 1 unused
+                WALK_FPS: 8,
                 SPEED: 1.1,         // tiles/sec
                 PAUSE_MS: [1800, 6500],   // he mostly stands still; this is the
                                           // wait between walks, weighted long

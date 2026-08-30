@@ -1896,7 +1896,7 @@ console.log(
                 gTop + (pick.r + 0.5) * g.tile, 'farmers', 0)
             .setDisplaySize(h, h)                  // frames are square
             .setOrigin(0.5, 0.85), seg);       // stands on his feet, not his middle
-        spr.play('farmer_idle');
+        spr.setFrame(F.IDLE_FRAME || 0);  // idle is a still pose, not a loop
 
         seg.farmer = {
             spr, gTop,
@@ -1928,12 +1928,11 @@ console.log(
     _rndRange(r) { return r[0] + Math.random() * (r[1] - r[0]); }
 
     // Built once and shared by every farmer, the same way the trencher's are.
+    // Only WALK is an animation — standing still is a held frame, so there is
+    // nothing to build for it and nothing for the animation system to step.
     _makeFarmerAnims() {
-        if (this.anims.exists('farmer_idle')) return;
+        if (this.anims.exists('farmer_walk')) return;
         const F = CONFIG.ROAD.TILEMAP.FARMER || {};
-        this.anims.create({ key: 'farmer_idle', repeat: -1,
-            frameRate: F.IDLE_FPS || 3,
-            frames: this.anims.generateFrameNumbers('farmers', { start: 0, end: 1 }) });
         this.anims.create({ key: 'farmer_walk', repeat: -1,
             frameRate: F.WALK_FPS || 9,
             frames: this.anims.generateFrameNumbers('farmers', { start: 2, end: 5 }) });
@@ -1986,7 +1985,8 @@ console.log(
                 f.spr.setPosition(f.tx, f.ty);
                 f.walking = false;
                 f.waitT = this._rndRange(F.PAUSE_MS || [1800, 6500]);
-                f.spr.play('farmer_idle');
+                f.spr.anims.stop();
+                f.spr.setFrame(F.IDLE_FRAME || 0);
             } else {
                 f.spr.x += (dx / d) * stepPx;
                 f.spr.y += (dy / d) * stepPx;
