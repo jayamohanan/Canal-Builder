@@ -499,42 +499,60 @@ var CONFIG = {
                 'crop',        // 0
                 'pond_a',      // 1
                 'pond_b',      // 2
-                'cow_n',       // 3
-                'cow_s',       // 4
-                'cow_e',       // 5
-                'cow_w',       // 6
             ],
 
-            // ── Cattle ──────────────────────────────────────────────────────
-            // Ranch levels put cows out to grass. One marker, one cow — nothing
-            // records which cells it covers, because nothing needs to: they never
-            // move, so a footprint would only ever restate what the art already
-            // shows. Keeping two cows off each other, or off the canal, is a
-            // matter of where you paint the markers.
+            // ── Props ───────────────────────────────────────────────────────
+            // Scenery that is PLACED rather than painted: one cow, one well, one
+            // farmhouse. These live on a Tiled OBJECT layer, not a tile layer —
+            // you drop a point and type its name, and that name is the whole
+            // identity. Nothing here needs a marker tile, so the marker sheet
+            // stops growing every time a new kind of thing exists.
             //
-            // THE MARKER IS THE COW'S FRONT. Whichever edge of the sprite faces
-            // the way the cow is looking lands on the marked point, and the body
-            // trails behind it — so a south-facing cow stands above its marker
-            // and a north-facing one below. One rule for all four facings, and
-            // west is east flipped, which leaves the anchor on the same edge of
-            // the animal rather than swapping sides.
-            CATTLE: {
+            // ADDING A PROP IS A LINE IN THIS TABLE. Drop the art in, add an
+            // entry, place a point named the same. There is no code to write:
+            // one builder walks the layer and looks every name up here, so a
+            // well or a haystack takes the same path a cow does.
+            //
+            // Two rules decide where the art lands:
+            //
+            //   ORIGIN — which point of the sprite sits on the marked spot. For
+            //   the cows this is THE EDGE THE ANIMAL FACES, so the body always
+            //   trails behind the point: a south cow stands above its marker, a
+            //   north cow below it. West is east mirrored, which keeps the anchor
+            //   on the same edge of the ANIMAL rather than jumping to its other
+            //   side. The vertical half is the feet wherever there is a choice.
+            //
+            //   FACE — the direction it looks, as a grid step. The points are
+            //   placed ON THE BOUNDARY between the prop and the tile it faces,
+            //   so stepping half a tile that way lands squarely in that tile —
+            //   one formula for all four facings, and no special cases.
+            //
+            //   SIZE — height in tiles, the same convention the farmer uses. It
+            //   is in TILES and not pixels because a tile is 33-105 device px
+            //   depending on the screen, and a prop measured in pixels would be
+            //   a different size on every phone. Sprites drawn at one scale must
+            //   keep their pixel heights in proportion here or they stop looking
+            //   like the same herd: the cows are 190px and 127px tall, so 2.1 and
+            //   1.4 tiles. Change one, scale the rest by the same ratio.
+            PROPS: {
                 ENABLED: true,
-                LAYER:  'cattle',            // the marker layer they are painted on
-                DIR:    'graphics/animals/cows/',
-                EXT:    '.webp',
-                // marker id (position in markers.tsx) -> facing
-                FACING: { 3: 'n', 4: 's', 5: 'e', 6: 'w' },
-                // file per facing; west reuses east, mirrored
-                ART:    { n: 'cow_north', s: 'cow_south', e: 'cow_side', w: 'cow_side' },
-                // ONE size for the whole herd: the side view's length in tiles.
-                // Every sprite takes the same pixels-per-tile from it, so the
-                // views stay consistent with each other and a re-export at a
-                // different pixel size still lands in proportion. Tune this by
-                // eye — it is the only number that decides how big a cow is.
-                LEN_TILES: 2.0,
-                REF_PX:    181,              // the side art's width, which is what
-                                             // LEN_TILES describes
+                LAYER: 'props',              // the Tiled object layer they sit on
+                // Cattle wait for their field. A cow stands at the edge of the
+                // tile it is looking at and only appears once THAT tile is fully
+                // grown, so the herd arrives as the reward for finishing a
+                // stretch of farm rather than sitting on bare soil from the
+                // start. A prop facing a tile with nothing planted in it — or
+                // any prop with no FACE at all — simply shows at once, so this
+                // can never silently swallow a well or a farmhouse.
+                REVEAL_STAGE: 5,             // 0 = always visible
+                FADE_MS: 450,
+                RISE_TILES: 0.15,            // small settle as it fades in
+                ITEMS: {
+                    cow_n: { FILE: 'graphics/animals/cows/cow_n.webp', SIZE: 2.1, ORIGIN: [0.5, 0], FACE: [ 0, -1] },
+                    cow_s: { FILE: 'graphics/animals/cows/cow_s.webp', SIZE: 2.1, ORIGIN: [0.5, 1], FACE: [ 0,  1] },
+                    cow_e: { FILE: 'graphics/animals/cows/cow_e.webp', SIZE: 1.4, ORIGIN: [1,   1], FACE: [ 1,  0] },
+                    cow_w: { FILE: 'graphics/animals/cows/cow_e.webp', SIZE: 1.4, ORIGIN: [0,   1], FACE: [-1,  0], FLIP: true },
+                },
             },
             POND_LAYER: 'pond',            // marker layer the ponds are painted on
             POND_DIR:   'graphics/pond/',  // where the pond art lives

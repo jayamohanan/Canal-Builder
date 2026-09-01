@@ -477,10 +477,12 @@ class GameScene extends Phaser.Scene {
                         { frameWidth: TM.FRAME, frameHeight: TM.FRAME });
                 }
             }
-            const CT = TM.CATTLE || {};
-            if (CT.ENABLED !== false) {
-                for (const n of new Set(Object.values(CT.ART || {}))) {
-                    this.load.image(n, (CT.DIR || '') + n + (CT.EXT || '.webp'));
+            const PR = TM.PROPS || {};
+            if (PR.ENABLED !== false) {
+                // Keyed by FILE, so two facings sharing one drawing — east and
+                // west are the same cow mirrored — load and cost it once.
+                for (const it of Object.values(PR.ITEMS || {})) {
+                    if (it && it.FILE) this.load.image(it.FILE, it.FILE);
                 }
             }
             const FN = TM.FENCE || {};
@@ -1037,6 +1039,22 @@ console.log(
             }
             return null;
         };
+        // Point objects off a Tiled OBJECT layer, which is a different shape to
+        // a tile layer: no grid, no gids, just a list carrying its own name and
+        // a pixel position. Converted to FRACTIONAL cells here so callers deal
+        // in grid units like everything else, and so the source tile size — 128,
+        // and nothing to do with how big a tile is on screen — stays in this one
+        // place. Name is what Tiled labels on the map; class/type are read as a
+        // fallback, and Tiled renamed `type` to `class` in 1.9 so both appear.
+        const objects = (name) => {
+            const l = map.layers.find((x) => x.name === name && x.objects);
+            if (!l) return [];
+            return l.objects.map((o) => ({
+                name: o.name || o.class || o.type || '',
+                col:  o.x / (map.tilewidth  || 1),
+                row:  o.y / (map.tileheight || 1),
+            })).filter((o) => o.name);
+        };
         // How this map's gids resolve to art. Built per map, because firstgid is
         // a property of the MAP, not of the tileset: the same sheet can start at
         // a different number in every level, and does.
@@ -1052,7 +1070,7 @@ console.log(
             mainData:   layer(TM.MAIN_LAYER)   || [],   // dug main canal
             cropsData:  layer(TM.CROPS_LAYER)  || [],   // crop markers (not drawn)
             pondData:   layer(TM.POND_LAYER)   || [],   // pond markers (not drawn)
-            cattleData: layer((TM.CATTLE || {}).LAYER) || [],   // cow markers (not drawn)
+            props:      objects((TM.PROPS || {}).LAYER),// placed scenery (object layer)
             markerBase: this._markerBase(map),          // where markers.tsx starts here
             ponds:      (this._levelDef(levelIndex) || {}).PONDS || {},
             mainLeftCol: mainRightCol - (mainW - 1), mainRightCol, mainW,
@@ -1519,7 +1537,7 @@ console.log(
         this._buildWetGround(seg);
         this._buildFarmer(seg, gTop);
         this._buildFence(seg, gTop);
-        this._buildCattle(seg, gTop);
+        this._buildProps(seg, gTop);
         this._buildPonds(seg, band);
     }
 
@@ -1962,52 +1980,81 @@ console.log(
         set(seg, F.FADED_ALPHA !== undefined ? F.FADED_ALPHA : 0.3);
     }
 
-    // Cows, one per marker, on ranch levels.
+    // Placed scenery — cows now, wells and farmhouses later — off the map's
+    // `props` object layer.
     //
-    // THE MARKER IS THE COW'S FRONT: the edge of the sprite facing the way the
-    // animal looks lands on the marked point and the body trails behind. One
-    // rule covers all four facings, and because west is east mirrored the anchor
-    // stays on the same edge of the ANIMAL rather than jumping to its other
-    // side — which is what a fixed left-edge anchor would have done.
+    // ONE LOOP FOR EVERY KIND. A point's name is looked up in PROPS.ITEMS and
+    // whatever it finds decides art, size, anchor and mirroring. Nothing here
+    // knows what a cow is, so adding a haystack costs a config line and no code.
     //
-    // Every facing takes its size from ONE constant, the side view's length in
-    // tiles. The three sprites are already consistent with each other at 1:1, so
-    // a single pixels-per-tile keeps them that way, and a re-export at a
-    // different pixel size still lands in proportion.
-    _buildCattle(seg, gTop) {
-        const TM = CONFIG.ROAD.TILEMAP, C = TM.CATTLE || {};
-        if (C.ENABLED === false) return;
+    // Nothing records which cells a prop covers, because nothing needs to: they
+    // never move, so a footprint could only restate what the art already shows.
+    // Keeping two cows off each other, or off the canal, is a matter of where
+    // the points are placed.
+    _buildProps(seg, gTop) {
+        const P = CONFIG.ROAD.TILEMAP.PROPS || {};
+        if (P.ENABLED === false) return;
         const g = this.tileGrid;
-        if (!g || !g.cattleData.length || g.markerBase === null) return;
+        if (!g || !g.props || !g.props.length) return;
+        const items = P.ITEMS || {};
+        const need  = P.REVEAL_STAGE !== undefined ? P.REVEAL_STAGE : 5;
 
-        const k = (C.LEN_TILES || 2) * g.tile / (C.REF_PX || 181);
-        // Which edge of the sprite sits on the marker, per facing. The vertical
-        // half is the FEET wherever there is a choice, so every cow stands on
-        // the ground plane its marker is in — a north cow is the exception by
-        // construction, since its leading edge is its top.
-        const ORIGIN = { n: [0.5, 0], s: [0.5, 1], e: [1, 1], w: [0, 1] };
+        for (const o of g.props) {
+            const it = items[o.name];
+            if (!it || !it.FILE || !this.textures.exists(it.FILE)) continue;
 
-        for (let r = 0; r < g.rows; r++) {
-            for (let c = 0; c < g.cols; c++) {
-                const gid = g.cattleData[r * g.cols + c];
-                if (!gid) continue;
-                const face = (C.FACING || {})[gid - g.markerBase];
-                const art  = face && (C.ART || {})[face];
-                if (!art || !this.textures.exists(art)) continue;
+            const src = this.textures.get(it.FILE).getSourceImage();
+            const o0  = it.ORIGIN || [0.5, 1];
+            const h   = g.tile * (it.SIZE !== undefined ? it.SIZE : 1);
+            const w   = h * (src.width / src.height);   // aspect from the art itself
+            const x   = g.left + o.col * g.tile;
+            const y   = gTop   + o.row * g.tile;
+            const spr = this._addB(this.add.image(x, y, it.FILE)
+                .setOrigin(o0[0], o0[1])
+                .setDisplaySize(w, h)
+                .setFlipX(!!it.FLIP), seg);
+            // Depth from where the prop MEETS THE GROUND, not from its anchor —
+            // a north cow is pinned by its top, so sorting on that would place
+            // it two tiles further away than it stands.
+            spr.setDepth(this._yDepth(y + (1 - o0[1]) * h));
 
-                const src = this.textures.get(art).getSourceImage();
-                const o   = ORIGIN[face] || [0.5, 1];
-                const w   = src.width * k, h = src.height * k;
-                const x   = g.left + (c + 0.5) * g.tile;
-                const y   = gTop   + (r + 0.5) * g.tile;
-                const spr = this._addB(this.add.image(x, y, art)
-                    .setOrigin(o[0], o[1])
-                    .setDisplaySize(w, h)
-                    .setFlipX(face === 'w'), seg);
-                // Depth from where the animal MEETS THE GROUND, not from its
-                // anchor — a north cow is pinned by its top, so sorting on that
-                // would place it two tiles further away than it stands.
-                spr.setDepth(this._yDepth(y + (1 - o[1]) * h));
+            // Does it have to wait for its field? The point is placed ON THE
+            // BOUNDARY it faces, so half a tile in the FACE direction is inside
+            // the tile it is looking at — the same step for all four facings.
+            //
+            // Resolved ONCE, here, not per frame: the crop set is fixed after
+            // build, so the prop keeps the record and reads a stage straight off
+            // it. Crops cache their nearest canal cell the same way.
+            if (!(need > 0) || !it.FACE) continue;
+            const cx = Math.floor(o.col + it.FACE[0] * 0.5);
+            const cy = Math.floor(o.row + it.FACE[1] * 0.5);
+            const watch = seg.cropAt && seg.cropAt.get(cx + ',' + cy);
+            // Nothing planted there — show it now rather than hiding it forever.
+            // A prop that never appears looks exactly like a prop that failed to
+            // load, and this is the likeliest way to author one by accident.
+            if (!watch || watch.stage >= need) continue;
+            spr.setAlpha(0).setY(y - g.tile * (P.RISE_TILES || 0));
+            (seg.propWait || (seg.propWait = [])).push({ spr, watch, y });
+        }
+    }
+
+    // Bring in props whose field has finished growing.
+    //
+    // A scan, not a subscription: it is a handful of objects per level and each
+    // one drops out of the list the moment it starts appearing, so the common
+    // case is an empty array and no work at all.
+    _updateProps(dtMs) {
+        const P = CONFIG.ROAD.TILEMAP.PROPS || {};
+        const need = P.REVEAL_STAGE !== undefined ? P.REVEAL_STAGE : 5;
+        for (const seg of this.segments || []) {
+            const wait = seg.propWait;
+            if (!wait || !wait.length) continue;
+            for (let i = wait.length - 1; i >= 0; i--) {
+                const p = wait[i];
+                if (p.watch.stage < need) continue;
+                wait.splice(i, 1);                   // its turn came — stop watching
+                this.tweens.add({ targets: p.spr, alpha: 1, y: p.y,
+                    duration: P.FADE_MS || 450, ease: 'Sine.easeOut' });
             }
         }
     }
@@ -6489,6 +6536,7 @@ console.log(
         this._updateCrops(time);
         this._updateWetGround();
         this._updateFarmers(delta || 16);
+        this._updateProps(delta || 16);
     }
 }
 
