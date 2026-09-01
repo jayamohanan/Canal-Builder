@@ -737,7 +737,7 @@ console.log(
                     vert ? top + h + gap : top + h / 2, '', {
                         fontSize: Math.max(9, Math.round((TC.SIZE || 30) * scale)) + 'px',
                         fontFamily: CONFIG.FONT_FAMILY,
-                        color: TC.COLOR || '#ffe07a', fontStyle: 'bold',
+                        color: TC.COLOR || '#ffe07a', fontStyle: CONFIG.FONT_WEIGHT,
                         stroke: TC.STROKE || '#3a2a00',
                         strokeThickness: Math.max(1, Math.round((TC.STROKE_W || 4) * scale)),
                     }).setOrigin(vert ? 0.5 : 0, vert ? 0 : 0.5).setDepth(5);
@@ -818,7 +818,7 @@ console.log(
             const rateY = vert ? slotYi : slotYi - ssz / 2 - casePad - chargeGap;
             const chargeRateText = this.add.text(rateX - 2, rateY, '', {
                 fontSize, fontFamily: CONFIG.FONT_FAMILY,
-                color: '#000000', fontStyle: 'bold',
+                color: '#000000', fontStyle: CONFIG.FONT_WEIGHT,
                 stroke: '#FFFFFF', strokeThickness: 3,
             }).setOrigin(1, 0.5).setDepth(5).setVisible(false);
 
@@ -3688,7 +3688,7 @@ console.log(
             this.tunnel.workLabel = this._addB(this.add.text(x, entryY, '', {
                 fontSize: Math.max(9, Math.round((PL.SIZE || 26) * sL)) + 'px',
                 fontFamily: CONFIG.FONT_FAMILY,
-                color: PL.COLOR || '#ffffff', fontStyle: 'bold',
+                color: PL.COLOR || '#ffffff', fontStyle: CONFIG.FONT_WEIGHT,
                 stroke: PL.STROKE || '#1d2b16',
                 strokeThickness: Math.max(1, Math.round((PL.STROKE_W || 5) * sL)),
             }).setOrigin(1, 0.5).setDepth(PL.DEPTH !== undefined ? PL.DEPTH : 3.2), seg);
@@ -5184,7 +5184,7 @@ console.log(
 
         const levelText = this.add.text(p.slotX, p.slotY + yOff + tOff, `LVL ${level}`, {
             fontSize: this.levelTextSize, fontFamily: CONFIG.FONT_FAMILY,
-            color: CONFIG.CELL.LEVEL_TEXT_COLOR, fontStyle: 'bold',
+            color: CONFIG.CELL.LEVEL_TEXT_COLOR, fontStyle: CONFIG.FONT_WEIGHT,
         }).setOrigin(0.5).setDepth(12);
 
         p.slotBg.setVisible(false);
@@ -5384,7 +5384,7 @@ console.log(
             fontSize: L.coinTextSize,
             fontFamily: CONFIG.FONT_FAMILY,
             color: CONFIG.COIN_COUNTER.TEXT_COLOR,
-            fontStyle: 'bold',
+            fontStyle: CONFIG.FONT_WEIGHT,
             stroke: CONFIG.COIN_COUNTER.TEXT_STROKE_COLOR,
             strokeThickness: CONFIG.COIN_COUNTER.TEXT_STROKE_THICKNESS,
         }).setOrigin(1, 0.5).setDepth(10);
@@ -5550,7 +5550,7 @@ console.log(
             cell.x, cell.y + this.batteryYOffset + this.levelTextYOffset,
             `LVL ${level}`,
             { fontSize: this.levelTextSize, fontFamily: CONFIG.FONT_FAMILY,
-              color: CONFIG.CELL.LEVEL_TEXT_COLOR, fontStyle: 'bold' })
+              color: CONFIG.CELL.LEVEL_TEXT_COLOR, fontStyle: CONFIG.FONT_WEIGHT })
             .setOrigin(0.5).setDepth(12);
 
         const batteryData = {
@@ -5690,7 +5690,7 @@ console.log(
         this.spawnButtonText = this.add.text(
             L.spawnCoinTextX, 0, `${this.spawnCost}`, {
                 fontSize: L.spawnCoinTextSize, fontFamily: CONFIG.FONT_FAMILY,
-                color: '#FFFFFF', fontStyle: 'bold',
+                color: '#FFFFFF', fontStyle: CONFIG.FONT_WEIGHT,
             }).setOrigin(0.5);
         const spawnCoinIcon = this.add.image(L.spawnCoinIconX, 0, 'coin')
             .setDisplaySize(L.spawnCoinIconSize, L.spawnCoinIconSize);
@@ -5720,7 +5720,7 @@ console.log(
         const lvlUpFontSize = Math.max(12, Math.round(20 * (L.cellSize / CONFIG.CELL.SIZE))) + 'px';
         const lvlTxt = this.add.text(0, 0, 'LVL UP\nALL', {
             fontSize: lvlUpFontSize, fontFamily: CONFIG.FONT_FAMILY,
-            align: 'center', color: '#FFFFFF', fontStyle: 'bold',
+            align: 'center', color: '#FFFFFF', fontStyle: CONFIG.FONT_WEIGHT,
         }).setOrigin(0.5);
         lvlBtn.add([lvlBg, lvlTxt]);
         lvlBg.on('pointerdown', () => { if (this.levelUpButtonVisible) this.levelUpAll(); });
@@ -6273,7 +6273,7 @@ console.log(
             fontSize: A.TIMER_TEXT_SIZE,
             fontFamily: CONFIG.FONT_FAMILY,
             color: A.TIMER_TEXT_COLOR,
-            fontStyle: 'bold',
+            fontStyle: CONFIG.FONT_WEIGHT,
         }).setOrigin(0.5).setDepth(10001);
         
         // Countdown from AD.DURATION to 0
@@ -6469,8 +6469,29 @@ const config = {
     },
 };
 
+// The font has to be IN HAND before the game starts, not merely declared.
+// Phaser renders each Text into its own canvas texture the moment it is created
+// and never re-renders it, so a label built before the font arrives keeps the
+// fallback for the life of the scene — the classic symptom being the right font
+// only after a refresh. document.fonts.load() both triggers the fetch (a
+// declared @font-face is not fetched until something asks for it) and tells us
+// when it is done.
+//
+// It resolves rather than rejects on failure, and a missing font is not a
+// reason to withhold the game — so a failure here just means the fallback,
+// which is what would have happened anyway.
+function waitForFont() {
+    if (!document.fonts || !document.fonts.load) return Promise.resolve();
+    const f = (CONFIG.FONT_FAMILY || '').split(',')[0].trim();
+    if (!f) return Promise.resolve();
+    return document.fonts.load(`${CONFIG.FONT_WEIGHT || '600'} 16px ${f}`)
+        .catch(() => {})
+        .then(() => document.fonts.ready)
+        .catch(() => {});
+}
+
 if (typeof window !== 'undefined' && !window.__LEVEL_VIEWER__) {
-    initBatteryImagePaths().then(() => {
+    Promise.all([initBatteryImagePaths(), waitForFont()]).then(() => {
         const indicator = document.getElementById('loading-indicator');
         if (indicator) indicator.style.display = 'none';
         new Phaser.Game(config);

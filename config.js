@@ -7,7 +7,17 @@ function hexColor(cssColor) {
 }
 
 var CONFIG = {
-    FONT_FAMILY: 'Arial',
+    // Quotes are LOAD-BEARING. Phaser passes this straight into a canvas font
+    // string, and a family with a space and a digit in it fails to parse
+    // unquoted — silently, falling back to the system default with no error.
+    FONT_FAMILY: '"Baloo 2", sans-serif',
+    FONT_WEIGHT: '600',     // the ONE weight shipped in fonts/. Every label asks
+                            // for this rather than 'bold', because 'bold' means
+                            // 700 — which is not in the file, so the browser
+                            // SYNTHESISES it by smearing the 600 sideways. That
+                            // looks worst on small text with a stroke, which is
+                            // most of this UI. Ship an 800 file and set this to
+                            // '800' if the numbers want more weight.
     TEXT_COLOR: '#1A237E',
 
     // ── Screen split ──────────────────────────────────────────────────────────

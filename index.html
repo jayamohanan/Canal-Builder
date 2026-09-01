@@ -8,6 +8,18 @@
 
 	<title>Overcharge!</title>
 	<style>
+		/* Self-hosted so the build has no runtime dependency on a font CDN.
+		   `block` rather than `swap`: Phaser draws text into a canvas texture
+		   once and never re-renders it, so a fallback shown for even a moment
+		   gets BAKED IN and only a page refresh clears it. Waiting is correct
+		   here in a way it would not be for ordinary HTML. */
+		@font-face {
+			font-family: 'Baloo 2';
+			src: url('fonts/Baloo2-600.woff2') format('woff2');
+			font-weight: 600;
+			font-style: normal;
+			font-display: block;
+		}
 		* {
 			margin: 0;
 			padding: 0;
