@@ -477,6 +477,12 @@ class GameScene extends Phaser.Scene {
                         { frameWidth: TM.FRAME, frameHeight: TM.FRAME });
                 }
             }
+            const CT = TM.CATTLE || {};
+            if (CT.ENABLED !== false) {
+                for (const n of new Set(Object.values(CT.ART || {}))) {
+                    this.load.image(n, (CT.DIR || '') + n + (CT.EXT || '.webp'));
+                }
+            }
             const FN = TM.FENCE || {};
             if (FN.ENABLED !== false && FN.FILE) this.load.image('fence_pole', FN.FILE);
             const BK = TM.BLOCK || {};
@@ -1046,6 +1052,7 @@ console.log(
             mainData:   layer(TM.MAIN_LAYER)   || [],   // dug main canal
             cropsData:  layer(TM.CROPS_LAYER)  || [],   // crop markers (not drawn)
             pondData:   layer(TM.POND_LAYER)   || [],   // pond markers (not drawn)
+            cattleData: layer((TM.CATTLE || {}).LAYER) || [],   // cow markers (not drawn)
             markerBase: this._markerBase(map),          // where markers.tsx starts here
             ponds:      (this._levelDef(levelIndex) || {}).PONDS || {},
             mainLeftCol: mainRightCol - (mainW - 1), mainRightCol, mainW,
@@ -1512,6 +1519,7 @@ console.log(
         this._buildWetGround(seg);
         this._buildFarmer(seg, gTop);
         this._buildFence(seg, gTop);
+        this._buildCattle(seg, gTop);
         this._buildPonds(seg, band);
     }
 
@@ -1927,6 +1935,83 @@ console.log(
         this._cutFarmerDepth(seg.farmer);
     }
 
+    // Exactly ONE fence is see-through at a time: the one at the foot of the
+    // level the machine is working. Moving up hands the transparency on — the
+    // level just finished gets its fence back solid.
+    //
+    // Only the current boundary is in the machine's way, so fading them
+    // cumulatively would leave the whole stack of finished farms washed out and
+    // say nothing about where the work is. Held to one, it reads as focus.
+    //
+    // Free at runtime: alpha is a per-vertex value in the same batch, not a
+    // separate pass, so a see-through sprite costs exactly what a solid one
+    // does. The only work is a tween or two, once per level.
+    _focusFence(seg) {
+        const F = CONFIG.ROAD.TILEMAP.FENCE || {};
+        const ms = F.FADE_MS !== undefined ? F.FADE_MS : 300;
+        const set = (s, a) => {
+            for (const o of ((s && s.fences) || [])) {
+                if (!o || !o.scene) continue;
+                this.tweens.killTweensOf(o);
+                if (ms <= 0) o.setAlpha(a);
+                else this.tweens.add({ targets: o, alpha: a, duration: ms, ease: 'Sine.easeOut' });
+            }
+        };
+        if (this._fencedSeg && this._fencedSeg !== seg) set(this._fencedSeg, 1);  // back to solid
+        this._fencedSeg = seg;
+        set(seg, F.FADED_ALPHA !== undefined ? F.FADED_ALPHA : 0.3);
+    }
+
+    // Cows, one per marker, on ranch levels.
+    //
+    // THE MARKER IS THE COW'S FRONT: the edge of the sprite facing the way the
+    // animal looks lands on the marked point and the body trails behind. One
+    // rule covers all four facings, and because west is east mirrored the anchor
+    // stays on the same edge of the ANIMAL rather than jumping to its other
+    // side — which is what a fixed left-edge anchor would have done.
+    //
+    // Every facing takes its size from ONE constant, the side view's length in
+    // tiles. The three sprites are already consistent with each other at 1:1, so
+    // a single pixels-per-tile keeps them that way, and a re-export at a
+    // different pixel size still lands in proportion.
+    _buildCattle(seg, gTop) {
+        const TM = CONFIG.ROAD.TILEMAP, C = TM.CATTLE || {};
+        if (C.ENABLED === false) return;
+        const g = this.tileGrid;
+        if (!g || !g.cattleData.length || g.markerBase === null) return;
+
+        const k = (C.LEN_TILES || 2) * g.tile / (C.REF_PX || 181);
+        // Which edge of the sprite sits on the marker, per facing. The vertical
+        // half is the FEET wherever there is a choice, so every cow stands on
+        // the ground plane its marker is in — a north cow is the exception by
+        // construction, since its leading edge is its top.
+        const ORIGIN = { n: [0.5, 0], s: [0.5, 1], e: [1, 1], w: [0, 1] };
+
+        for (let r = 0; r < g.rows; r++) {
+            for (let c = 0; c < g.cols; c++) {
+                const gid = g.cattleData[r * g.cols + c];
+                if (!gid) continue;
+                const face = (C.FACING || {})[gid - g.markerBase];
+                const art  = face && (C.ART || {})[face];
+                if (!art || !this.textures.exists(art)) continue;
+
+                const src = this.textures.get(art).getSourceImage();
+                const o   = ORIGIN[face] || [0.5, 1];
+                const w   = src.width * k, h = src.height * k;
+                const x   = g.left + (c + 0.5) * g.tile;
+                const y   = gTop   + (r + 0.5) * g.tile;
+                const spr = this._addB(this.add.image(x, y, art)
+                    .setOrigin(o[0], o[1])
+                    .setDisplaySize(w, h)
+                    .setFlipX(face === 'w'), seg);
+                // Depth from where the animal MEETS THE GROUND, not from its
+                // anchor — a north cow is pinned by its top, so sorting on that
+                // would place it two tiles further away than it stands.
+                spr.setDepth(this._yDepth(y + (1 - o[1]) * h));
+            }
+        }
+    }
+
     // The fence along a farm's near boundary — where it meets the level below.
     //
     // TWO pieces, not one. The middle is left open so the machine drives through
@@ -1957,9 +2042,10 @@ console.log(
 
         const src = this.textures.get('fence_pole').getSourceImage();
         const ar  = src.height / src.width;                 // keep the poles' proportions
+        const runs = seg.fences = [];
         const put = (x, w, originX) => {
             if (w <= 1) return;
-            this._addB(this.add.image(x, y, 'fence_pole')
+            runs.push(this._addB(this.add.image(x, y, 'fence_pole')
                 .setOrigin(originX, 1)                      // bottom edge on the boundary
                 .setDisplaySize(w, w * ar)
                 // !== undefined, not ||. The bias is legitimately ZERO, and
@@ -1967,7 +2053,7 @@ console.log(
                 // in front of itself and let it cover a tree rooted half a tile
                 // below it.
                 .setDepth(this._yDepth(y,
-                    F.DEPTH_BIAS !== undefined ? F.DEPTH_BIAS : 0)), seg);
+                    F.DEPTH_BIAS !== undefined ? F.DEPTH_BIAS : 0)), seg));
         };
         put(p1, p1 - g.left, 1);      // runs LEFT from the gap, right edge touching it
         put(p2, right - p2, 0);       // runs RIGHT from the gap, left edge touching it
@@ -4902,6 +4988,9 @@ console.log(
         }
         this._showBore(next);
         this._placeBore(next.tunnel);
+        // The rig is now cutting THIS level, so the fence at its foot is behind
+        // the work — and the one it just left goes solid again.
+        this._focusFence(next);
         // Those overrun cells now sit on top of this level's own bottom rows —
         // the same trench drawn twice.
         this._dropOverrun(seg);

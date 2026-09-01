@@ -462,6 +462,8 @@ var CONFIG = {
             // plain ground, so short levels read as a field with open land
             // beyond it rather than leaving a hole between levels.
             LEVELS: [
+                { FILE: 'level_maps/level_07.tmj' },
+                { FILE: 'level_maps/level_06.tmj' },
                 { FILE: 'level_maps/level_01.tmj' },
                 { FILE: 'level_maps/level_02.tmj' },
                 { FILE: 'level_maps/level_03.tmj' },
@@ -497,7 +499,43 @@ var CONFIG = {
                 'crop',        // 0
                 'pond_a',      // 1
                 'pond_b',      // 2
+                'cow_n',       // 3
+                'cow_s',       // 4
+                'cow_e',       // 5
+                'cow_w',       // 6
             ],
+
+            // ── Cattle ──────────────────────────────────────────────────────
+            // Ranch levels put cows out to grass. One marker, one cow — nothing
+            // records which cells it covers, because nothing needs to: they never
+            // move, so a footprint would only ever restate what the art already
+            // shows. Keeping two cows off each other, or off the canal, is a
+            // matter of where you paint the markers.
+            //
+            // THE MARKER IS THE COW'S FRONT. Whichever edge of the sprite faces
+            // the way the cow is looking lands on the marked point, and the body
+            // trails behind it — so a south-facing cow stands above its marker
+            // and a north-facing one below. One rule for all four facings, and
+            // west is east flipped, which leaves the anchor on the same edge of
+            // the animal rather than swapping sides.
+            CATTLE: {
+                ENABLED: true,
+                LAYER:  'cattle',            // the marker layer they are painted on
+                DIR:    'graphics/animals/cows/',
+                EXT:    '.webp',
+                // marker id (position in markers.tsx) -> facing
+                FACING: { 3: 'n', 4: 's', 5: 'e', 6: 'w' },
+                // file per facing; west reuses east, mirrored
+                ART:    { n: 'cow_north', s: 'cow_south', e: 'cow_side', w: 'cow_side' },
+                // ONE size for the whole herd: the side view's length in tiles.
+                // Every sprite takes the same pixels-per-tile from it, so the
+                // views stay consistent with each other and a re-export at a
+                // different pixel size still lands in proportion. Tune this by
+                // eye — it is the only number that decides how big a cow is.
+                LEN_TILES: 2.0,
+                REF_PX:    181,              // the side art's width, which is what
+                                             // LEN_TILES describes
+            },
             POND_LAYER: 'pond',            // marker layer the ponds are painted on
             POND_DIR:   'graphics/pond/',  // where the pond art lives
 
@@ -705,6 +743,13 @@ var CONFIG = {
                 FILE:  'graphics/fence-pole.webp',
                 GAP_COLS: 1,        // columns kept clear either side of the canal
                 Y:     0,           // nudge off the boundary line, in tiles
+                // Once the machine is working the level above it, its own fence
+                // is behind the action and only in the way — so it goes
+                // see-through and stays that way.
+                FADED_ALPHA: 0.45,   // 1 = solid, 0 = invisible. At 0.3 the poles
+                                    // are a ghost — you read the trench and the
+                                    // water through them
+                FADE_MS:     300,
                 DEPTH_BIAS: 0,      // none needed. Depth comes from world Y, and
                                     // the fence stands on the boundary line, so
                                     // a crop rooted below it is already nearer
@@ -968,6 +1013,7 @@ var CONFIG = {
             // Every sheet is one row of CROP_STAGES frames of equal width
             // (640x256 = five 128x256 stages, as they all are today).
             CROP_CYCLE: [
+                'grass',
                 'tomato',
                 'grass',
                 'mango',
@@ -1285,11 +1331,13 @@ var CONFIG = {
             FLOW_OFFSET: 1,         // the water-FILLED version of a tile sits this
                                     // many frames after it in the sheet (dry then
                                     // wet, left→right, top→bottom)
-            FLOW_SPEED: 30,         // branch-water speed (px/s @ platformScale).
+            FLOW_SPEED: 60,         // branch-water speed (px/s @ platformScale).
                                     // 0 = match the main canal (WATER.MIN_SPEED).
-                                    // Pinned to 30 — the old shared value — when the
-                                    // main canal was slowed to 40%, so the branches
-                                    // kept their pace. Set back to 0 to re-couple.
+                                    // Doubled from 30: a branch is a narrow ditch
+                                    // off a full canal, so it should fill quicker
+                                    // than the main run, not at the same pace.
+                                    // Independent of the main canal's speed on
+                                    // purpose — set to 0 to re-couple them.
             END_FILL: 0.8,          // a dead-end tile's channel closes inside it,
                                     // so water fills only this fraction of the
                                     // tile (up to the closing), not the full edge
