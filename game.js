@@ -1747,6 +1747,12 @@ console.log(
                 .setOrigin(0, 1).setDisplaySize(w, h).setDepth(depth), seg);
         put('lake_dry',   LK.DEPTH_DRY   !== undefined ? LK.DEPTH_DRY   : 3.02);
         put('lake_water', LK.DEPTH_WATER !== undefined ? LK.DEPTH_WATER : 3.11);
+        // Claimed by this segment: when it is reaped the textures go too, not
+        // just the sprites drawn from them. Nothing else in the game does this
+        // yet — every other image stays uploaded for the whole session — but the
+        // lake earns it, being the largest pair in the game and visible only
+        // while the first level is on screen.
+        if (LK.RELEASE !== false) seg.ownTextures = ['lake_dry', 'lake_water'];
     }
 
     // The wall across the main canal at the level's far edge.
@@ -1910,6 +1916,30 @@ console.log(
         if (!img || !img.scene) return;
         below.block = null;
         this._liftBlock(img);
+    }
+
+    // Hand a reaped level's textures back to the GPU.
+    //
+    // Destroying a sprite does NOT do this. A texture lives in the game-wide
+    // manager, not on the objects that draw from it, so it stays uploaded until
+    // something asks for it to go — off-screen costs no draw time but the same
+    // memory. Only textures a segment explicitly claimed are touched, and only
+    // once no other live segment claims them too.
+    _releaseTextures(seg) {
+        const keys = seg && seg.ownTextures;
+        if (!keys || !keys.length) return;
+        seg.ownTextures = null;
+        for (const key of keys) {
+            if (!this.textures.exists(key)) continue;
+            // Shared with a level still on screen? Then it is not ours to free.
+            if (this.segments.some((s) => s.ownTextures && s.ownTextures.includes(key))) continue;
+            if (CONFIG.DEBUG_PERF) {
+                const src = this.textures.get(key).getSourceImage();
+                console.log(`[perf] freed texture "${key}" — ` +
+                    `${(src.width * src.height * 4 / 1048576).toFixed(1)}MB of GPU memory`);
+            }
+            this.textures.remove(key);
+        }
     }
 
     // A white lattice on the TILE boundaries, for checking alignment — where the
@@ -5326,6 +5356,7 @@ console.log(
                 if (o.list) for (const ch of o.list) this.tweens.killTweensOf(ch);
                 o.destroy();
             }
+            this._releaseTextures(seg);
             if (CONFIG.DEBUG_PERF) {
                 console.log(`[perf] released a level; live=${this.segments.length} ` +
                     `objects=${this.children.list.length} ` +

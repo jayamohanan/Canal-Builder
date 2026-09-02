@@ -1525,6 +1525,19 @@ var CONFIG = {
         // machine begins on the bank and level 1's first canal tile lands on the
         // lake's top row — the canal is joined to the lake, not merely near it.
         LAKE: {
+            // The two lake images are the most expensive textures in the game —
+            // 22x7 tiles each, dry and flooded, about 19MB of GPU memory between
+            // them — and they are on screen only at the very start. The world
+            // scrolls one way and the camera is not the player's to move, so the
+            // moment the lake passes below the view it can never be seen again:
+            // its textures are freed. Everything else about a reaped level only
+            // destroys SPRITES, which leaves the texture uploaded for the whole
+            // session; this actually hands the memory back.
+            //
+            // Safe because the one path that could rebuild the lake — a resize,
+            // which restarts the scene from level 0 — re-runs preload and fetches
+            // it again from cache.
+            RELEASE: true,
             ENABLED: true,
             DRY:   'graphics/pond.webp',      // basin: bank and floor
             WATER: 'graphics/pond-water.webp',// the water only, drawn over it
