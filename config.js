@@ -547,11 +547,25 @@ var CONFIG = {
                 REVEAL_STAGE: 5,             // 0 = always visible
                 FADE_MS: 450,
                 RISE_TILES: 0.15,            // small settle as it fades in
+
+                // ── Grazing ─────────────────────────────────────────────
+                // A prop with an EAT image alternates between the two. Two
+                // drawings are plenty; what sells it is the TIMING, so the two
+                // holds are wildly uneven and both are re-rolled every cycle. A
+                // steady flip between two frames reads as a mechanism, and a
+                // herd flipping together reads as one animation played nine
+                // times — so each animal also starts at its own point in the
+                // cycle. Same reasoning as the crops' growMul.
+                GRAZE: {
+                    ENABLED: true,
+                    DOWN_MS: [4200, 9500],   // head down, cropping grass
+                    UP_MS:   [900,  2300],   // head up, looking around — rarer
+                },
                 ITEMS: {
-                    cow_n: { FILE: 'graphics/animals/cows/cow_n.webp', SIZE: 2.1, ORIGIN: [0.5, 0], FACE: [ 0, -1] },
-                    cow_s: { FILE: 'graphics/animals/cows/cow_s.webp', SIZE: 2.1, ORIGIN: [0.5, 1], FACE: [ 0,  1] },
-                    cow_e: { FILE: 'graphics/animals/cows/cow_e.webp', SIZE: 1.4, ORIGIN: [1,   1], FACE: [ 1,  0] },
-                    cow_w: { FILE: 'graphics/animals/cows/cow_e.webp', SIZE: 1.4, ORIGIN: [0,   1], FACE: [-1,  0], FLIP: true },
+                    cow_n: { FILE: 'graphics/animals/cows/cow_n_idle.png', EAT: 'graphics/animals/cows/cow_n_eat.png', SIZE: 2.0,  ORIGIN: [0.5, 0], FACE: [ 0, -1] },
+                    cow_s: { FILE: 'graphics/animals/cows/cow_s_idle.png', EAT: 'graphics/animals/cows/cow_s_eat.png', SIZE: 2.0,  ORIGIN: [0.5, 1], FACE: [ 0,  1] },
+                    cow_e: { FILE: 'graphics/animals/cows/cow_e_idle.png', EAT: 'graphics/animals/cows/cow_e_eat.png', SIZE: 1.32, ORIGIN: [1,   1], FACE: [ 1,  0] },
+                    cow_w: { FILE: 'graphics/animals/cows/cow_e_idle.png', EAT: 'graphics/animals/cows/cow_e_eat.png', SIZE: 1.32, ORIGIN: [0,   1], FACE: [-1,  0], FLIP: true },
                 },
             },
             POND_LAYER: 'pond',            // marker layer the ponds are painted on
@@ -865,6 +879,20 @@ var CONFIG = {
                 ORIGIN_X: 0.5,
                 ORIGIN_Y: 0.25,
                 Y:     0,        // nudge off the boundary line, in tiles
+                // ── Mid-level dams ──────────────────────────────────────
+                // A point named MID_MARKER on the props layer is a place to dam
+                // the main canal PART WAY up, so the branches below it fill
+                // while the machine is still working above. Without it a level's
+                // whole field waits on the last tile of the dig, which is a long
+                // time to look at dry soil on the taller maps.
+                //
+                // CLEAR_TILES is why it does not appear the instant the blade
+                // draws level with it: the rig is longer than its cut line, so a
+                // wall dropped there would land on top of the machine. It waits
+                // until the cut has run this far past, which is roughly the
+                // length of the rig behind the blade.
+                MID_MARKER:  'block',
+                CLEAR_TILES: 4,
                 DEPTH: 3.09,     // UNDER the canal's water (3.10). The wall is
                                  // set into the channel, not laid across the top
                                  // of it, so the water rises against its face and
@@ -1061,7 +1089,7 @@ var CONFIG = {
             // nothing softens. The stem is anchored at the plant's base, so the
             // extra size grows UP and OUT from where it is rooted rather than
             // moving the plant.
-            CROP_STAGE_SCALE: [1, 1, 1, 1.5, 1.5],
+            CROP_STAGE_SCALE: [1, 1, 1, 1.3, 1.3],
             CROP_STAGES:  5,
             CROP_GROW_MS: 2000,     // time between growth stages
             CROP_WET:     0.15,     // canal-cell fill fraction that counts as "watered"
@@ -1109,6 +1137,27 @@ var CONFIG = {
             // Sprites are bottom-anchored, so this reads as growing upward.
             CROP_POP_FROM: 0.9,     // starting y-scale fraction (1 = no animation)
             CROP_POP_MS:   260,     // spring duration
+            // ── Brushing past ───────────────────────────────────────────
+            // A plant rocks when the farmer walks through its cell. It is a
+            // damped spring on the sprite's ANGLE, and it is close to free:
+            // rotation is recomputed every frame anyway, unlike depth, which
+            // dirties the whole display list and forces a re-sort.
+            //
+            // It pivots at the stem base because that is already the sprite's
+            // origin (CROP_STEM_Y), so the plant bends where it meets the soil
+            // instead of spinning about its middle.
+            //
+            // Tuned in real units rather than raw spring constants: HZ is how
+            // fast it wobbles, DAMP is how quickly that dies away (below 1 it
+            // oscillates; at 1 it just returns), and LEAN_DEG is how far it goes
+            // over on the first swing.
+            CROP_SWAY: {
+                ENABLED:   true,
+                LEAN_DEG:  11,      // peak lean at the moment of contact
+                HZ:        2.2,     // wobbles per second
+                DAMP:      0.32,    // 0 = rings forever, 1 = no overshoot
+                MIN_STAGE: 2,       // never a seed — it is a dot on the soil
+            },
             // Where the plant's STEM meets the ground, as a fraction of the
             // frame height. Not 1: the art carries a blurred elliptical shadow
             // below the stem, so the stem base sits 230px down a 256px frame

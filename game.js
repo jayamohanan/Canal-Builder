@@ -482,7 +482,9 @@ class GameScene extends Phaser.Scene {
                 // Keyed by FILE, so two facings sharing one drawing — east and
                 // west are the same cow mirrored — load and cost it once.
                 for (const it of Object.values(PR.ITEMS || {})) {
-                    if (it && it.FILE) this.load.image(it.FILE, it.FILE);
+                    if (!it) continue;
+                    if (it.FILE) this.load.image(it.FILE, it.FILE);
+                    if (it.EAT)  this.load.image(it.EAT,  it.EAT);
                 }
             }
             const FN = TM.FENCE || {};
@@ -1762,11 +1764,11 @@ console.log(
     // two-tile canal, exactly the space two 128px canal frames occupy, so its
     // pixel size divided by the sheet's frame size times the on-screen tile
     // keeps it locked to the canal at any tile size.
-    _placeBlock(tn) {
+    _placeBlock(tn, atY) {
         const TM = CONFIG.ROAD.TILEMAP, BK = TM.BLOCK || {};
-        if (BK.ENABLED === false || !this.textures.exists('block')) return;
+        if (BK.ENABLED === false || !this.textures.exists('block')) return null;
         const F = tn && tn.flood;
-        if (!F || !F.g) return;
+        if (!F || !F.g) return null;
         const g = F.g;
         const src = this.textures.get('block').getSourceImage();
         const k   = g.tile / (TM.FRAME || 128);
@@ -1778,13 +1780,17 @@ console.log(
         // applied about the pivot that will be used.
         const img = this._addB(this.add.image(
                 g.left + g.mainRightCol * g.tile,     // the seam between the main columns
-                tn.exitY + g.tile * (BK.Y || 0),      // the level's far edge
+                // The level's far edge by default; a mid-level dam names its own.
+                (atY !== undefined ? atY : tn.exitY) + g.tile * (BK.Y || 0),
                 'block')
             .setOrigin(BK.ORIGIN_X !== undefined ? BK.ORIGIN_X : 0.5,
                        BK.ORIGIN_Y !== undefined ? BK.ORIGIN_Y : 0.18)
             .setDisplaySize(src.width * k, src.height * k)
             .setDepth(BK.DEPTH !== undefined ? BK.DEPTH : 3.11), F.seg);
-        if (F.seg) F.seg.block = img;
+        // The level's own wall is the one _removeBlockBelow looks for, so a
+        // mid-level dam must NOT take its place — it is lifted by breakthrough
+        // instead, and only the boundary wall survives into the next level.
+        if (F.seg && atY === undefined) F.seg.block = img;
 
         // DROP IT IN rather than blinking it into existence. It starts a little
         // high and a little larger — larger reads as nearer the camera — then
@@ -1811,6 +1817,79 @@ console.log(
                 ease:     BK.DROP_EASE || 'Back.easeIn',
             });
         }
+        return img;
+    }
+
+    // Take a wall back out of the channel. The placement run backwards: it rises
+    // the distance it fell and swells by the same amount, so it withdraws toward
+    // the camera exactly as it descended away from it. Reusing the drop's own
+    // numbers means the two can never drift apart.
+    _liftBlock(img) {
+        if (!img || !img.scene) return;
+        const BK = CONFIG.ROAD.TILEMAP.BLOCK || {};
+        const ms = BK.REMOVE_MS !== undefined ? BK.REMOVE_MS : 280;
+        if (ms <= 0) { img.destroy(); return; }
+        const tile = this.tileGrid ? this.tileGrid.tile : 0;
+        this.tweens.add({
+            targets: img,
+            y:       img.y - (BK.DROP_RISE  !== undefined ? BK.DROP_RISE  : 1.3) * tile,
+            scaleX:  img.scaleX * (BK.DROP_SCALE !== undefined ? BK.DROP_SCALE : 1.45),
+            scaleY:  img.scaleY * (BK.DROP_SCALE !== undefined ? BK.DROP_SCALE : 1.45),
+            alpha:   0,
+            duration: ms,
+            ease:    BK.REMOVE_EASE || 'Back.easeOut',
+            onComplete: () => img.destroy(),
+        });
+    }
+
+    // Every mid-level dam this level raised, taken out at breakthrough — the
+    // water is about to run the whole length, and they are what was holding it.
+    _liftMidBlocks(tn) {
+        const seg = tn && tn.flood && tn.flood.seg;
+        if (!seg || !seg.midBlocks) return;
+        for (const d of seg.midBlocks) this._liftBlock(d.img);
+        seg.midBlocks = null;
+    }
+
+    // Mid-level dams: where they stand, and when.
+    //
+    // A dam's marker is a point on the props layer, so it carries a fractional
+    // row. `up` is its height above the dig's start line, which is the same
+    // measure the waterline and the blade both use — so all three compare
+    // directly with no conversion.
+    _buildDams(tn) {
+        const BK = CONFIG.ROAD.TILEMAP.BLOCK || {};
+        const F = tn && tn.flood, g = F && F.g;
+        if (!g || !g.props || BK.ENABLED === false) return [];
+        const name  = BK.MID_MARKER || 'block';
+        const clear = BK.CLEAR_TILES !== undefined ? BK.CLEAR_TILES : 4;
+        const dams = [];
+        for (const o of g.props) {
+            if (o.name !== name) continue;
+            const up = (g.rows - o.row) * g.tile;      // height above the bottom
+            if (up <= 0 || up >= tn.len) continue;     // the level's own ends cover these
+            dams.push({ up, at: up + clear * g.tile, img: null, done: false });
+        }
+        // Lowest first, so releases happen in the order the machine reaches them.
+        dams.sort((a, b) => a.up - b.up);
+        return dams;
+    }
+
+    // Has the cut run far enough past a dam to drop it in? If so, raise the wall
+    // and let the water up to it — the branches below fill while the machine
+    // carries on above, instead of the whole field waiting on the last tile.
+    _checkDams(tn) {
+        if (!tn.dams || !tn.dams.length) return;
+        for (const d of tn.dams) {
+            if (d.done || tn.progressPx < d.at) continue;
+            d.done = true;
+            d.img  = this._placeBlock(tn, tn.exitY + tn.len - d.up);
+            const seg = tn.flood && tn.flood.seg;
+            if (seg && d.img) (seg.midBlocks || (seg.midBlocks = [])).push(d);
+            // Highest dam wins: the water is held at whichever is furthest up,
+            // so passing a second one lets it on rather than pulling it back.
+            tn.releaseTo = Math.max(tn.releaseTo || 0, d.up);
+        }
     }
 
     // Pull the wall out of the level BELOW this one, immediately before this
@@ -1830,30 +1909,7 @@ console.log(
         const img = below && below.block;
         if (!img || !img.scene) return;
         below.block = null;
-        const BK = CONFIG.ROAD.TILEMAP.BLOCK || {};
-        const ms = BK.REMOVE_MS !== undefined ? BK.REMOVE_MS : 280;
-        if (ms <= 0) { img.destroy(); return; }
-        // LIFTED OUT — the placement run backwards. It rises the same distance
-        // it fell and swells by the same amount, so it withdraws toward the
-        // camera exactly as it descended away from it, and fades as it goes.
-        // Reusing the drop's own numbers means the two can never drift apart:
-        // whatever height and swell make the placement read, the removal
-        // inherits.
-        const tile  = this.tileGrid ? this.tileGrid.tile : 0;
-        const rise  = (BK.DROP_RISE  !== undefined ? BK.DROP_RISE  : 1.3) * tile;
-        const grow  = BK.DROP_SCALE  !== undefined ? BK.DROP_SCALE  : 1.45;
-        this.tweens.add({
-            targets: img,
-            y:       img.y - rise,
-            scaleX:  img.scaleX * grow,
-            scaleY:  img.scaleY * grow,
-            alpha:   0,
-            duration: ms,
-            // easeOut, the mirror of the drop's easeIn: it leaves quickly and
-            // slows as it goes, where the drop gathered speed on the way down.
-            ease:    BK.REMOVE_EASE || 'Back.easeOut',
-            onComplete: () => img.destroy(),
-        });
+        this._liftBlock(img);
     }
 
     // A white lattice on the TILE boundaries, for checking alignment — where the
@@ -2018,6 +2074,25 @@ console.log(
             // it two tiles further away than it stands.
             spr.setDepth(this._yDepth(y + (1 - o0[1]) * h));
 
+            // Anything with a second drawing grazes between the two. Enrolled
+            // even while it is still hidden: it should be mid-cycle by the time
+            // it fades in, not caught standing to attention.
+            if (it.EAT && (P.GRAZE || {}).ENABLED !== false && this.textures.exists(it.EAT)) {
+                const G = P.GRAZE || {};
+                const down = Math.random() < 0.75;      // mostly already eating
+                (seg.graze || (seg.graze = [])).push({
+                    spr, w, h, down,
+                    idle: it.FILE, eat: it.EAT,
+                    // Started PART WAY through, not at zero, so a field of cows
+                    // is scattered across the cycle from the first frame.
+                    t: Math.random() * this._rndRange(down ? (G.DOWN_MS || [4200, 9500])
+                                                           : (G.UP_MS   || [900,  2300])),
+                    next: this._rndRange(down ? (G.DOWN_MS || [4200, 9500])
+                                              : (G.UP_MS   || [900,  2300])),
+                });
+                if (down) spr.setTexture(it.EAT).setDisplaySize(w, h);
+            }
+
             // Does it have to wait for its field? The point is placed ON THE
             // BOUNDARY it faces, so half a tile in the FACE direction is inside
             // the tile it is looking at — the same step for all four facings.
@@ -2035,6 +2110,36 @@ console.log(
             if (!watch || watch.stage >= need) continue;
             spr.setAlpha(0).setY(y - g.tile * (P.RISE_TILES || 0));
             (seg.propWait || (seg.propWait = [])).push({ spr, watch, y });
+        }
+    }
+
+    // Swap grazing props between their two drawings.
+    //
+    // Uneven by design: head down for many seconds, up for one or two, and both
+    // holds re-rolled every time so the rhythm never becomes a rhythm. Two
+    // frames are enough — it is the irregularity that reads as an animal, not
+    // the frame count.
+    //
+    // setDisplaySize is re-applied after every swap because setTexture resets a
+    // sprite to the new image's natural size, and the eat pose is a different
+    // shape to the idle one.
+    _updateGraze(dtMs) {
+        const P = CONFIG.ROAD.TILEMAP.PROPS || {}, G = P.GRAZE || {};
+        if (P.ENABLED === false || G.ENABLED === false) return;
+        const down = G.DOWN_MS || [4200, 9500], up = G.UP_MS || [900, 2300];
+        for (const seg of this.segments || []) {
+            const list = seg.graze;
+            if (!list || !list.length) continue;
+            for (let i = list.length - 1; i >= 0; i--) {
+                const a = list[i];
+                if (!a.spr || !a.spr.scene) { list.splice(i, 1); continue; }
+                a.t += dtMs;
+                if (a.t < a.next) continue;
+                a.t -= a.next;
+                a.down = !a.down;
+                a.next = this._rndRange(a.down ? down : up);
+                a.spr.setTexture(a.down ? a.eat : a.idle).setDisplaySize(a.w, a.h);
+            }
         }
     }
 
@@ -2283,8 +2388,95 @@ console.log(
                 // has none, so he keeps whatever way he was already facing
                 // rather than snapping to a default.
                 if (Math.abs(dx) > f.g.tile * 0.05) f.spr.setFlipX(dx < 0);
+                // Rock whatever he has just walked INTO. On cell entry, not on
+                // proximity: he crosses crops constantly, and a plant that rocks
+                // the whole time he is near it reads as noise rather than as
+                // something he did.
+                const cc = Math.floor((f.spr.x - f.g.left) / f.g.tile);
+                const rr = Math.floor((f.spr.y - f.gTop)   / f.g.tile);
+                const cell = cc + ',' + rr;
+                if (cell !== f.cell) {
+                    f.cell = cell;
+                    this._brushCrop(seg, cell, dx);
+                }
             }
             this._cutFarmerDepth(f);
+        }
+    }
+
+    // Knock the plant in `cell` sideways, if there is one and it is grown enough
+    // to show it. `dx` is how the farmer was travelling, so it falls over the way
+    // he pushed it; a straight vertical walk has no sideways component, so those
+    // fall back to the plant's own fixed direction rather than all picking the
+    // same side.
+    _brushCrop(seg, cell, dx) {
+        const S = (CONFIG.ROAD.TILEMAP.CROP_SWAY) || {};
+        if (S.ENABLED === false) return;
+        const cr = seg.cropAt && seg.cropAt.get(cell);
+        if (!cr || cr.stage < (S.MIN_STAGE !== undefined ? S.MIN_STAGE : 2)) return;
+
+        const w   = 2 * Math.PI * (S.HZ || 2.2);
+        const dir = Math.abs(dx) > 1e-3 ? Math.sign(dx)
+                                        : (this._cellHash(cr.col, cr.row, 7) < 0.5 ? -1 : 1);
+        // Velocity, not position: the plant is struck rather than placed, so it
+        // swings out on its own and the first swing is the biggest.
+        //
+        // Scaled so LEAN_DEG is the angle actually REACHED. A struck spring only
+        // gets a fraction of the way its opening speed suggests, because damping
+        // is already pulling it back before it tops out — at DAMP 0.32 that is
+        // barely half — so handing the knob straight to velocity would make it
+        // read as a lie the moment anyone measured it.
+        cr.swayV += (S.LEAN_DEG !== undefined ? S.LEAN_DEG : 11) / this._swayPeak(w) * dir;
+        if (!cr.swaying) {                       // one entry per plant, however
+            cr.swaying = true;                   // many times it is brushed
+            (seg.sway || (seg.sway = [])).push(cr);
+        }
+    }
+
+    // How far a plant of this spring actually swings per unit of opening speed.
+    // Fixed by DAMP alone, so it is worked out once and kept.
+    _swayPeak(w) {
+        if (this._swayK) return this._swayK;
+        const S = (CONFIG.ROAD.TILEMAP.CROP_SWAY) || {};
+        const z  = Math.min(0.99, Math.max(0, S.DAMP !== undefined ? S.DAMP : 0.32));
+        const rt = Math.sqrt(1 - z * z);
+        const wd = w * rt;                       // damped frequency
+        const tp = Math.atan2(rt, z) / wd;       // when the first swing tops out
+        return (this._swayK = Math.exp(-z * w * tp) * Math.sin(wd * tp) / wd);
+    }
+
+    // Let the brushed plants settle. A damped spring integrated by hand rather
+    // than a tween per contact: a tween describes a path to a destination, and
+    // this is an oscillation that has to absorb a second knock mid-swing without
+    // restarting. It also allocates nothing.
+    //
+    // Only plants actually moving are visited — each drops out the moment it
+    // comes to rest — so the usual cost of this pass is an empty array.
+    _updateSway(dtMs) {
+        const S = (CONFIG.ROAD.TILEMAP.CROP_SWAY) || {};
+        if (S.ENABLED === false) return;
+        const dt = Math.min(dtMs, 100) / 1000;
+        if (dt <= 0) return;
+        const w = 2 * Math.PI * (S.HZ || 2.2);
+        const k = w * w;                                  // stiffness
+        const d = 2 * (S.DAMP !== undefined ? S.DAMP : 0.32) * w;   // damping
+
+        for (const seg of this.segments || []) {
+            const list = seg.sway;
+            if (!list || !list.length) continue;
+            for (let i = list.length - 1; i >= 0; i--) {
+                const cr = list[i];
+                if (!cr.sprite || !cr.sprite.scene) { list.splice(i, 1); cr.swaying = false; continue; }
+                cr.swayV += (-k * cr.sway - d * cr.swayV) * dt;
+                cr.sway  += cr.swayV * dt;
+                // Rest, not zero-crossing: it has to be both near upright AND
+                // slow, or it would be cut off in the middle of a swing.
+                if (Math.abs(cr.sway) < 0.05 && Math.abs(cr.swayV) < 0.5) {
+                    cr.sway = 0; cr.swayV = 0; cr.swaying = false;
+                    list.splice(i, 1);
+                }
+                cr.sprite.setAngle(cr.baseAngle + cr.sway);
+            }
         }
     }
 
@@ -2758,7 +2950,12 @@ console.log(
                 // Mirroring is safe here: the art's shadow sits centred under the
                 // stem, so a flipped plant is not lit from the wrong side.
                 if (V.FLIP !== false && h2 < 0.5) spr.setFlipX(true);
-                if (V.ROT_DEG) spr.setAngle((h3 - 0.5) * 2 * V.ROT_DEG);
+                // Each plant leans a little, so the field is not a grid of
+                // clones. Kept on the record too: a sway has to settle back to
+                // THIS angle, not to zero, or every plant the farmer brushes
+                // would quietly straighten and the field would comb itself flat.
+                const baseAngle = V.ROT_DEG ? (h3 - 0.5) * 2 * V.ROT_DEG : 0;
+                if (baseAngle) spr.setAngle(baseAngle);
                 // `sc` is cached per crop so the stage-change spring knows the
                 // full y-scale to settle back to. Stage 1 spawns hard, unscaled.
                 // `ground` is this cell's ground tile — never changed itself, but
@@ -2768,6 +2965,7 @@ console.log(
                 // silhouette repeat — so every plant runs a little fast or slow.
                 const rec = { watch: best, stage: 1, timer: 0, sprite: spr, sc: psc, crop, edge,
                              col: c, row: r,
+                             baseAngle, sway: 0, swayV: 0,
                              tilled, tilledOff: ev.off, tilledAngle: ev.angle,
                              growMul: 1 + (this._cellHash(c, r, 4) - 0.5) * 2 * (V.GROW_VAR || 0),
                              ground: (seg.groundSprites || [])[r * g.cols + c] || null,
@@ -3806,6 +4004,7 @@ console.log(
             wet: 0,                          // how far the water has actually come
             bore, maskShape, foam: foamGfx, crack, crackW: beltW,
             flood: this._buildFlood(seg, band),   // canal water (tilemap only)
+            dams: null, releaseTo: 0,             // mid-level walls (filled below)
             seg: seg || null,
             // A level built while the one below it is still coming in stays
             // dormant — no charge banks, no digging — until that field has
@@ -3826,6 +4025,9 @@ console.log(
                 strokeThickness: Math.max(1, Math.round((PL.STROKE_W || 5) * sL)),
             }).setOrigin(1, 0.5).setDepth(PL.DEPTH !== undefined ? PL.DEPTH : 3.2), seg);
         }
+        // Built after the object exists: a dam is positioned against the dig's
+        // own length and its flood grid, both of which are on the tunnel.
+        this.tunnel.dams = this._buildDams(this.tunnel);
         this.tunnel.lilies = this._buildLilies(seg, band, this.tunnel);
         if (seg) seg.tunnel = this.tunnel;
     }
@@ -4374,6 +4576,10 @@ console.log(
             return;
         }
 
+        // Has the cut cleared a mid-level dam? Checked before the water moves,
+        // so the wall is standing by the time the release it triggers is stepped.
+        this._checkDams(tn);
+
         // The water has its own life: it runs BEFORE the drilling branch below,
         // so it keeps creeping up the cut and rippling while the blade rests.
         this._advanceWater(tn, dt, time);
@@ -4533,7 +4739,13 @@ console.log(
         // `flooding` is set at breakthrough and is the only thing that lifts the
         // hold. Everything downstream — branches, crops, ponds, foam, the bank
         // streaks — keys off the waterline, so freezing it here is all it takes.
-        if (WA.AFTER_DIG && !tn.flooding) return;
+        if (WA.AFTER_DIG && !tn.flooding) {
+            // A MID-LEVEL DAM is standing: the hold is partial, not total. The
+            // water is let up to the wall and stops there, so everything that
+            // branches off below it fills while the machine works on above.
+            if (!(tn.releaseTo > tn.wet)) return;
+            limit = tn.releaseTo;
+        }
         const lag = tn.bladeLen * (WA.LAG !== undefined ? WA.LAG : 1);
         const target = limit !== undefined
             ? limit
@@ -4767,6 +4979,9 @@ console.log(
         // so pulling it is what the water flows through.
         this._placeBlock(tn);
         this._removeBlockBelow(tn);
+        // Any mid-level dam comes out too — the water is about to run the whole
+        // length and they are exactly what was holding it back.
+        this._liftMidBlocks(tn);
 
         // No timed flood: the water just keeps flowing at the speed it was
         // already flowing at. The blade is simply no longer holding it back,
@@ -6537,6 +6752,8 @@ console.log(
         this._updateWetGround();
         this._updateFarmers(delta || 16);
         this._updateProps(delta || 16);
+        this._updateSway(delta || 16);
+        this._updateGraze(delta || 16);
     }
 }
 

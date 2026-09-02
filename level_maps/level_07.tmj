@@ -106,6 +106,19 @@
                 }, 
                 {
                  "height":0,
+                 "id":11,
+                 "name":"block",
+                 "opacity":1,
+                 "point":true,
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":0,
+                 "x":1408,
+                 "y":832
+                }, 
+                {
+                 "height":0,
                  "id":8,
                  "name":"cow_s",
                  "opacity":1,
@@ -215,7 +228,7 @@
          "y":0
         }],
  "nextlayerid":7,
- "nextobjectid":11,
+ "nextobjectid":12,
  "orientation":"orthogonal",
  "renderorder":"right-down",
  "tiledversion":"1.12.2",
