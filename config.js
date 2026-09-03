@@ -1034,6 +1034,17 @@ var CONFIG = {
                 FADE_MS: 450,       // cross-fade into the wet tile. 0 = a hard
                                     // swap, which pops: a whole neighbourhood of
                                     // tiles can cross AT on the same frame
+                // A whole row of plants shares one canal cell, so without this
+                // they all take their splash on the SAME FRAME — a rank of
+                // identical animations in lockstep, which reads as a mechanism
+                // rather than as water spreading through soil. Each plant waits
+                // its own moment inside this window first.
+                //
+                // The wait comes from the CELL'S HASH, not Math.random(): the
+                // scene is rebuilt on every resize, and a true random would deal
+                // the field a different order each time. This way a plant always
+                // takes its turn at the same point.
+                STAGGER_MS: [0, 700],
             },
 
             // ── Crops ───────────────────────────────────────────────────────
@@ -1059,25 +1070,63 @@ var CONFIG = {
             // Every sheet is one row of CROP_STAGES frames of equal width
             // (640x256 = five 128x256 stages, as they all are today).
             CROP_CYCLE: [
-                'grass',
                 'tomato',
-                'grass',
+                'carrot',
                 'mango',
-                
-                'green_bean',
+                'green-beans',
+                'corn',
                 'hops',
-                'grape_vine',
-                'grass2',
-                
-                
-                
+                'egg-plant',
+                'melon',
                 'grape',
-                
             ],
-            CROP_DIR: 'graphics/crops/',
-            CROP_EXT: '.webp',   // every crop sheet is a webp, so the list above
-                                 // is plain NAMES. An entry may still spell out
-                                 // its own extension if one ever differs.
+            CROP_DIR: 'graphics/crops1/',
+            CROP_EXT: '.png',    // sheets are PNG until the art is settled; the
+                                 // list above is plain NAMES. An entry may still
+                                 // spell out its own extension if one differs.
+
+            // ── How a sheet is read ─────────────────────────────────────────
+            // Every frame is CROP_FRAME_W wide by the sheet's full height, so the
+            // NUMBER of frames varies per crop and is counted from the image
+            // rather than assumed. What those frames mean depends on the crop's
+            // class:
+            //
+            //   normal   [growth x4][fruit]
+            //            The fruit is its OWN frame now, not baked into a copy of
+            //            stage 4. At the last stage it is drawn OVER the stage-4
+            //            body instead of replacing it — which is what makes a
+            //            harvest possible later: the fruit can be taken away and
+            //            leave the plant standing.
+            //
+            //   trellis  [growth][fruit][support]      hops, green-beans
+            //            The support is the LAST frame and is drawn BEHIND the
+            //            plant, once, and never touched again. It used to be
+            //            baked into every stage, so the stakes sprang and
+            //            stretched along with the plant at each stage change —
+            //            a fixed structure has no business doing that.
+            //
+            //   root     [growth x5][harvest]          carrot
+            //            Only the leaves show while it grows; the root is buried.
+            //            The extra frame is the vegetable ALONE, for showing what
+            //            was pulled up. It is never drawn during growth.
+            //
+            // Growth frames are whatever is left after the class's extra frames
+            // are taken off the end, so a crop with five distinct bodies and one
+            // with four both work: the last stage simply reuses the last body it
+            // has. Adding a beetroot means dropping in a sheet and tagging it
+            // 'root' — no code, and no per-crop frame table.
+            CROP_FRAME_W: 128,
+            CROP_CLASS: {
+                'hops':        'trellis',
+                'green-beans': 'trellis',
+                'carrot':      'root',
+                // anything unlisted is 'normal'
+            },
+            // Where the extra pieces sit against the plant's own depth. The
+            // support must be behind it and the fruit in front, and both are
+            // hairline offsets so nothing else in the depth band is disturbed.
+            CROP_SUPPORT_BIAS: -0.0003,
+            CROP_FRUIT_BIAS:    0.0003,
             CROP:         'tomato.png',  // fallback when CROP_CYCLE is empty
             // How big each stage stands, as a multiple of one tile. A mature
             // plant confined to its own cell — leaves stopping dead on the tile

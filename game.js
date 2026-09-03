@@ -1586,19 +1586,37 @@ console.log(
     // hands it over. A patch that has turned never turns back, so it leaves the
     // pending list: the per-frame scan shrinks to the still-dry frontier instead
     // of re-testing the whole field.
-    _updateWetGround() {
+    _updateWetGround(dtMs) {
         const TM = CONFIG.ROAD.TILEMAP, W = TM.GROUND_WET || {};
         if (W.ENABLED === false || TM.TERRAIN_GROUND_WET === undefined) return;
-        const at = W.AT !== undefined ? W.AT : 0.15;
+        const at  = W.AT !== undefined ? W.AT : 0.15;
+        const stg = W.STAGGER_MS || [0, 0];
+        const dt  = Math.min(dtMs || 16, 100);
         for (const seg of this.segments) {
             const list = seg.wetGround;
             if (!list || !list.length) continue;
             // Backwards, so the swap-remove below can't skip an entry.
             for (let i = list.length - 1; i >= 0; i--) {
                 const e = list[i];
+                // Already waiting its turn: the canal reached it, and now it is
+                // counting down its own offset so the row does not water as one.
+                if (e.due !== undefined) {
+                    e.due -= dt;
+                    if (e.due > 0) continue;
+                    list[i] = list[list.length - 1]; list.pop();
+                    if (!this._playPlantWater(seg, e)) this._dampenTile(seg, e);
+                    continue;
+                }
                 let on = false;
                 for (const cc of e.watch) if (cc.progress > at) { on = true; break; }
                 if (!on) continue;
+                // Take its turn from the cell's own hash — same plant, same
+                // moment, every rebuild.
+                const span = (stg[1] || 0) - (stg[0] || 0);
+                if (span > 0 || stg[0]) {
+                    e.due = (stg[0] || 0) + span * this._cellHash(e.cr.col, e.cr.row, 9);
+                    if (e.due > 0) continue;
+                }
                 list[i] = list[list.length - 1]; list.pop();
                 // The splash owns the changeover from here: it turns the soil
                 // partway through itself. With no splash art the patch darkens
@@ -2506,6 +2524,9 @@ console.log(
                     list.splice(i, 1);
                 }
                 cr.sprite.setAngle(cr.baseAngle + cr.sway);
+                // The fruit hangs on the plant, so it leans with it. The support
+                // does not — it is a stake in the ground, not part of the plant.
+                if (cr.fruit) cr.fruit.setAngle(cr.baseAngle + cr.sway);
             }
         }
     }
@@ -2901,9 +2922,13 @@ console.log(
         const key    = `${crop}_stages`;
         if (!this.textures.exists(key)) {
             const img = this.textures.get(`${crop}_src`).getSourceImage();
+            // Sliced at a FIXED frame width, not width/stages: sheets no longer
+            // all hold the same number of frames, so the count is read off the
+            // image instead of assumed.
             this.textures.addSpriteSheet(key, img,
-                { frameWidth: img.width / stages, frameHeight: img.height });
+                { frameWidth: TM.CROP_FRAME_W || 128, frameHeight: img.height });
         }
+        const lay = this._cropLayout(crop, key);
         const sc    = g.tile / this.textures.getFrame(key, 0).width;   // 128 → one cell
         // Origin is the stem base, not the frame bottom — the art hangs a
         // shadow ellipse below the stem, and it is the stem that must land on
@@ -2973,6 +2998,20 @@ console.log(
                 const h3    = this._cellHash(c, r, 3);
                 const jit   = 1 + (h1 - 0.5) * 2 * (V.SCALE_VAR || 0);
                 const psc   = sc * jit;               // this plant's own base size
+                const cy    = gTop + (r + 0.5) * g.tile;
+                // THE SUPPORT GOES IN FIRST and is then left alone — no stage
+                // frame, no growth spring, no sway. It is a fixed structure the
+                // plant climbs, and the whole reason it was pulled out of the
+                // stage art is that baking it in made the stakes stretch and
+                // spring every time the plant grew.
+                let support = null;
+                if (lay.support !== null) {
+                    support = this._addB(this.add.image(
+                            g.left + (c + 0.5) * g.tile, cy, key, lay.support)
+                        .setOrigin(0.5, stemY).setScale(psc)
+                        .setDepth(this._yDepth(cy, TM.CROP_SUPPORT_BIAS !== undefined
+                                                 ? TM.CROP_SUPPORT_BIAS : -0.0003)), seg);
+                }
                 const spr = this._addB(this.add.image(
                         g.left + (c + 0.5) * g.tile, gTop + (r + 0.5) * g.tile, key, 0)
                     .setOrigin(0.5, stemY).setScale(psc)
@@ -2996,6 +3035,7 @@ console.log(
                 const rec = { watch: best, stage: 1, timer: 0, sprite: spr, sc: psc, crop, edge,
                              col: c, row: r,
                              baseAngle, sway: 0, swayV: 0,
+                             lay, support, fruit: null, twF: null,
                              tilled, tilledOff: ev.off, tilledAngle: ev.angle,
                              growMul: 1 + (this._cellHash(c, r, 4) - 0.5) * 2 * (V.GROW_VAR || 0),
                              ground: (seg.groundSprites || [])[r * g.cols + c] || null,
@@ -3004,6 +3044,36 @@ console.log(
                 cropAt.set(c + ',' + r, rec);
             }
         }
+    }
+
+    // What each frame of a crop sheet is for.
+    //
+    // Read from the frame COUNT plus the crop's class, so no per-crop table has
+    // to be kept in step with the art. The class's extra frames come off the end
+    // — support for a trellis, the pulled vegetable for a root — and whatever is
+    // left is the growth run, with the fruit as its last frame unless the crop is
+    // a root (a buried vegetable has no fruit to hang on the plant).
+    //
+    // The growth run may be shorter than CROP_STAGES. That is the point of the
+    // split: a tomato has four bodies and a fruit, so its last stage is the
+    // fourth body WITH the fruit laid over it, while green-beans has five bodies
+    // and a fruit. Both are described by the same two numbers.
+    _cropLayout(crop, key) {
+        const TM = CONFIG.ROAD.TILEMAP;
+        const cls = (TM.CROP_CLASS || {})[crop] || 'normal';
+        const n   = this.textures.get(key).frameTotal - 1;   // __BASE is not a frame
+        let support = null, harvest = null, fruit = null, growth = n;
+        if (cls === 'trellis') { support = --growth; }
+        if (cls === 'root')    { harvest = --growth; }
+        else                   { fruit   = --growth; }       // roots have none
+        return { cls, growth: Math.max(1, growth), fruit, support, harvest };
+    }
+
+    // Which body frame a stage draws. The last stage reuses the last body when a
+    // sheet has fewer bodies than stages — for those crops the change at the top
+    // end is the fruit arriving, not a new plant.
+    _cropFrame(lay, stage) {
+        return Math.max(0, Math.min(stage - 1, lay.growth - 1));
     }
 
     // Every exposed-side combination (0-15) → which of the six drawn edge
@@ -3108,7 +3178,28 @@ console.log(
                 if (st !== cr.stage) {
                     const from = cr.stage;
                     cr.stage = st;
-                    cr.sprite.setFrame(st - 1);         // frame 0 = stage 1
+                    // The body frame may NOT change at the last stage: a crop
+                    // with four bodies and a separate fruit holds its stage-4
+                    // plant and gains the fruit on top. Tracked, because the
+                    // growth spring should fire for a new body and not for a
+                    // body that stayed put.
+                    const bodyF  = this._cropFrame(cr.lay, st);
+                    const newBody = bodyF !== this._cropFrame(cr.lay, from);
+                    cr.sprite.setFrame(bodyF);
+                    // THE FRUIT ARRIVES AT THE LAST STAGE, over the plant rather
+                    // than replacing it — which is the point of splitting it out:
+                    // a harvest can take the fruit away later and leave the plant
+                    // standing. Roots have none; theirs is underground.
+                    if (st >= stages && cr.lay.fruit !== null && !cr.fruit) {
+                        cr.fruit = this._addB(this.add.image(cr.sprite.x, cr.sprite.y,
+                                cr.sprite.texture.key, cr.lay.fruit)
+                            .setOrigin(0.5, cr.sprite.originY)
+                            .setFlipX(cr.sprite.flipX)
+                            .setAngle(cr.sprite.angle)
+                            .setDepth(this._yDepth(cr.sprite.y,
+                                TM.CROP_FRUIT_BIAS !== undefined ? TM.CROP_FRUIT_BIAS : 0.0003)),
+                            seg);
+                    }
                     // Overlays fade in ACROSS a stage, not on arrival: entering a
                     // stage starts the one due at the next. Every crossed stage is
                     // scanned, so a skipped stage (a long frame, or the level
@@ -3127,7 +3218,22 @@ console.log(
                     // so the growth still pops.
                     const target = this._cropScale(cr, st);
                     cr.sprite.scaleX = target;
-                    if (popFr < 1 && popMs > 0) {
+                    // The fruit rides the plant's scale exactly, so the stage
+                    // spread applies to both and they never drift apart.
+                    if (cr.fruit) cr.fruit.scaleX = target;
+                    if (cr.fruit) {
+                        // It springs in on its own whether or not the body moved:
+                        // for most crops the body is unchanged at this stage and
+                        // the fruit appearing IS the growth.
+                        if (cr.twF) cr.twF.stop();
+                        cr.fruit.scaleY = target * popFr;
+                        cr.twF = this.tweens.add({
+                            targets: cr.fruit, scaleY: target,
+                            duration: popMs, ease: 'Back.easeOut',
+                            onComplete: () => { cr.twF = null; },
+                        });
+                    }
+                    if (newBody && popFr < 1 && popMs > 0) {
                         if (cr.tw) cr.tw.stop();        // stage skipped mid-spring
                         cr.sprite.scaleY = target * popFr;
                         cr.tw = this.tweens.add({
@@ -6780,7 +6886,7 @@ console.log(
         this._updateFlood(time);
         // Grow crops as the water reaches them.
         this._updateCrops(time);
-        this._updateWetGround();
+        this._updateWetGround(delta || 16);
         this._updateFarmers(delta || 16);
         this._updateProps(delta || 16);
         this._updateSway(delta || 16);
