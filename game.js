@@ -2907,8 +2907,15 @@ console.log(
     _cropList() {
         const TM = CONFIG.ROAD && CONFIG.ROAD.TILEMAP;
         if (!TM) return [];
-        const cy = TM.CROP_CYCLE;
-        if (Array.isArray(cy) && cy.length) return cy;
+        // DERIVED FROM THE LEVELS, not a list of its own. Every crop any level
+        // names, once — which is exactly the set that has to be loaded, so a
+        // sheet nobody grows is never fetched and a level can never name a crop
+        // that was left out of a parallel list.
+        const out = [];
+        for (const lv of this._levels()) {
+            if (lv && lv.CROP && !out.includes(lv.CROP)) out.push(lv.CROP);
+        }
+        if (out.length) return out;
         return TM.CROP ? [TM.CROP] : [];
     }
 
@@ -2928,13 +2935,15 @@ console.log(
         return `${TM.CROP_DIR || 'graphics/crops/'}${/\.[^.]+$/.test(f) ? f : f + (TM.CROP_EXT || '.webp')}`;
     }
 
-    // Which crop the level being built right now grows. segIndex is the
-    // 0-based level counter, so it wraps: 0 tomato, 1 mango, 2 grape, 3 tomato…
+    // Which crop the level being built right now grows — read off THAT LEVEL,
+    // not counted out of a separate list. The map and the crop are one object
+    // (see levels.js), so they wrap together and cannot drift apart: level 8 is
+    // entry 1's map growing entry 1's crop, every time round.
     _cropForLevel() {
-        const cy = this._cropCycle();
-        if (!cy.length) return null;
-        const i = this.endless ? this.endless.segIndex : 0;
-        return cy[i % cy.length];
+        const def = this._levelDef(this.endless ? this.endless.segIndex : 0);
+        if (def && def.CROP) return String(def.CROP).replace(/\.[^.]+$/, '');
+        const cy = this._cropCycle();          // no level data: fall back
+        return cy.length ? cy[0] : null;
     }
 
     // Plant a crop seed at the centre of every cell marked on the CROPS
@@ -4103,12 +4112,18 @@ console.log(
         // not part of the placement.
         const shdDX = (TR.SHADOW_OFF_X || 0) * tsc;
         const shdDY = (TR.SHADOW_OFF_Y || 0) * tsc;
+        // The shadow FILE is exported smaller than it was authored — it is a
+        // blur, so it holds no detail worth storing at full size. Its export
+        // ratio is divided out here, which keeps every placement number above in
+        // authored space alongside BELT_W and CTRL_W.
+        const shSrc = this.textures.get('trencher_shadow').getSourceImage();
+        const shScale = tsc * ((TR.SHADOW_SRC_W || shSrc.width) / shSrc.width);
         const shadow = this._addB(this.add.image(
                 x - ctrlW / 2 + shdDX,                     // control unit's left edge
                 entryY + ctrlDY - ctrlH / 2 + shdDY,       // and its top edge
                 'trencher_shadow')
             .setOrigin(0, 0)                               // measured from that corner
-            .setScale(tsc).setFlipY(flip)
+            .setScale(shScale).setFlipY(flip)
             .setAlpha(TR.SHADOW_ALPHA !== undefined ? TR.SHADOW_ALPHA : 1)
             .setDepth(TR.DEPTH_SHADOW !== undefined ? TR.DEPTH_SHADOW : 1.522), seg);
         const belt = this._addB(this.add.sprite(x, entryY + beltDY, 'trencher_belt', 0)

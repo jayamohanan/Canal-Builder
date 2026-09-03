@@ -461,27 +461,14 @@ var CONFIG = {
             // BOTTOM of its band and the strip left above it is filled with
             // plain ground, so short levels read as a field with open land
             // beyond it rather than leaving a hole between levels.
-            LEVELS: [
-                { FILE: 'level_maps/level_07.tmj' },
-                { FILE: 'level_maps/level_06.tmj' },
-                { FILE: 'level_maps/level_01.tmj' },
-                { FILE: 'level_maps/level_02.tmj' },
-                { FILE: 'level_maps/level_03.tmj' },
-                { FILE: 'level_maps/level_04.tmj' },
-                { FILE: 'level_maps/level_05.tmj' },
-                // { FILE: 'level_maps/level_02.tmj' },
-                //  {
-                //     FILE: 'level_maps/level_03.tmj',
-                //     // Which pond art this level's markers stand for. The KEY is
-                //     // the marker's position in markers.tsx (see MARKERS), so the
-                //     // same two markers mean different ponds in different levels
-                //     // — paint pond A, decide here which pond it is.
-                //     PONDS: { 1: 'pond1_dry', 2: 'pond2_dry' },
-                // },
-               
-               
-            ],
-            FILE:    'level_maps/level_02.tmj',   // fallback when LEVELS is empty
+            // ── THE RUNNING ORDER ────────────────────────────────────────
+            // Lives in levels.js, where each level binds its MAP to its CROP in
+            // one object. They used to be two lists matched by index that
+            // wrapped at different lengths, so the pairing drifted every time
+            // round and no one could say what a level was without counting
+            // entries in two places.
+            LEVELS: LEVEL_DATA.LEVELS,
+            FILE:   (LEVEL_DATA.LEVELS[0] || {}).FILE,   // fallback map
 
             // ── Markers ──────────────────────────────────────────────────
             // A map that references MARKER_TILESET is painting MARKERS: tiles
@@ -713,34 +700,10 @@ var CONFIG = {
             //
             // Per-tile hardness is this divided by the map's row count. Nothing
             // authors it and nothing stores it.
-            LEVEL_COST: [
-                100, 350, 1800, 8000, 22500,                   // 1-5
-                42000, 15000, 95000, 230000, 600000,           // 6-10
-                1200000, 4500000, 5600000, 11800000, 27900000, // 11-15
-                58500000, 135000000, 225000000, 450000000, 750000000, // 16-20
-                1500000000, 1800000000, 2400000000, 3100000000, 3400000000, // 21-25
-                3600000000, 4200000000, 5000000000, 225000000, 6500000000, // 26-30
-                7200000000, 7900000000, 9000000000, 9800000000, 11300000000, // 31-35
-                13800000000, 15900000000, 18200000000, 19500000000, 22500000000, // 36-40
-                27000000000, 75000000000, 120000000000, 180000000000, 240000000000, // 41-45
-                285000000000, 390000000000, 480000000000, 675000000000, 900000000000, // 46-50
-                1350000000000, 1850000000000, 2650000000000, 3750000000000, 5250000000000, // 51-55
-                6750000000000, 8250000000000, 10500000000000, 13500000000000, 16500000000000, // 56-60
-                20500000000000, 22500000000000, 1125000000000, 27000000000000, 27000000000000, // 61-65
-            ],
-            COST_SCALE: 1,          // multiplies the whole column. Dormant at 1.
-                                    // Rescaling preserves every ratio, so the
-                                    // numbers can be moved off Blumgi's literal
-                                    // values at any point without re-testing
-                                    // balance — it changes the display, nothing
-                                    // else
-            // How a level's cost divides ALONG the level: a soft opening, a
-            // medium middle, a hard final third. Taken from the split between
-            // Blumgi's three monsters, which is stable across their whole table
-            // (level 1 is 20/30/50, level 65 is 30/33/37, average 28/33/39).
-            // Keeps the texture of their three-monster structure inside our
-            // one-machine model — the rig visibly labours as a level closes.
-            STRETCHES: [0.28, 0.33, 0.39],
+            // Work per level, and how it divides along one — levels.js.
+            LEVEL_COST: LEVEL_DATA.COST,
+            COST_SCALE: LEVEL_DATA.COST_SCALE,
+            STRETCHES:  LEVEL_DATA.STRETCHES,
 
             // A temporary wall across the main canal — a water blocker.
             //
@@ -1080,44 +1043,19 @@ var CONFIG = {
             },
 
             // ── Crops ───────────────────────────────────────────────────────
-            // A crop grows on every field (grass) cell. Its seed shows from the
-            // start; when the water reaches the cell's NEAREST canal cell it
-            // grows through the stages, one every CROP_GROW_MS. Art is one
-            // sheet per crop at graphics/crops/<name>.png: a single row of
-            // CROP_STAGES frames, each 128x256, sliced at build.
-            // The crop changes per level, cycling through CROP_CYCLE in order
-            // and wrapping — level 1 tomato, 2 mango, 3 grape, 4 tomato again.
-            // All levels share the one level_01 layout, so the crop is what
-            // makes each field read as a different farm. Add a sheet to
-            // graphics/crops/ and its name here to extend the rotation.
-            // ── THE CROP ROTATION — edit this list, nothing else ──────────
-            // Crop NAMES, in PLAY ORDER: entry 1 is level 1, entry 2 is level 2,
-            // and it wraps at the end. Each name is a sheet in CROP_DIR with the
-            // CROP_EXT extension — every crop is a webp, so the extension is not
-            // repeated eight times here.
+            // A crop grows on every cell marked on the map's crop layer. Its
+            // seed shows from the start; when the water reaches that cell's
+            // NEAREST canal cell it grows through the stages, one every
+            // CROP_GROW_MS. Art is one sheet per crop, a single row of frames
+            // CROP_FRAME_W wide, sliced at build.
             //
-            // Adding a crop:   drop <name>.webp in graphics/crops/, add <name>.
-            // Testing a crop:  move it to the FRONT — it plays on level 1 instead
-            //                  of waiting for the rotation to come round.
-            // Every sheet is one row of CROP_STAGES frames of equal width
-            // (640x256 = five 128x256 stages, as they all are today).
-            CROP_CYCLE: [
-                'melon',
-                'green-beans',
-                'egg-plant',
-                'potato',
-                'tomato',
-                'carrot',
-                'mango',
-                'green-beans',
-                'corn',
-                'hops',    
-                'grape',
-            ],
-            CROP_DIR: 'graphics/crops1/',
-            CROP_EXT: '.png',    // sheets are PNG until the art is settled; the
-                                 // list above is plain NAMES. An entry may still
-                                 // spell out its own extension if one differs.
+            // WHICH crop a level grows is not here — it is bound to the level
+            // itself in levels.js. Everything below is how a crop BEHAVES, and
+            // applies to all of them.
+
+            // WHICH CROP GROWS WHERE is no longer a list of its own — it is
+            // a property of each level in levels.js. Nothing here needs to know
+            // the running order any more.
 
             // ── How a sheet is read ─────────────────────────────────────────
             // Every frame is CROP_FRAME_W wide by the sheet's full height, so the
@@ -1150,19 +1088,17 @@ var CONFIG = {
             // has. Adding a beetroot means dropping in a sheet and tagging it
             // 'root' — no code, and no per-crop frame table.
             CROP_FRAME_W: 128,
-            CROP_CLASS: {
-                'hops':        'trellis',
-                'green-beans': 'trellis',
-                'carrot':      'root',
-                'potato':      'root',
-                // anything unlisted is 'normal'
-            },
+            // Where the sheets live and how each one's frames are read — the
+            // crop LIBRARY in levels.js. A dictionary, not a running order.
+            CROP_DIR:   LEVEL_DATA.CROP_LIBRARY.DIR,
+            CROP_EXT:   LEVEL_DATA.CROP_LIBRARY.EXT,
+            CROP_CLASS: LEVEL_DATA.CROP_LIBRARY.CLASS,
             // Where the extra pieces sit against the plant's own depth. The
             // support must be behind it and the fruit in front, and both are
             // hairline offsets so nothing else in the depth band is disturbed.
             CROP_SUPPORT_BIAS: -0.0003,
             CROP_FRUIT_BIAS:    0.0003,
-            CROP:         'tomato.png',  // fallback when CROP_CYCLE is empty
+            CROP:         'tomato',      // last-resort crop, if no level names one
             // How big each stage stands, as a multiple of one tile. A mature
             // plant confined to its own cell — leaves stopping dead on the tile
             // boundary — reads as a diagram rather than a field, so the last two
@@ -1835,6 +1771,19 @@ var CONFIG = {
                 // unit's top-left corner. Its lean is drawn into the art, so no
                 // offset is needed — these two are a correction to the art if it
                 // ever sits a pixel out, not part of the placement.
+                // The width the shadow was AUTHORED at, in the same source-px
+                // space as BELT_W and CTRL_W. The FILE is smaller than this on
+                // purpose: the art is pure blur — the sharpest alpha step in it
+                // is 6/255 — so it carries no detail above a ~20px feature and
+                // is exported at 40%, which costs 2.1MB less GPU memory and
+                // cannot be seen. Upscaling a gradient reintroduces only the
+                // softness it already had.
+                //
+                // Placement stays in AUTHORED space and the export ratio is
+                // divided out here, so re-exporting at another size needs no
+                // other change — only this number moves if the art is ever
+                // redrawn larger.
+                SHADOW_SRC_W: 510,
                 SHADOW_OFF_X: 0,
                 SHADOW_OFF_Y: 0,
                 SHADOW_ALPHA: 1,   // the art carries its own softness; this is
