@@ -97,7 +97,7 @@ var CONFIG = {
     DEBUG_PERF: true,        // log object / tween / timer / texture counts each
                              // time the world rebases (once per level). Climbing
                              // numbers = something is outliving its band
-    BATTERY_START_LEVEL: 5,
+    BATTERY_START_LEVEL: 1,
     BATTERY_IMAGE_EXTENSIONS: ['svg', 'png', 'jpg', 'webp'],
 
     // BACKGROUND: {
@@ -770,6 +770,38 @@ var CONFIG = {
             // kept out of, so both read as "the machine's corridor".
             //
             // Never on the first level: below that is the lake, not a farm.
+            // ── Dimming the neighbours ──────────────────────────────────────
+            // Three or four farms are on screen at once, which without this reads
+            // as one continuous strip of land the machine crawls up — no level
+            // ever looks like a level, let alone like one being FINISHED. So
+            // every farm but the one being dug is laid under a dark sheet: the
+            // work has a place, and finishing it visibly moves that place on.
+            //
+            // Only the current one is clear, and that is the whole trick. Fading
+            // each finished farm a little more would wash the stack out and say
+            // nothing about where the work is; held to one, it reads as focus.
+            // The same argument the fence's own focus is built on.
+            //
+            // THE LIGHT FOLLOWS COMPLETION, NOT THE MACHINE. A farm stays lit
+            // until every crop on it has reached its last stage — which is the
+            // level actually being finished, not the rig walking out of it. The
+            // machine is free to cut the next field meanwhile, in shade: what the
+            // player is being asked to watch is the field coming in, and moving
+            // the light with the rig would take their eye off it at exactly the
+            // moment it pays off.
+            //
+            // Free at runtime: alpha is a per-vertex value, so a see-through
+            // sprite costs exactly what a solid one does.
+            DIM: {
+                ENABLED: true,
+                ALPHA:   0.42,       // how dark a neighbour goes. 0 = off
+                COLOR:   0x0a1a10,   // a cold green-black, so dimmed fields read
+                                     // as being in shade rather than greyed out
+                FADE_MS: 420,        // handover cross-fade
+                DEPTH:   3.5,        // above every piece of world art (spoil is
+                                     // the highest at 3.12) and below the UI
+            },
+
             FENCE: {
                 ENABLED: true,
                 FILE:  'graphics/fence-pole.webp',
@@ -1078,6 +1110,7 @@ var CONFIG = {
                 'hops',
                 'egg-plant',
                 'melon',
+                'potato',
                 'grape',
             ],
             CROP_DIR: 'graphics/crops1/',
@@ -1120,6 +1153,7 @@ var CONFIG = {
                 'hops':        'trellis',
                 'green-beans': 'trellis',
                 'carrot':      'root',
+                'potato':      'root',
                 // anything unlisted is 'normal'
             },
             // Where the extra pieces sit against the plant's own depth. The

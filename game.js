@@ -1393,7 +1393,7 @@ console.log(
             // the machine, so control is handed straight back to the live one.
             seg.levelIndex = idx;
             if (seg.tunnel) seg.tunnel.levelIndex = idx;
-            if (!this.active) this.active = seg;
+            if (!this.active) { this.active = seg; this._focusDim(seg); }
             else { this.tunnel = this.active.tunnel; this._retireBore(seg); }
             return seg;
         }
@@ -1540,6 +1540,7 @@ console.log(
         this._buildFarmer(seg, gTop);
         this._buildFence(seg, gTop);
         this._buildProps(seg, gTop);
+        this._buildDim(seg, gTop, g.h);
         this._buildPonds(seg, band);
     }
 
@@ -2210,6 +2211,43 @@ console.log(
                     duration: P.FADE_MS || 450, ease: 'Sine.easeOut' });
             }
         }
+    }
+
+    // The shade over one farm. Built with the level and dark from the start —
+    // every level is a neighbour until the machine arrives in it, and the first
+    // one is cleared by _focusDim as soon as it goes active.
+    //
+    // Covers the full width rather than the grid's, so anything sitting outside
+    // the map's columns is shaded with it instead of staying lit beside a dark
+    // field. Vertically it is exactly the level's own rows, so the boundary
+    // between light and shade falls on the seam between farms.
+    _buildDim(seg, gTop, h) {
+        const D = CONFIG.ROAD.TILEMAP.DIM || {};
+        if (D.ENABLED === false || !(D.ALPHA > 0)) return;
+        seg.dim = this._addB(this.add.rectangle(0, gTop, this.scale.width, h,
+                D.COLOR !== undefined ? D.COLOR : 0x0a1a10)
+            .setOrigin(0, 0)
+            .setDepth(D.DEPTH !== undefined ? D.DEPTH : 3.5)
+            .setAlpha(D.ALPHA), seg);
+    }
+
+    // Clear the shade off the farm being dug and put it back over the one just
+    // left. Exactly one level is ever lit.
+    _focusDim(seg) {
+        const D = CONFIG.ROAD.TILEMAP.DIM || {};
+        if (D.ENABLED === false) return;
+        const ms = D.FADE_MS !== undefined ? D.FADE_MS : 420;
+        const a  = D.ALPHA !== undefined ? D.ALPHA : 0.42;
+        const set = (s, to) => {
+            const o = s && s.dim;
+            if (!o || !o.scene) return;
+            this.tweens.killTweensOf(o);
+            if (ms <= 0) o.setAlpha(to);
+            else this.tweens.add({ targets: o, alpha: to, duration: ms, ease: 'Sine.easeOut' });
+        };
+        if (this._dimmedSeg && this._dimmedSeg !== seg) set(this._dimmedSeg, a);
+        this._dimmedSeg = seg;
+        set(seg, 0);
     }
 
     // The fence along a farm's near boundary — where it meets the level below.
@@ -5149,6 +5187,12 @@ console.log(
         E.held = true;
         const wait = () => {
             if (seg && !this._cropsDone(seg)) { this.time.delayedCall(300, wait); return; }
+            // THE FIELD IS IN. Only now does the light move on — every plant has
+            // reached its last stage, which means every branch that feeds one has
+            // filled. Until this moment the finished-looking farm below is still
+            // the one being completed, and it stays lit however far ahead the
+            // machine has got.
+            this._focusDim(nextSeg);
             // Tick the job off, and only then release whatever was waiting.
             this._completeTask(() => {
                 E.held = false;
@@ -5389,6 +5433,12 @@ console.log(
         // The rig is now cutting THIS level, so the fence at its foot is behind
         // the work — and the one it just left goes solid again.
         this._focusFence(next);
+        // The LIGHT does not move here. The rig leaving a farm is not the farm
+        // being finished — its water is still spreading and its crops are still
+        // coming up. _finishStretch hands the light on when that is actually
+        // done, so the machine can be working the next field while the one below
+        // it is still the one lit.
+
         // Those overrun cells now sit on top of this level's own bottom rows —
         // the same trench drawn twice.
         this._dropOverrun(seg);
