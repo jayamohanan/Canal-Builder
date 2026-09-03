@@ -1102,15 +1102,16 @@ var CONFIG = {
             // Every sheet is one row of CROP_STAGES frames of equal width
             // (640x256 = five 128x256 stages, as they all are today).
             CROP_CYCLE: [
+                'melon',
+                'green-beans',
+                'egg-plant',
+                'potato',
                 'tomato',
                 'carrot',
                 'mango',
                 'green-beans',
                 'corn',
-                'hops',
-                'egg-plant',
-                'melon',
-                'potato',
+                'hops',    
                 'grape',
             ],
             CROP_DIR: 'graphics/crops1/',
