@@ -127,10 +127,22 @@ var CONFIG = {
     // is ONE number and every asset can be sized against it exactly.
     STAGE: {
         ENABLED: true,
-        // Both 16:9, and high enough that most phones and laptops scale DOWN
-        // rather than up — upscaling is what costs sharpness.
-        PORTRAIT:  { W: 1080, H: 1920 },
-        LANDSCAPE: { W: 1920, H: 1080 },
+        // ONLY THE WIDTH IS FIXED. Height is taken from the window's own aspect
+        // at boot, so the stage matches the screen exactly and there are no bars
+        // to begin with — a fixed 16:9 stage letterboxes on nearly every real
+        // phone, none of which are 16:9 any more.
+        //
+        // Width is the half that must be constant, because tile size is the farm
+        // half's width divided by the map's columns. Height is free: the world
+        // scrolls vertically, so a taller stage simply shows more of it.
+        //
+        // The clamps stop a freak window from producing an absurd stage — a very
+        // wide-and-short desktop window, or a phone-shaped browser on a monitor.
+        // Beyond them you get bars again, which is the correct outcome.
+        PORTRAIT:  { W: 1080, H: 1920, MIN_RATIO: 1.30, MAX_RATIO: 2.40 },
+        LANDSCAPE: { W: 1920, H: 1080, MIN_RATIO: 0.45, MAX_RATIO: 0.80 },
+        // false pins the stage to the H above, ignoring the window's shape.
+        DERIVE_HEIGHT: true,
         // FIT      letterboxes: the whole game always visible, bars on a
         //          mismatched aspect, nothing ever cut off.
         // ENVELOP  fills the window and crops the overflow. No bars, but it eats

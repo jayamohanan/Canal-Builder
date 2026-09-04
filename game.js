@@ -6984,12 +6984,24 @@ function pickStage() {
     const S = (typeof CONFIG !== 'undefined' && CONFIG.STAGE) || {};
     const P = S.PORTRAIT  || { W: 1080, H: 1920 };
     const L = S.LANDSCAPE || { W: 1920, H: 1080 };
+    const winW = window.innerWidth  || 1280;
+    const winH = window.innerHeight || 720;
     let portrait;
     if (S.FORCE === 'portrait')       portrait = true;
     else if (S.FORCE === 'landscape') portrait = false;
-    else portrait = (window.innerHeight || 0) > (window.innerWidth || 0);
+    else portrait = winH > winW;
     const d = portrait ? P : L;
-    return { portrait, width: d.W, height: d.H };
+
+    // The WIDTH is the fixed half — tile size hangs off it, so it must not move.
+    // The HEIGHT is taken from the window so the stage matches the screen's
+    // shape and fills it with no bars. Legal because the world scrolls
+    // vertically: a taller stage just shows more of it, and no geometry changes.
+    let height = d.H;
+    if (S.DERIVE_HEIGHT !== false) {
+        const ratio = Math.min(Math.max(winH / winW, d.MIN_RATIO || 0.3), d.MAX_RATIO || 3);
+        height = Math.round(d.W * ratio);
+    }
+    return { portrait, width: d.W, height };
 }
 const STAGE = pickStage();
 
