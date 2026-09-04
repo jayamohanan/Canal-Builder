@@ -109,6 +109,39 @@ var CONFIG = {
         GRADIENT_END_COLOR: "#B6915c",
     },
 
+    // ── The stage ─────────────────────────────────────────────────────────────
+    // The game renders at ONE fixed size, chosen once at boot, and the canvas is
+    // scaled by the browser to whatever the window is. Resizing then changes
+    // nothing inside the game: no rebuild, no reflow, and so no progress to
+    // lose. It replaces a scene restart that reset the run every time the window
+    // moved, and it is what shipped Poki games do.
+    //
+    // The layout is picked from the window's shape at BOOT and never changes
+    // again. Squeezing a desktop window tall leaves the game in landscape with
+    // bars rather than reflowing into the phone layout — a desktop player
+    // narrowing a window has not become a phone.
+    //
+    // It also settles a question that had no answer before: on-screen tile size
+    // used to follow the viewport and ranged 49-131px, so no asset had a
+    // provably correct export size. The farm half is now a constant, so a tile
+    // is ONE number and every asset can be sized against it exactly.
+    STAGE: {
+        ENABLED: true,
+        // Both 16:9, and high enough that most phones and laptops scale DOWN
+        // rather than up — upscaling is what costs sharpness.
+        PORTRAIT:  { W: 1080, H: 1920 },
+        LANDSCAPE: { W: 1920, H: 1080 },
+        // FIT      letterboxes: the whole game always visible, bars on a
+        //          mismatched aspect, nothing ever cut off.
+        // ENVELOP  fills the window and crops the overflow. No bars, but it eats
+        //          the edges of a 22-column field — so FIT is the safer default
+        //          for a game whose playfield spans the full width.
+        MODE: 'FIT',
+        // null decides from the window's shape at boot. 'portrait' / 'landscape'
+        // pins it, which is how you test one layout on the other device.
+        FORCE: null,
+    },
+
     // ── Task list ─────────────────────────────────────────────────────────────
     // Every field is a job with a name and a number. A small list sits at the top
     // left of the FARM half showing two of them: the one being dug, and the one

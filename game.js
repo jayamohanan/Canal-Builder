@@ -6964,64 +6964,59 @@ console.log(
 // ================================================================
 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-const GAME_WIDTH = isMobile ? 720 : 1280;
-const GAME_HEIGHT = isMobile ? 1280 : 720;
-
-// ── HiDPI rendering ────────────────────────────────────────────────────────
-// Draw the canvas at device pixels (CSS × DPR) so sprites are crisp on retina /
-// high-DPI screens. The backing store matches the physical screen → no browser
-// upscale; the canvas still DISPLAYS at logical CSS size. Scale.NONE lets us own
-// the sizing (Scale.RESIZE would force the buffer back to CSS px every resize).
-// Raw DPR for maximum clarity — this is a light 2D game. If a weak phone ever
-// drops frames, change `dpr` to `Math.min(window.devicePixelRatio || 1, 2)`.
-function resizeToHiDPI(game) {
-    const dpr = window.devicePixelRatio || 1;
-    game.scale.resize(window.innerWidth * dpr, window.innerHeight * dpr); // backing store = device pixels
-    game.scale.setZoom(1 / dpr);   // display the device-px buffer at logical CSS size
-    // (zoom lets Phaser manage canvas CSS size AND pointer→game coord mapping correctly)
+// ── THE STAGE ──────────────────────────────────────────────────────────────
+// One fixed render size, decided once, scaled by the browser to fill whatever
+// window it lands in.
+//
+// This used to be the opposite: the canvas was sized to the live viewport in
+// device pixels and the scene was RESTARTED on every resize to re-lay it out.
+// That was sharp, but a restart destroys the scene, so dragging a window — or
+// rotating a phone, which is the same event — reset the run to level one.
+//
+// Fixing the size removes the problem rather than saving around it. Nothing
+// inside the game ever learns the window changed, so there is nothing to
+// preserve and nothing to replay.
+//
+// Chosen from the window's SHAPE AT BOOT and then never revisited. That is the
+// deliberate part: a desktop window squeezed tall stays in landscape with bars
+// instead of reflowing into the phone layout.
+function pickStage() {
+    const S = (typeof CONFIG !== 'undefined' && CONFIG.STAGE) || {};
+    const P = S.PORTRAIT  || { W: 1080, H: 1920 };
+    const L = S.LANDSCAPE || { W: 1920, H: 1080 };
+    let portrait;
+    if (S.FORCE === 'portrait')       portrait = true;
+    else if (S.FORCE === 'landscape') portrait = false;
+    else portrait = (window.innerHeight || 0) > (window.innerWidth || 0);
+    const d = portrait ? P : L;
+    return { portrait, width: d.W, height: d.H };
 }
+const STAGE = pickStage();
 
-// Resizing the buffer alone makes the canvas cover the viewport, but the scene's
-// layout was computed once for the old size — so content stays in the old (top-left)
-// region and the rest shows the canvas background. To make the game FILL any new
-// viewport, re-run the scene layout on resize. The cheapest reliable way (given the
-// scene rebuilds everything from layoutConfig in create()) is to restart the scene.
-// Debounced so a drag-resize doesn't thrash. NOTE: there's no save system yet, so a
-// restart resets in-memory state (coins/grid) — same as a page refresh. When you add
-// persistence, this will preserve progress automatically.
-let _reflowTimer = null;
-function reflowOnResize(game) {
-    resizeToHiDPI(game);                       // keep the canvas covering the viewport immediately
-    clearTimeout(_reflowTimer);
-    _reflowTimer = setTimeout(() => {
-        resizeToHiDPI(game);                   // capture the final settled size
-        const scene = game.scene.getScene('GameScene');
-        if (scene) scene.scene.restart();      // re-run create() → layout fills the new viewport
-    }, 150);
-}
+const GAME_WIDTH  = STAGE.width;
+const GAME_HEIGHT = STAGE.height;
 
-const _DPR = window.devicePixelRatio || 1;
 const config = {
     type: Phaser.AUTO,
     parent: 'game-container',
     backgroundColor: '#7B68EE',
     scene: [GameScene],
     scale: {
-        mode: Phaser.Scale.NONE,            // we own sizing via resizeToHiDPI()
-        autoCenter: Phaser.Scale.NO_CENTER, // canvas fills the viewport; centering would offset it by ~half (device-px margins)
-        width:  (window.innerWidth  || GAME_WIDTH)  * _DPR,   // start at device pixels
-        height: (window.innerHeight || GAME_HEIGHT) * _DPR,
-        zoom:   1 / _DPR,                                     // display device-px buffer at logical CSS size
+        // FIT/ENVELOP means Phaser owns the canvas's DISPLAY size and keeps it
+        // in step with the window on its own — no resize listener of ours, and
+        // no restart. The game's own coordinate space stays exactly GAME_WIDTH
+        // x GAME_HEIGHT forever, which is what makes a resize a non-event.
+        mode: (Phaser.Scale[(CONFIG.STAGE || {}).MODE] || Phaser.Scale.FIT),
+        autoCenter: Phaser.Scale.CENTER_BOTH,   // bars split evenly, not all on one side
+        width:  GAME_WIDTH,
+        height: GAME_HEIGHT,
         expandParent: true,
     },
     render: { antialias: true, pixelArt: false, roundPixels: false },
     callbacks: {
         // Runs after the canvas exists, before the first render: lock in exact
         // device-pixel sizing and keep it in sync on window resize / rotation.
-        postBoot: (game) => {
-            resizeToHiDPI(game);
-            window.addEventListener('resize', () => reflowOnResize(game));
-        },
+        postBoot: () => { /* Phaser's scale manager tracks the window itself */ },
     },
 };
 
