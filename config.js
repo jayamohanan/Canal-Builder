@@ -593,7 +593,53 @@ var CONFIG = {
                     DOWN_MS: [4200, 9500],   // head down, cropping grass
                     UP_MS:   [900,  2300],   // head up, looking around — rarer
                 },
+                // Where a bridge deck sits. It has to clear the canal WATER
+                // (3.10), which every world-Y depth is below — those come out
+                // just under 3.0 — so a bridge cannot sort by position like
+                // everything else or it would be under the stream it crosses.
+                BRIDGE_DEPTH: 3.15,
                 ITEMS: {
+                    // ── Bridges ─────────────────────────────────────────
+                    // SIZE is height in tiles and SIZE_W is width in tiles, and
+                    // a bridge uses whichever one runs ALONG its span: _ns lies
+                    // north-south across a horizontal canal so its length is its
+                    // height, _ew lies east-west so its length is its width. The
+                    // other dimension follows from the art.
+                    //
+                    // Two tiles for a main-canal crossing (the main canal is two
+                    // columns wide) and one for a branch, which is what the 256px
+                    // art gives at full size and half size respectively.
+                    //
+                    // Pivoted at the CENTRE, unlike everything else here: a
+                    // bridge is placed by where it crosses, not by where it
+                    // stands, so the marker is the middle of the span.
+                    //
+                    // WALKABLE lifts the farmer's ban on the canal cell the
+                    // marker sits in — that is the whole point of a bridge.
+                    //
+                    // AFTER_DIG_TILES holds a bridge back until the cut has run
+                    // that far past it. A main-canal bridge cannot stand before
+                    // the canal it crosses has been dug, and the clearance is
+                    // the rig's own length behind its blade — the same number
+                    // and the same reason as the dams'. It then drops in from
+                    // above exactly as the wall does. Branch bridges have no
+                    // such entry: their canals are drawn with the level.
+                    bridge_main_ns:   { FILE: 'graphics/bridge/bridge_main_ns.webp', SIZE:   2, ORIGIN: [0.5, 0.5], WALKABLE: true, AFTER_DIG_TILES: 4 },
+                    bridge_main_ew:   { FILE: 'graphics/bridge/bridge_main_ew.webp', SIZE_W: 2, ORIGIN: [0.5, 0.5], WALKABLE: true, AFTER_DIG_TILES: 4 },
+                    // A ONE-TILE BRIDGE HAS ITS OWN ART at half the size, and
+                    // has to. Drawn from the two-tile file it would be squeezed
+                    // 2.4x, and the GPU minifies by reading four texels per
+                    // screen pixel however many actually fall there — at 2.4x
+                    // that is four out of six, and WHICH four moves with the
+                    // sprite, so the planks crawled whenever the camera did. At
+                    // 1.2x the four samples cover the footprint and it sits
+                    // still. The same rule holds for any art added later:
+                    // anything drawn below about 1.5x its source will crawl.
+                    bridge_branch_ns: { FILE: 'graphics/bridge/bridge_branch_ns.webp', SIZE:   1, ORIGIN: [0.5, 0.5], WALKABLE: true },
+                    bridge_branch_ew: { FILE: 'graphics/bridge/bridge_branch_ew.webp', SIZE_W: 1, ORIGIN: [0.5, 0.5], WALKABLE: true },
+                    bridge_minor_ns:  { FILE: 'graphics/bridge/bridge_branch_ns.webp', SIZE:   1, ORIGIN: [0.5, 0.5], WALKABLE: true },
+                    bridge_minor_ew:  { FILE: 'graphics/bridge/bridge_branch_ew.webp', SIZE_W: 1, ORIGIN: [0.5, 0.5], WALKABLE: true },
+
                     cow_n: { FILE: 'graphics/animals/cows/cow_n_idle.png', EAT: 'graphics/animals/cows/cow_n_eat.png', SIZE: 2.0,  ORIGIN: [0.5, 0], FACE: [ 0, -1] },
                     cow_s: { FILE: 'graphics/animals/cows/cow_s_idle.png', EAT: 'graphics/animals/cows/cow_s_eat.png', SIZE: 2.0,  ORIGIN: [0.5, 1], FACE: [ 0,  1] },
                     cow_e: { FILE: 'graphics/animals/cows/cow_e_idle.png', EAT: 'graphics/animals/cows/cow_e_eat.png', SIZE: 1.32, ORIGIN: [1,   1], FACE: [ 1,  0] },

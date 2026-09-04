@@ -40,6 +40,7 @@ const LEVEL_DATA = {
     // Adding a level: one line. Reordering: move the line, and its crop travels
     // with it.
     LEVELS: [
+        { FILE: 'level_maps/level_09.tmj', CROP: 'corn' },
         { FILE: 'level_maps/level_08.tmj', CROP: 'corn' },
         { FILE: 'level_maps/level_07.tmj', CROP: 'tomato' },
         { FILE: 'level_maps/level_06.tmj', CROP: 'carrot' },

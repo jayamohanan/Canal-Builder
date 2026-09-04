@@ -483,8 +483,9 @@ class GameScene extends Phaser.Scene {
                 // west are the same cow mirrored — load and cost it once.
                 for (const it of Object.values(PR.ITEMS || {})) {
                     if (!it) continue;
-                    if (it.FILE) this.load.image(it.FILE, it.FILE);
-                    if (it.EAT)  this.load.image(it.EAT,  it.EAT);
+                    if (it.FILE)     this.load.image(it.FILE, it.FILE);
+                    if (it.EAT)      this.load.image(it.EAT,  it.EAT);
+                    if (it.FALLBACK) this.load.image(it.FALLBACK, it.FALLBACK);
                 }
             }
             const FN = TM.FENCE || {};
@@ -1073,10 +1074,27 @@ console.log(
             cropsData:  layer(TM.CROPS_LAYER)  || [],   // crop markers (not drawn)
             pondData:   layer(TM.POND_LAYER)   || [],   // pond markers (not drawn)
             props:      objects((TM.PROPS || {}).LAYER),// placed scenery (object layer)
+            // Canal cells a bridge makes crossable. Built here, with the grid,
+            // rather than when the bridges are drawn — the farmer is created
+            // before the props are, and asking about a set that does not exist
+            // yet would silently mean "no bridges anywhere".
+            bridged:    null,                          // filled just below
             markerBase: this._markerBase(map),          // where markers.tsx starts here
             ponds:      (this._levelDef(levelIndex) || {}).PONDS || {},
             mainLeftCol: mainRightCol - (mainW - 1), mainRightCol, mainW,
         };
+        // A bridge's marker is a point, so it carries a fractional cell; the
+        // tile it makes crossable is the one that point falls in. The deck may
+        // well hang over its neighbours — it is two tiles long — but the marker
+        // is what says which cell the crossing is AT.
+        const items = (TM.PROPS || {}).ITEMS || {};
+        grid.bridged = new Set();
+        for (const o of grid.props) {
+            const it = items[o.name];
+            if (it && it.WALKABLE) {
+                grid.bridged.add(Math.floor(o.col) + ',' + Math.floor(o.row));
+            }
+        }
         this._mapReport(levelIndex, map, grid);
         return grid;
     }
@@ -1827,22 +1845,32 @@ console.log(
         // the drop is expressed as a MULTIPLE of whatever that worked out to be,
         // never as an absolute — the wall is scaled to the tile size and that
         // changes with the viewport.
-        const ms = BK.DROP_MS !== undefined ? BK.DROP_MS : 260;
-        if (ms > 0) {
-            const restY = img.y, sx = img.scaleX, sy = img.scaleY;
-            const grow  = BK.DROP_SCALE !== undefined ? BK.DROP_SCALE : 1.18;
-            img.y = restY - (BK.DROP_RISE !== undefined ? BK.DROP_RISE : 0.55) * g.tile;
-            img.setScale(sx * grow, sy * grow);
-            this.tweens.add({
-                targets:  img,
-                y:        restY,
-                scaleX:   sx,
-                scaleY:   sy,
-                duration: ms,
-                ease:     BK.DROP_EASE || 'Back.easeIn',
-            });
-        }
+        this._dropIn(img, g.tile);
         return img;
+    }
+
+    // Bring a thing down into the channel from above.
+    //
+    // It starts a little high and a little LARGER — larger reads as nearer the
+    // camera — then settles to its resting place at full size. Shrinking as it
+    // descends is what turns a slide down the screen into something coming down
+    // out of the air and into the world.
+    //
+    // Expressed as a MULTIPLE of whatever scale the caller already set, never as
+    // an absolute: these things are sized against the tile, and the tile is not
+    // the same on every screen.
+    _dropIn(img, tile) {
+        const BK = CONFIG.ROAD.TILEMAP.BLOCK || {};
+        const ms = BK.DROP_MS !== undefined ? BK.DROP_MS : 260;
+        if (!img || ms <= 0) return;
+        const restY = img.y, sx = img.scaleX, sy = img.scaleY;
+        const grow  = BK.DROP_SCALE !== undefined ? BK.DROP_SCALE : 1.18;
+        img.y = restY - (BK.DROP_RISE !== undefined ? BK.DROP_RISE : 0.55) * tile;
+        img.setScale(sx * grow, sy * grow);
+        this.tweens.add({
+            targets: img, y: restY, scaleX: sx, scaleY: sy,
+            duration: ms, ease: BK.DROP_EASE || 'Back.easeIn',
+        });
     }
 
     // Take a wall back out of the channel. The placement run backwards: it rises
@@ -1898,6 +1926,19 @@ console.log(
         // Lowest first, so releases happen in the order the machine reaches them.
         dams.sort((a, b) => a.up - b.up);
         return dams;
+    }
+
+    // Drop in any main-canal bridge the cut has now cleared. Same test as the
+    // dams and the same landing, so a level's structures all arrive the one way.
+    _checkBridges(tn) {
+        if (!tn.bridges || !tn.bridges.length) return;
+        for (const b of tn.bridges) {
+            if (b.done || tn.progressPx < b.at) continue;
+            b.done = true;
+            if (!b.spr || !b.spr.scene) continue;
+            b.spr.setVisible(true);
+            this._dropIn(b.spr, b.tile);
+        }
     }
 
     // Has the cut run far enough past a dam to drop it in? If so, raise the wall
@@ -2106,22 +2147,59 @@ console.log(
 
         for (const o of g.props) {
             const it = items[o.name];
-            if (!it || !it.FILE || !this.textures.exists(it.FILE)) continue;
+            if (!it) continue;
+            // FALLBACK covers art that is not drawn yet — the prop appears at the
+            // wrong sampling rate rather than not at all, which is far easier to
+            // spot than a silent absence.
+            const key = (it.FILE && this.textures.exists(it.FILE)) ? it.FILE
+                      : ((it.FALLBACK && this.textures.exists(it.FALLBACK)) ? it.FALLBACK : null);
+            if (!key) continue;
 
-            const src = this.textures.get(it.FILE).getSourceImage();
+            const src = this.textures.get(key).getSourceImage();
             const o0  = it.ORIGIN || [0.5, 1];
-            const h   = g.tile * (it.SIZE !== undefined ? it.SIZE : 1);
-            const w   = h * (src.width / src.height);   // aspect from the art itself
+            // SIZE is height in tiles, SIZE_W is width in tiles — a prop gives
+            // whichever one is the dimension it is really measured by, and the
+            // other follows from the art's own aspect. A bridge spans two tiles
+            // ACROSS the canal, and which screen axis that is depends on the way
+            // the canal runs, so it cannot always be the height.
+            let w, h;
+            if (it.SIZE_W !== undefined) {
+                w = g.tile * it.SIZE_W; h = w * (src.height / src.width);
+            } else {
+                h = g.tile * (it.SIZE !== undefined ? it.SIZE : 1);
+                w = h * (src.width / src.height);
+            }
             const x   = g.left + o.col * g.tile;
             const y   = gTop   + o.row * g.tile;
-            const spr = this._addB(this.add.image(x, y, it.FILE)
+            const spr = this._addB(this.add.image(x, y, key)
                 .setOrigin(o0[0], o0[1])
                 .setDisplaySize(w, h)
                 .setFlipX(!!it.FLIP), seg);
             // Depth from where the prop MEETS THE GROUND, not from its anchor —
             // a north cow is pinned by its top, so sorting on that would place
             // it two tiles further away than it stands.
-            spr.setDepth(this._yDepth(y + (1 - o0[1]) * h));
+            // A bridge is the exception to sorting by position: every world-Y
+            // depth lands just under 3, and the canal water it crosses sits at
+            // 3.10 — so a deck placed by its feet would be drawn beneath the
+            // stream it spans. It takes a flat depth above the water instead.
+            spr.setDepth(it.WALKABLE
+                ? (P.BRIDGE_DEPTH !== undefined ? P.BRIDGE_DEPTH : 3.15)
+                : this._yDepth(y + (1 - o0[1]) * h));
+
+            // A MAIN-CANAL BRIDGE CANNOT EXIST BEFORE THE CANAL DOES. It waits
+            // for the cut to run AFTER_DIG_TILES past it — the same clearance
+            // the dams use, and for the same reason: the rig is longer than its
+            // cut line, so a deck dropped the moment the blade drew level would
+            // land on top of the machine.
+            if (it.AFTER_DIG_TILES !== undefined && seg.tunnel) {
+                spr.setVisible(false);
+                const up = (g.rows - o.row) * g.tile;      // height above the dig line
+                (seg.tunnel.bridges || (seg.tunnel.bridges = [])).push({
+                    spr, tile: g.tile,
+                    at: up + it.AFTER_DIG_TILES * g.tile,
+                    done: false,
+                });
+            }
 
             // Anything with a second drawing grazes between the two. Enrolled
             // even while it is still hidden: it should be mid-cycle by the time
@@ -2338,6 +2416,9 @@ console.log(
     // happily but not through water, so branch and main alike are solid to him.
     _canalCell(g, col, row) {
         if (!g || col < 0 || col >= g.cols || row < 0 || row >= g.rows) return true;
+        // A bridge is a way across. The water is still there — only the ban on
+        // standing over it is lifted.
+        if (g.bridged && g.bridged.has(col + ',' + row)) return false;
         const i = row * g.cols + col;
         const open = (c) => !!(c.n || c.e || c.s || c.w);
         return open(this._connOfGid(g.branchData[i] || 0))
@@ -2430,8 +2511,17 @@ console.log(
         const g = f.g;                    // his level's grid, not the newest
         if (!g) return;
         const row = Math.floor((f.spr.y - f.gTop) / g.tile);
-        if (row === f.row) return;
-        f.row = row;
+        const col = Math.floor((f.spr.x - g.left) / g.tile);
+        if (row === f.row && col === f.col) return;
+        f.row = row; f.col = col;
+        // ON A BRIDGE he has to be on top of it. The deck sits above the canal
+        // water at a flat depth, well clear of the world-Y band everything else
+        // sorts in, so crossing it by position alone would walk him underneath.
+        if (g.bridged && g.bridged.has(col + ',' + row)) {
+            const P = CONFIG.ROAD.TILEMAP.PROPS || {};
+            f.spr.setDepth((P.BRIDGE_DEPTH !== undefined ? P.BRIDGE_DEPTH : 3.15) + 0.01);
+            return;
+        }
         f.spr.setDepth(this._yDepth(f.gTop + (row + 0.5) * g.tile, 0.0005));
     }
 
@@ -4768,6 +4858,7 @@ console.log(
         // Has the cut cleared a mid-level dam? Checked before the water moves,
         // so the wall is standing by the time the release it triggers is stepped.
         this._checkDams(tn);
+        this._checkBridges(tn);
 
         // The water has its own life: it runs BEFORE the drilling branch below,
         // so it keeps creeping up the cut and rippling while the blade rests.
