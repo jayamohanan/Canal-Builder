@@ -488,6 +488,25 @@ class GameScene extends Phaser.Scene {
                     if (it.FALLBACK) this.load.image(it.FALLBACK, it.FALLBACK);
                 }
             }
+            const AN = TM.ANIMALS || {};
+            if (AN.ENABLED !== false) {
+                // Keyed by path, so facings sharing a drawing — east and west
+                // are the same animal mirrored — cost one texture between them.
+                for (const sp of Object.values(AN.SPECIES || {})) {
+                    // Sheets first — a species that packs its facings into
+                    // spritesheets names them here and its facings then point at
+                    // frame numbers instead of paths.
+                    for (const sh of Object.values(sp.SHEETS || {})) {
+                        if (!sh || !sh.FILE) continue;
+                        this.load.spritesheet(sh.FILE, sh.FILE,
+                            { frameWidth: sh.FRAME_W, frameHeight: sh.FRAME_H });
+                    }
+                    for (const f of Object.values(sp.FACINGS || {})) {
+                        if (typeof f.IDLE === 'string') this.load.image(f.IDLE, f.IDLE);
+                        if (typeof f.EAT  === 'string') this.load.image(f.EAT,  f.EAT);
+                    }
+                }
+            }
             const FN = TM.FENCE || {};
             if (FN.ENABLED !== false && FN.FILE) this.load.image('fence_pole', FN.FILE);
             const BK = TM.BLOCK || {};
@@ -1052,10 +1071,15 @@ console.log(
         const objects = (name) => {
             const l = map.layers.find((x) => x.name === name && x.objects);
             if (!l) return [];
+            // Width and height come through as well, so an object can be an
+            // AREA and not only a position — a pen is a rectangle drawn round
+            // the ground it covers. A point reports 0 for both.
             return l.objects.map((o) => ({
                 name: o.name || o.class || o.type || '',
                 col:  o.x / (map.tilewidth  || 1),
                 row:  o.y / (map.tileheight || 1),
+                w:   (o.width  || 0) / (map.tilewidth  || 1),
+                h:   (o.height || 0) / (map.tileheight || 1),
             })).filter((o) => o.name);
         };
         // How this map's gids resolve to art. Built per map, because firstgid is
@@ -1558,6 +1582,7 @@ console.log(
         this._buildFarmer(seg, gTop);
         this._buildFence(seg, gTop);
         this._buildProps(seg, gTop);
+        this._buildAnimals(seg, gTop);
         this._buildDim(seg, gTop, g.h);
         this._buildPonds(seg, band);
     }
@@ -2148,42 +2173,56 @@ console.log(
         for (const o of g.props) {
             const it = items[o.name];
             if (!it) continue;
-            // FALLBACK covers art that is not drawn yet — the prop appears at the
-            // wrong sampling rate rather than not at all, which is far easier to
-            // spot than a silent absence.
-            const key = (it.FILE && this.textures.exists(it.FILE)) ? it.FILE
-                      : ((it.FALLBACK && this.textures.exists(it.FALLBACK)) ? it.FALLBACK : null);
-            if (!key) continue;
+            const o0 = it.ORIGIN || [0.5, 1];
 
-            const src = this.textures.get(key).getSourceImage();
-            const o0  = it.ORIGIN || [0.5, 1];
-            // SIZE is height in tiles, SIZE_W is width in tiles — a prop gives
-            // whichever one is the dimension it is really measured by, and the
-            // other follows from the art's own aspect. A bridge spans two tiles
-            // ACROSS the canal, and which screen axis that is depends on the way
-            // the canal runs, so it cannot always be the height.
-            let w, h;
-            if (it.SIZE_W !== undefined) {
-                w = g.tile * it.SIZE_W; h = w * (src.height / src.width);
+            // A prop may BORROW A SPECIES' art instead of naming files. That is
+            // how the hand-placed animals work: the sheets, frames and sizes
+            // live once in ANIMALS.SPECIES, and a marker adds only what a
+            // placement needs — where its anchor sits, and which way it looks.
+            let key, frame, eatAt, w, h, flip = !!it.FLIP;
+            if (it.SPECIES) {
+                const sp = ((CONFIG.ROAD.TILEMAP.ANIMALS || {}).SPECIES || {})[it.SPECIES];
+                const pose = sp && this._animalPoses(sp, g.tile)[it.FACING];
+                if (!pose) continue;
+                key = pose.key; frame = pose.idle.f; eatAt = pose.eat;
+                w = pose.w; h = pose.h; flip = pose.flip;
             } else {
-                h = g.tile * (it.SIZE !== undefined ? it.SIZE : 1);
-                w = h * (src.width / src.height);
+                // FALLBACK covers art that is not drawn yet — the prop appears
+                // at the wrong sampling rate rather than not at all, which is
+                // far easier to spot than a silent absence.
+                key = (it.FILE && this.textures.exists(it.FILE)) ? it.FILE
+                    : ((it.FALLBACK && this.textures.exists(it.FALLBACK)) ? it.FALLBACK : null);
+                if (!key) continue;
+                const src = this.textures.get(key).getSourceImage();
+                // SIZE is height in tiles, SIZE_W is width in tiles — a prop
+                // gives whichever one is the dimension it is really measured by,
+                // and the other follows from the art's own aspect. A bridge
+                // spans two tiles ACROSS the canal, and which screen axis that
+                // is depends on the way the canal runs, so it cannot always be
+                // the height.
+                if (it.SIZE_W !== undefined) {
+                    w = g.tile * it.SIZE_W; h = w * (src.height / src.width);
+                } else {
+                    h = g.tile * (it.SIZE !== undefined ? it.SIZE : 1);
+                    w = h * (src.width / src.height);
+                }
             }
             const x   = g.left + o.col * g.tile;
             const y   = gTop   + o.row * g.tile;
-            const spr = this._addB(this.add.image(x, y, key)
+            const spr = this._addB(this.add.image(x, y, key, frame)
                 .setOrigin(o0[0], o0[1])
                 .setDisplaySize(w, h)
-                .setFlipX(!!it.FLIP), seg);
+                .setFlipX(flip), seg);
             // Depth from where the prop MEETS THE GROUND, not from its anchor —
             // a north cow is pinned by its top, so sorting on that would place
             // it two tiles further away than it stands.
-            // A bridge is the exception to sorting by position: every world-Y
-            // depth lands just under 3, and the canal water it crosses sits at
-            // 3.10 — so a deck placed by its feet would be drawn beneath the
-            // stream it spans. It takes a flat depth above the water instead.
-            spr.setDepth(it.WALKABLE
-                ? (P.BRIDGE_DEPTH !== undefined ? P.BRIDGE_DEPTH : 3.15)
+            // A flat DEPTH marks a prop as part of the GROUND rather than an
+            // object standing on it: a bridge is walked over, not sorted
+            // against. Everything else takes its depth from where it meets the
+            // ground, so crops in front of it draw over it and crops behind
+            // do not.
+            spr.setDepth(it.DEPTH !== undefined
+                ? it.DEPTH
                 : this._yDepth(y + (1 - o0[1]) * h));
 
             // A MAIN-CANAL BRIDGE CANNOT EXIST BEFORE THE CANAL DOES. It waits
@@ -2204,12 +2243,13 @@ console.log(
             // Anything with a second drawing grazes between the two. Enrolled
             // even while it is still hidden: it should be mid-cycle by the time
             // it fades in, not caught standing to attention.
-            if (it.EAT && (P.GRAZE || {}).ENABLED !== false && this.textures.exists(it.EAT)) {
+            const eat = eatAt || (it.EAT ? { k: it.EAT } : null);
+            if (eat && (P.GRAZE || {}).ENABLED !== false && this.textures.exists(eat.k)) {
                 const G = P.GRAZE || {};
                 const down = Math.random() < 0.75;      // mostly already eating
                 (seg.graze || (seg.graze = [])).push({
                     spr, w, h, down,
-                    idle: it.FILE, eat: it.EAT,
+                    idle: { k: key, f: frame },  eat,
                     // Started PART WAY through, not at zero, so a field of cows
                     // is scattered across the cycle from the first frame.
                     t: Math.random() * this._rndRange(down ? (G.DOWN_MS || [4200, 9500])
@@ -2217,7 +2257,7 @@ console.log(
                     next: this._rndRange(down ? (G.DOWN_MS || [4200, 9500])
                                               : (G.UP_MS   || [900,  2300])),
                 });
-                if (down) spr.setTexture(it.EAT).setDisplaySize(w, h);
+                if (down) this._wearFrame(spr, eat, w, h);
             }
 
             // Does it have to wait for its field? The point is placed ON THE
@@ -2250,6 +2290,20 @@ console.log(
     // setDisplaySize is re-applied after every swap because setTexture resets a
     // sprite to the new image's natural size, and the eat pose is a different
     // shape to the idle one.
+    // Show one of an animal's drawings. It may be a whole image or a frame of a
+    // sheet, so both are addressed as a {key, frame} pair and the caller never
+    // has to care which a species uses.
+    //
+    // The display size is re-applied every time because setTexture resets a
+    // sprite to its new art's natural size — and the poses differ in shape: a
+    // pig with its head down is not the box a standing one is.
+    _wearFrame(spr, at, w, h) {
+        if (!spr || !at || !at.k) return;
+        if (at.f === undefined) spr.setTexture(at.k);
+        else                    spr.setTexture(at.k, at.f);
+        spr.setDisplaySize(w, h);
+    }
+
     _updateGraze(dtMs) {
         const P = CONFIG.ROAD.TILEMAP.PROPS || {}, G = P.GRAZE || {};
         if (P.ENABLED === false || G.ENABLED === false) return;
@@ -2265,7 +2319,7 @@ console.log(
                 a.t -= a.next;
                 a.down = !a.down;
                 a.next = this._rndRange(a.down ? down : up);
-                a.spr.setTexture(a.down ? a.eat : a.idle).setDisplaySize(a.w, a.h);
+                this._wearFrame(a.spr, a.down ? a.eat : a.idle, a.w, a.h);
             }
         }
     }
@@ -2326,6 +2380,306 @@ console.log(
         if (this._dimmedSeg && this._dimmedSeg !== seg) set(this._dimmedSeg, a);
         this._dimmedSeg = seg;
         set(seg, 0);
+    }
+
+    // Scatter a ranch's herd across the level.
+    //
+    // The SPECIES and COUNT come from the level in levels.js; the ground is
+    // simply anywhere that is not canal. Nothing has to be drawn on the map to
+    // make a ranch work — a count is enough — and when prohibited areas arrive
+    // (a farmhouse's footprint, say) they drop into the same filter as one more
+    // reason to reject a cell.
+    //
+    // Positions and facings come from each cell's own HASH, not Math.random.
+    // Not because anything rebuilds today, but because it costs nothing and it
+    // means a level restored from a save comes back with the herd it had,
+    // without a single position being written down.
+    _buildAnimals(seg, gTop) {
+        const TM = CONFIG.ROAD.TILEMAP, A = TM.ANIMALS || {};
+        if (A.ENABLED === false) return;
+        const g = this.tileGrid;
+        if (!g) return;
+        const def   = this._levelDef(this.endless ? this.endless.segIndex : 0) || {};
+        const ranch = def.RANCH;
+        if (!ranch || !ranch.COUNT) return;
+        const sp = (A.SPECIES || {})[ranch.SPECIES];
+        if (!sp) { console.warn(`[animals] level names species "${ranch.SPECIES}", which is not in ANIMALS.SPECIES`); return; }
+
+        // Every cell an animal could stand on. Canal tiles are the only thing
+        // ruled out so far — they stand on the land, not in the ditch.
+        const open = [];
+        for (let r = 0; r < g.rows; r++) {
+            for (let c = 0; c < g.cols; c++) {
+                if (this._canalCell(g, c, r)) continue;
+                open.push({ c, r, k: this._cellHash(c, r, 11) });
+            }
+        }
+        if (!open.length) return;
+        // Lowest hash first, then take the first COUNT. A stable shuffle: the
+        // same cells win every time, and they land spread across the field
+        // rather than filling a corner the way a scan order would.
+        open.sort((a, b) => a.k - b.k);
+        const want  = Math.min(ranch.COUNT, open.length);
+        const faces = Object.keys(sp.FACINGS || {});
+        if (!faces.length) return;
+
+        const F     = seg.tunnel && seg.tunnel.flood;
+        const canal = F ? [...F.cells.values()] : [];
+        const stg   = A.STAGGER_MS || [0, 0];
+
+        for (let i = 0; i < want; i++) {
+            const { c, r } = open[i];
+            const face = faces[Math.floor(this._cellHash(c, r, 12) * faces.length) % faces.length];
+            // EVERY facing is resolved up front, not just the one it starts in.
+            // A wandering animal turns, and turning changes more than the
+            // picture: the side view is a different shape to the front, so the
+            // display size changes with it. Working all four out once means a
+            // turn is a lookup.
+            const poses = this._animalPoses(sp, g.tile);
+            const pose  = poses[face];
+            if (!pose) continue;
+            const { key, w, h } = pose;
+            const fI = pose.idle.f;
+            // Standing on its cell, anchored at the feet — so it sorts against
+            // crops and the fence by where it touches the ground, like
+            // everything else in the world.
+            const x = g.left + (c + 0.5) * g.tile;
+            const y = gTop   + (r + 1)   * g.tile;
+            const spr = this._addB(this.add.image(x, y, key, fI)
+                .setOrigin(0.5, 1)
+                .setDisplaySize(w, h)
+                .setFlipX(pose.flip)
+                .setDepth(this._yDepth(y)), seg);
+
+            const G  = (TM.PROPS || {}).GRAZE || {};
+            const MV = A.MOVE || {};
+            const watchCanal = canal.length > 0;
+            // A MINORITY WANDERS. Decided by the cell's hash, so a given animal
+            // is a wanderer or is not, and stays that way — and only at all if
+            // its species has walk art to do it with.
+            const roams = MV.ENABLED !== false && poses.canWalk
+                       && this._cellHash(c, r, 16) < (MV.FRACTION !== undefined ? MV.FRACTION : 0.45);
+            const down  = this._cellHash(c, r, 13) < 0.75;
+            (seg.herd || (seg.herd = [])).push({
+                spr, poses, face, roams,
+                gTop, row: r, col: c,
+                mode: 'stand', down,
+                // Nothing wanders before it exists. Grazing still ticks while
+                // hidden, so an animal is mid-cycle when it appears rather than
+                // caught standing to attention — but it appears WHERE IT WAS
+                // PUT, not somewhere it strolled to while invisible.
+                shown: !watchCanal,
+                t:    this._cellHash(c, r, 14) * this._rndRange(down ? (G.DOWN_MS || [4200, 9500]) : (G.UP_MS || [900, 2300])),
+                next: this._rndRange(down ? (G.DOWN_MS || [4200, 9500]) : (G.UP_MS || [900, 2300])),
+                wait: this._rndRange(MV.PAUSE_MS || [4000, 15000]),
+                stepT: 0, stepOn: false,
+            });
+            if (down && pose.eat) this._wearFrame(spr, pose.eat, w, h);
+
+            // EACH ANIMAL WATCHES ITS OWN NEAREST CANAL CELL, exactly as a crop
+            // does. So the herd does not appear all at once on some pen-wide
+            // signal — it fills in behind the water as it spreads across the
+            // field, which is the same beat the crops come up on.
+            let watch = null, bd = Infinity;
+            for (const cc of canal) {
+                const d = Math.abs(cc.col - c) + Math.abs(cc.row - r);
+                if (d < bd) { bd = d; watch = cc; }
+            }
+            if (watch) {
+                // Held at its opening size, so the pop starts from where it will
+                // grow rather than snapping there on the first frame. The full
+                // scale is kept because setDisplaySize has already worked it out
+                // and the tween has to climb back to exactly it.
+                const from = A.POP_FROM !== undefined ? A.POP_FROM : 0.35;
+                const sx = spr.scaleX, sy = spr.scaleY;
+                spr.setAlpha(0).setScale(sx * from, sy * from);
+                (seg.penWait || (seg.penWait = [])).push({
+                    spr, watch, y, sx, sy, herd: seg.herd[seg.herd.length - 1],
+                    due: (stg[0] || 0) + ((stg[1] || 0) - (stg[0] || 0)) * this._cellHash(c, r, 15),
+                });
+            }
+        }
+    }
+
+    // Every drawing a species can show, worked out once per level.
+    //
+    // A facing is either loose image PATHS or a SHEET plus frame numbers, and
+    // resolving both here means nothing downstream has to know which. It also
+    // carries each facing's own display size: a side view is a different shape
+    // to a front view, so an animal that turns changes size as well as picture.
+    _animalPoses(sp, tile) {
+        if (sp._poses && sp._poses.tile === tile) return sp._poses;
+        const out = { tile, canWalk: true };
+        for (const [face, fc] of Object.entries(sp.FACINGS || {})) {
+            const sh  = fc.SHEET && (sp.SHEETS || {})[fc.SHEET];
+            const key = sh ? sh.FILE : fc.IDLE;
+            if (!key || !this.textures.exists(key)) { out.canWalk = false; continue; }
+            // From the FRAME, not the file — a sheet's image is the whole strip.
+            const src = sh ? { width: sh.FRAME_W, height: sh.FRAME_H }
+                           : this.textures.get(key).getSourceImage();
+            const h = tile * (fc.SIZE !== undefined ? fc.SIZE : 1);
+            out[face] = {
+                key, w: h * (src.width / src.height), h, flip: !!fc.FLIP,
+                idle: { k: key,                        f: sh ? fc.IDLE : undefined },
+                walk: fc.WALK !== undefined ? { k: key, f: sh ? fc.WALK : undefined } : null,
+                eat:  fc.EAT  !== undefined ? { k: sh ? key : fc.EAT, f: sh ? fc.EAT : undefined } : null,
+            };
+            if (!out[face].walk) out.canWalk = false;
+        }
+        sp._poses = out;
+        return out;
+    }
+
+    // Turn an animal to face a way. More than a picture swap: the front and side
+    // views are different shapes, so the display size travels with the facing.
+    _faceAnimal(a, face) {
+        const p = a.poses[face];
+        if (!p || a.face === face) return;
+        a.face = face;
+        a.spr.setFlipX(p.flip);
+        this._wearFrame(a.spr, (a.mode === 'walk' && p.walk) ? p.walk : p.idle, p.w, p.h);
+    }
+
+    // Graze, wander, and turn to whichever way they are going.
+    //
+    // Facing is split at the DIAGONALS: within 45 degrees of straight up it
+    // faces north, and so round. Comparing the two distances is that same test
+    // without any angles — whichever axis the animal is covering more of is the
+    // way it is pointing.
+    _updateHerd(dtMs) {
+        const TM = CONFIG.ROAD.TILEMAP, A = TM.ANIMALS || {};
+        if (A.ENABLED === false) return;
+        const G = (TM.PROPS || {}).GRAZE || {}, MV = A.MOVE || {};
+        const down = G.DOWN_MS || [4200, 9500], up = G.UP_MS || [900, 2300];
+        const stepMs = 1000 / Math.max(1, MV.WALK_FPS || 5);
+        const dt = Math.min(dtMs, 100), dts = dt / 1000;
+
+        for (const seg of this.segments || []) {
+            const list = seg.herd;
+            if (!list || !list.length) continue;
+            const g = this.tileGrid;
+            for (let i = list.length - 1; i >= 0; i--) {
+                const a = list[i];
+                if (!a.spr || !a.spr.scene) { list.splice(i, 1); continue; }
+                const p = a.poses[a.face];
+                if (!p) continue;
+
+                if (a.mode === 'walk') {
+                    const dx = a.tx - a.spr.x, dy = a.ty - a.spr.y;
+                    const d  = Math.hypot(dx, dy);
+                    const step = (MV.SPEED || 0.45) * (a.tile || g.tile) * dts;
+                    if (d <= step) {
+                        a.spr.setPosition(a.tx, a.ty);
+                        a.mode = 'stand';
+                        a.wait = this._rndRange(MV.PAUSE_MS || [4000, 15000]);
+                        a.down = false; a.t = 0;
+                        a.next = this._rndRange(up);
+                        this._wearFrame(a.spr, p.idle, p.w, p.h);
+                    } else {
+                        a.spr.x += (dx / d) * step;
+                        a.spr.y += (dy / d) * step;
+                        // The two walk frames alternating. Its own clock, not the
+                        // graze timer — one is a gait, the other is a mood.
+                        a.stepT += dt;
+                        if (a.stepT >= stepMs) {
+                            a.stepT -= stepMs;
+                            a.stepOn = !a.stepOn;
+                            this._wearFrame(a.spr, a.stepOn && p.walk ? p.walk : p.idle, p.w, p.h);
+                        }
+                        this._cutAnimalDepth(a, g);
+                        // Rock whatever it has just walked INTO, on cell entry
+                        // rather than proximity — the same rule the farmer
+                        // brushes by, so a field reacts to a passing animal the
+                        // one way however it was passed.
+                        const ac = Math.floor((a.spr.x - g.left) / g.tile);
+                        const ar = Math.ceil((a.spr.y - a.gTop) / g.tile) - 1;
+                        const cell = ac + ',' + ar;
+                        if (cell !== a.cell) {
+                            a.cell = cell;
+                            this._brushCrop(seg, cell, dx, MV.SWAY !== undefined ? MV.SWAY : 0.6);
+                        }
+                    }
+                    continue;
+                }
+
+                // Standing: head down, head up, and eventually a walk.
+                a.t += dt;
+                if (a.t >= a.next) {
+                    a.t -= a.next;
+                    a.down = !a.down;
+                    a.next = this._rndRange(a.down ? down : up);
+                    this._wearFrame(a.spr, (a.down && p.eat) ? p.eat : p.idle, p.w, p.h);
+                }
+                if (!a.roams || !a.shown) continue;
+                a.wait -= dt;
+                if (a.wait > 0) continue;
+                this._sendAnimal(a, g);
+            }
+        }
+    }
+
+    // Pick somewhere near to amble to, and turn that way.
+    //
+    // A few tries and then it simply stays put — which is the right answer on a
+    // cramped map, and costs one more pause rather than any pathfinding.
+    _sendAnimal(a, g) {
+        const MV = (CONFIG.ROAD.TILEMAP.ANIMALS || {}).MOVE || {};
+        const trip = MV.TRIP_TILES || [1, 3.5];
+        a.tile = g.tile;
+        for (let n = 0; n < 8; n++) {
+            const ang = Math.random() * Math.PI * 2;
+            const len = this._rndRange(trip) * g.tile;
+            const tx = a.spr.x + Math.cos(ang) * len;
+            const ty = a.spr.y + Math.sin(ang) * len;
+            const c  = Math.floor((tx - g.left) / g.tile);
+            const r  = Math.ceil((ty - a.gTop) / g.tile) - 1;    // feet stand on the cell above the line
+            if (c < 0 || c >= g.cols || r < 0 || r >= g.rows) continue;
+            if (this._canalCell(g, c, r)) continue;              // never into the ditch
+            a.tx = tx; a.ty = ty; a.mode = 'walk'; a.stepT = 0;
+            // WHICHEVER AXIS IT COVERS MORE OF is the way it faces — the same
+            // split as 45 degrees, without the trigonometry.
+            const dx = tx - a.spr.x, dy = ty - a.spr.y;
+            this._faceAnimal(a, Math.abs(dy) > Math.abs(dx) ? (dy > 0 ? 's' : 'n')
+                                                            : (dx > 0 ? 'e' : 'w'));
+            return;
+        }
+        a.wait = this._rndRange(MV.PAUSE_MS || [4000, 15000]);
+    }
+
+    // Row-quantised, for the reason the farmer's is: a depth change dirties the
+    // whole display list and forces a re-sort of every object in the scene.
+    _cutAnimalDepth(a, g) {
+        const row = Math.floor((a.spr.y - a.gTop) / g.tile);
+        if (row === a.row) return;
+        a.row = row;
+        a.spr.setDepth(this._yDepth(a.spr.y));
+    }
+
+    // Walk each animal on as the water reaches the cell it stands on.
+    _updateAnimals(dtMs) {
+        const A = CONFIG.ROAD.TILEMAP.ANIMALS || {};
+        if (A.ENABLED === false) return;
+        const at = A.AT !== undefined ? A.AT : 0.15;
+        const dt = Math.min(dtMs || 16, 100);
+        for (const seg of this.segments || []) {
+            const list = seg.penWait;
+            if (!list || !list.length) continue;
+            for (let i = list.length - 1; i >= 0; i--) {
+                const p = list[i];
+                if (!p.watch || p.watch.progress <= at) continue;
+                p.due -= dt;                       // its turn inside the arrival
+                if (p.due > 0) continue;
+                list.splice(i, 1);
+                if (p.herd) p.herd.shown = true;      // free to wander now
+                // Scale and alpha on separate curves: the size overshoots and
+                // settles, which is what makes it a pop, while the fade stays
+                // even — a fade that overshoots would flash past full opacity.
+                this.tweens.add({ targets: p.spr, scaleX: p.sx, scaleY: p.sy,
+                    duration: A.FADE_MS || 380, ease: A.POP_EASE || 'Back.easeOut' });
+                this.tweens.add({ targets: p.spr, alpha: 1,
+                    duration: (A.FADE_MS || 380) * 0.6, ease: 'Sine.easeOut' });
+            }
+        }
     }
 
     // The fence along a farm's near boundary — where it meets the level below.
@@ -2514,14 +2868,9 @@ console.log(
         const col = Math.floor((f.spr.x - g.left) / g.tile);
         if (row === f.row && col === f.col) return;
         f.row = row; f.col = col;
-        // ON A BRIDGE he has to be on top of it. The deck sits above the canal
-        // water at a flat depth, well clear of the world-Y band everything else
-        // sorts in, so crossing it by position alone would walk him underneath.
-        if (g.bridged && g.bridged.has(col + ',' + row)) {
-            const P = CONFIG.ROAD.TILEMAP.PROPS || {};
-            f.spr.setDepth((P.BRIDGE_DEPTH !== undefined ? P.BRIDGE_DEPTH : 3.15) + 0.01);
-            return;
-        }
+        // No special case for bridges: a branch deck is drawn down in the
+        // terrain band, below everything that sorts by position, so he passes
+        // over it by simply being an actor.
         f.spr.setDepth(this._yDepth(f.gTop + (row + 0.5) * g.tile, 0.0005));
     }
 
@@ -2585,7 +2934,9 @@ console.log(
     // he pushed it; a straight vertical walk has no sideways component, so those
     // fall back to the plant's own fixed direction rather than all picking the
     // same side.
-    _brushCrop(seg, cell, dx) {
+    // `mul` scales the knock — a pig pushing past a plant is not a person
+    // walking through it, and the difference should be visible.
+    _brushCrop(seg, cell, dx, mul) {
         const S = (CONFIG.ROAD.TILEMAP.CROP_SWAY) || {};
         if (S.ENABLED === false) return;
         const cr = seg.cropAt && seg.cropAt.get(cell);
@@ -2602,7 +2953,8 @@ console.log(
         // is already pulling it back before it tops out — at DAMP 0.32 that is
         // barely half — so handing the knob straight to velocity would make it
         // read as a lie the moment anyone measured it.
-        cr.swayV += (S.LEAN_DEG !== undefined ? S.LEAN_DEG : 11) / this._swayPeak(w) * dir;
+        cr.swayV += (S.LEAN_DEG !== undefined ? S.LEAN_DEG : 11)
+                  * (mul === undefined ? 1 : mul) / this._swayPeak(w) * dir;
         if (!cr.swaying) {                       // one entry per plant, however
             cr.swaying = true;                   // many times it is brushed
             (seg.sway || (seg.sway = [])).push(cr);
@@ -7047,6 +7399,8 @@ console.log(
         this._updateProps(delta || 16);
         this._updateSway(delta || 16);
         this._updateGraze(delta || 16);
+        this._updateAnimals(delta || 16);
+        this._updateHerd(delta || 16);
     }
 }
 

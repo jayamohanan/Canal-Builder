@@ -20,6 +20,11 @@
 //
 //   FILE   path to the Tiled .tmj — field layout, canals, crop cells, props
 //   CROP   which sheet grows here; a name in CROP_LIBRARY below
+//   RANCH  optional: makes this level an animal farm — { SPECIES, COUNT }.
+//          The species is a block in ANIMALS.SPECIES (config.js) holding its
+//          art per facing; the count is how many to scatter. They go anywhere
+//          that is not canal, and each walks on as the water reaches the cell
+//          it stands on — so the herd fills in behind the flood.
 //   COST   optional: work to cut this level, overriding COST[] by position
 //   PONDS  optional: marker id -> pond art, for maps painting pond markers
 //
@@ -40,7 +45,7 @@ const LEVEL_DATA = {
     // Adding a level: one line. Reordering: move the line, and its crop travels
     // with it.
     LEVELS: [
-        { FILE: 'level_maps/level_09.tmj', CROP: 'corn' },
+        { FILE: 'level_maps/level_10.tmj', CROP: 'corn', RANCH: { SPECIES: 'pig', COUNT: 8 } },
         { FILE: 'level_maps/level_08.tmj', CROP: 'corn' },
         { FILE: 'level_maps/level_07.tmj', CROP: 'tomato' },
         { FILE: 'level_maps/level_06.tmj', CROP: 'carrot' },
@@ -49,6 +54,8 @@ const LEVEL_DATA = {
         { FILE: 'level_maps/level_03.tmj', CROP: 'corn' },
         { FILE: 'level_maps/level_04.tmj', CROP: 'hops' },
         { FILE: 'level_maps/level_05.tmj', CROP: 'egg-plant' },
+        // An animal farm — nothing to draw on the map, just:
+        //   { FILE: '…', CROP: 'grass', RANCH: { SPECIES: 'cow', COUNT: 8 } },
         // Unused sheets, ready to pair: melon, potato, grape.
         // A level that paints pond markers names its art here:
         //   { FILE: '…', CROP: 'melon', PONDS: { 1: 'pond1_dry' } },

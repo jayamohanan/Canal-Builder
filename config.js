@@ -593,11 +593,20 @@ var CONFIG = {
                     DOWN_MS: [4200, 9500],   // head down, cropping grass
                     UP_MS:   [900,  2300],   // head up, looking around — rarer
                 },
-                // Where a bridge deck sits. It has to clear the canal WATER
-                // (3.10), which every world-Y depth is below — those come out
-                // just under 3.0 — so a bridge cannot sort by position like
-                // everything else or it would be under the stream it crosses.
-                BRIDGE_DEPTH: 3.15,
+                // A BRIDGE IS GROUND, not an object standing on it — so it is
+                // given a flat DEPTH and never sorts by position. Whoever walks
+                // over it passes above it, always, the same way they pass over
+                // the soil and the ditch.
+                //
+                // Which flat depth depends on the water it crosses, and the two
+                // canals are drawn in different bands: BRANCH water sits at 1.55
+                // down in the terrain band, while the MAIN canal's is at 3.10,
+                // above everything that sorts by position. So a branch bridge
+                // can sit just over its stream at 1.60 and still be under every
+                // actor, while a main bridge has to clear 3.10 and ends up above
+                // them. That costs nothing in practice: the main canal's columns
+                // are the machine's corridor and the farmer is barred from them,
+                // so nobody ever stands on a main bridge to be hidden by it.
                 ITEMS: {
                     // ── Bridges ─────────────────────────────────────────
                     // SIZE is height in tiles and SIZE_W is width in tiles, and
@@ -624,8 +633,8 @@ var CONFIG = {
                     // and the same reason as the dams'. It then drops in from
                     // above exactly as the wall does. Branch bridges have no
                     // such entry: their canals are drawn with the level.
-                    bridge_main_ns:   { FILE: 'graphics/bridge/bridge_main_ns.webp', SIZE:   2, ORIGIN: [0.5, 0.5], WALKABLE: true, AFTER_DIG_TILES: 4 },
-                    bridge_main_ew:   { FILE: 'graphics/bridge/bridge_main_ew.webp', SIZE_W: 2, ORIGIN: [0.5, 0.5], WALKABLE: true, AFTER_DIG_TILES: 4 },
+                    bridge_main_ns:   { FILE: 'graphics/bridge/bridge_main_ns.webp', SIZE:   2, ORIGIN: [0.5, 0.5], WALKABLE: true, DEPTH: 3.15, AFTER_DIG_TILES: 4 },
+                    bridge_main_ew:   { FILE: 'graphics/bridge/bridge_main_ew.webp', SIZE_W: 2, ORIGIN: [0.5, 0.5], WALKABLE: true, DEPTH: 3.15, AFTER_DIG_TILES: 4 },
                     // A ONE-TILE BRIDGE HAS ITS OWN ART at half the size, and
                     // has to. Drawn from the two-tile file it would be squeezed
                     // 2.4x, and the GPU minifies by reading four texels per
@@ -635,15 +644,21 @@ var CONFIG = {
                     // 1.2x the four samples cover the footprint and it sits
                     // still. The same rule holds for any art added later:
                     // anything drawn below about 1.5x its source will crawl.
-                    bridge_branch_ns: { FILE: 'graphics/bridge/bridge_branch_ns.webp', SIZE:   1, ORIGIN: [0.5, 0.5], WALKABLE: true },
-                    bridge_branch_ew: { FILE: 'graphics/bridge/bridge_branch_ew.webp', SIZE_W: 1, ORIGIN: [0.5, 0.5], WALKABLE: true },
-                    bridge_minor_ns:  { FILE: 'graphics/bridge/bridge_branch_ns.webp', SIZE:   1, ORIGIN: [0.5, 0.5], WALKABLE: true },
-                    bridge_minor_ew:  { FILE: 'graphics/bridge/bridge_branch_ew.webp', SIZE_W: 1, ORIGIN: [0.5, 0.5], WALKABLE: true },
+                    bridge_branch_ns: { FILE: 'graphics/bridge/bridge_branch_ns.webp', SIZE:   1, ORIGIN: [0.5, 0.5], WALKABLE: true, DEPTH: 1.60 },
+                    bridge_branch_ew: { FILE: 'graphics/bridge/bridge_branch_ew.webp', SIZE_W: 1, ORIGIN: [0.5, 0.5], WALKABLE: true, DEPTH: 1.60 },
+                    bridge_minor_ns:  { FILE: 'graphics/bridge/bridge_branch_ns.webp', SIZE:   1, ORIGIN: [0.5, 0.5], WALKABLE: true, DEPTH: 1.60 },
+                    bridge_minor_ew:  { FILE: 'graphics/bridge/bridge_branch_ew.webp', SIZE_W: 1, ORIGIN: [0.5, 0.5], WALKABLE: true, DEPTH: 1.60 },
 
-                    cow_n: { FILE: 'graphics/animals/cows/cow_n_idle.png', EAT: 'graphics/animals/cows/cow_n_eat.png', SIZE: 2.0,  ORIGIN: [0.5, 0], FACE: [ 0, -1] },
-                    cow_s: { FILE: 'graphics/animals/cows/cow_s_idle.png', EAT: 'graphics/animals/cows/cow_s_eat.png', SIZE: 2.0,  ORIGIN: [0.5, 1], FACE: [ 0,  1] },
-                    cow_e: { FILE: 'graphics/animals/cows/cow_e_idle.png', EAT: 'graphics/animals/cows/cow_e_eat.png', SIZE: 1.32, ORIGIN: [1,   1], FACE: [ 1,  0] },
-                    cow_w: { FILE: 'graphics/animals/cows/cow_e_idle.png', EAT: 'graphics/animals/cows/cow_e_eat.png', SIZE: 1.32, ORIGIN: [0,   1], FACE: [-1,  0], FLIP: true },
+                    // HAND-PLACED ANIMALS BORROW THE SPECIES' ART rather than
+                    // naming files of their own, so a cow is described once and
+                    // changing its sheets does not leave these behind. What
+                    // stays here is what only a placed marker has: the anchor,
+                    // which puts the animal's FRONT on the marked point, and the
+                    // tile it faces for the reveal.
+                    cow_n: { SPECIES: 'cow', FACING: 'n', ORIGIN: [0.5, 0], FACE: [ 0, -1] },
+                    cow_s: { SPECIES: 'cow', FACING: 's', ORIGIN: [0.5, 1], FACE: [ 0,  1] },
+                    cow_e: { SPECIES: 'cow', FACING: 'e', ORIGIN: [1,   1], FACE: [ 1,  0] },
+                    cow_w: { SPECIES: 'cow', FACING: 'w', ORIGIN: [0,   1], FACE: [-1,  0] },
                 },
             },
             POND_LAYER: 'pond',            // marker layer the ponds are painted on
@@ -854,6 +869,154 @@ var CONFIG = {
                 FADE_MS: 420,        // handover cross-fade
                 DEPTH:   3.5,        // above every piece of world art (spoil is
                                      // the highest at 3.12) and below the UI
+            },
+
+            // ── Animal farms ────────────────────────────────────────────────
+            // Some levels are ranches. Rather than placing every animal by hand
+            // the way the cow_* markers do, a ranch declares a SPECIES and a
+            // COUNT in levels.js and the herd is scattered for you.
+            //
+            // WHERE they stand is anywhere that is not canal. Nothing has to be
+            // drawn on the map — a count is enough — and when there are places
+            // the herd must keep out of (a farmhouse's footprint, a yard) those
+            // become one more reason to reject a cell, alongside the ditch.
+            //
+            // WHEN they appear is the water. Each animal watches ITS OWN nearest
+            // canal cell, exactly as a crop does, so the herd fills in behind
+            // the water as it spreads rather than arriving on one signal — and
+            // an unwatered field stays empty. A ranch is restored by the same
+            // act that grows a farm.
+            //
+            // Positions and facings come from the CELL HASH rather than
+            // Math.random. Nothing rebuilds a level today, so this is not
+            // required; it costs nothing and means a level restored from a save
+            // comes back with the herd it had, with no positions written down.
+            ANIMALS: {
+                ENABLED: true,
+                AT:   0.15,             // canal fill fraction that counts as watered
+                                        // — the same threshold the crops use
+                // THEY POP UP rather than descend. Scaling from nothing, about
+                // the feet — the origin is the feet, so it grows out of the
+                // ground it will stand on — reads as an animal arriving. Sliding
+                // down into place read as one being dropped there.
+                FADE_MS:  380,
+                POP_FROM: 0.35,             // scale it starts at. 1 = no pop
+                POP_EASE: 'Back.easeOut',   // overshoots a little and settles
+                // ── Wandering ───────────────────────────────────────────
+                // SOME of the herd walks about. Not all of it: a field where
+                // every animal is on the move reads as agitated, and one where
+                // none are reads as a diorama. A minority wandering while the
+                // rest graze is what looks like livestock.
+                //
+                // Which ones is decided by the CELL HASH, so a given animal is
+                // either a wanderer or not and stays that way.
+                //
+                // A species can only wander if its facings name a WALK frame —
+                // cows have no walk art, so they stand still and nothing has to
+                // say so anywhere.
+                MOVE: {
+                    ENABLED:  true,
+                    FRACTION: 0.45,          // share of the herd that ever moves
+                    SPEED:    0.45,          // tiles per second — an amble
+                    WALK_FPS: 5,             // the two walk frames alternating
+                    PAUSE_MS: [4000, 15000], // stood still between trips
+                    TRIP_TILES: [1, 3.5],    // how far one trip goes
+                    SWAY: 0.6,               // how hard it knocks a plant it
+                                             // passes, against the farmer's 1.
+                                             // A pig shouldering through a crop
+                                             // is not a person walking through
+                                             // it, and the field should say so
+                    // Facing follows the direction of travel, split at the
+                    // diagonals: within 45 degrees of straight up it faces
+                    // north, and so round. Comparing the two distances is the
+                    // same test and needs no angles.
+                },
+
+                // A last nudge on top of the water's own spread, so two animals
+                // sharing a canal cell still arrive a beat apart. Same reasoning
+                // as the crops' watering stagger.
+                STAGGER_MS: [0, 1600],
+
+                // A SPECIES gathers everything one animal needs: a drawing per
+                // facing, its second drawing for grazing, and how tall it stands
+                // in TILES. Adding pigs is a block like this one plus a line in
+                // levels.js — no code.
+                //
+                // Every facing is anchored at its FEET, unlike the hand-placed
+                // cow_* markers where the anchor encodes which way the animal
+                // looks. A scattered animal simply stands on its cell.
+                SPECIES: {
+                    // A species may keep its facings as SEPARATE IMAGES (the
+                    // cow) or as SPRITESHEETS with frame numbers (the pig). The
+                    // pig's two sheets have different frame sizes — front and
+                    // back share a silhouette, the side view does not — and one
+                    // padded sheet would waste 46% of its pixels on empty
+                    // columns, so they stay two.
+                    //
+                    // Each row runs walk1, walk2, eat. Only walk1 (standing) and
+                    // eat are used: nothing walks yet, so frame 2 of every row
+                    // is spare and waiting for that.
+                    pig: {
+                        SHEETS: {
+                            ns: { FILE: 'graphics/animals/pigs/pig_ns.webp', FRAME_W: 77,  FRAME_H: 96 },
+                            e:  { FILE: 'graphics/animals/pigs/pig_e.webp',  FRAME_W: 128, FRAME_H: 82 },
+                        },
+                        // pig_ns is two rows of three, counted left to right and
+                        // top to bottom: north is 0-2, south is 3-5.
+                        //
+                        // SIZE is height in tiles. The side view is 82px where
+                        // the front is 96, so its size is that same fraction of
+                        // the front's — otherwise the same animal changes size
+                        // when it turns.
+                        FACINGS: {
+                            n: { SHEET: 'ns', IDLE: 0, WALK: 1, EAT: 2, SIZE: 1.30 },
+                            s: { SHEET: 'ns', IDLE: 3, WALK: 4, EAT: 5, SIZE: 1.30 },
+                            e: { SHEET: 'e',  IDLE: 0, WALK: 1, EAT: 2, SIZE: 1.11 },
+                            w: { SHEET: 'e',  IDLE: 0, WALK: 1, EAT: 2, SIZE: 1.11, FLIP: true },
+                        },
+                    },
+                    // Only a SIDE view exists, so only east and west are listed
+                    // and west is east mirrored. Nothing else has to be said:
+                    // when a chicken walks north or south the turn finds no pose
+                    // for it and it keeps the facing it had — which is what the
+                    // farmer does on a straight vertical walk too, and reads as
+                    // an animal that simply has not turned.
+                    chicken: {
+                        SHEETS: {
+                            e: { FILE: 'graphics/animals/chicken/chicken_e.webp', FRAME_W: 100, FRAME_H: 100 },
+                        },
+                        // SIZE is a starting guess — tune by eye. It fights
+                        // itself a little: a believable chicken is under a tile
+                        // tall, but the frame is 100px, so at that size it is
+                        // squeezed past 2x and can shimmer while walking. Being
+                        // small and round it hides that far better than the
+                        // bridge's planks did; if it does show, re-export the
+                        // sheet at 48px frames rather than growing the bird.
+                        FACINGS: {
+                            e: { SHEET: 'e', IDLE: 0, WALK: 1, EAT: 2, SIZE: 0.85 },
+                            w: { SHEET: 'e', IDLE: 0, WALK: 1, EAT: 2, SIZE: 0.85, FLIP: true },
+                        },
+                    },
+                    cow: {
+                        SHEETS: {
+                            ns: { FILE: 'graphics/animals/cows/cow_ns.webp', FRAME_W: 57,  FRAME_H: 114 },
+                            e:  { FILE: 'graphics/animals/cows/cow_e.webp',  FRAME_W: 128, FRAME_H: 84  },
+                        },
+                        // Two rows of three: north is 0-2, south is 3-5, each
+                        // running idle, walk, eat. The side view is 84px where
+                        // the front is 114, so its SIZE is that same fraction —
+                        // otherwise the animal changes size when it turns.
+                        //
+                        // Both land at about 1.1x downscale, which is as close
+                        // to the display size as art gets.
+                        FACINGS: {
+                            n: { SHEET: 'ns', IDLE: 0, WALK: 1, EAT: 2, SIZE: 2.00 },
+                            s: { SHEET: 'ns', IDLE: 3, WALK: 4, EAT: 5, SIZE: 2.00 },
+                            e: { SHEET: 'e',  IDLE: 0, WALK: 1, EAT: 2, SIZE: 1.47 },
+                            w: { SHEET: 'e',  IDLE: 0, WALK: 1, EAT: 2, SIZE: 1.47, FLIP: true },
+                        },
+                    },
+                },
             },
 
             FENCE: {
