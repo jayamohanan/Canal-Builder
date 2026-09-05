@@ -902,6 +902,46 @@ var CONFIG = {
                 FADE_MS:  380,
                 POP_FROM: 0.35,             // scale it starts at. 1 = no pop
                 POP_EASE: 'Back.easeOut',   // overshoots a little and settles
+                // ── Placed herds ────────────────────────────────────────
+                // A ranch may be SCATTERED (a count, positions chosen for you)
+                // or PLACED (a point per animal, painted on the map). Placed is
+                // for the ones that have to stand somewhere in particular; the
+                // level says which by giving COUNT or not.
+                //
+                // Points go on their own object layer and are named for the way
+                // the animal looks — `cow_e`, or just `_e` to take the level's
+                // own species. The count is however many points there are.
+                LAYER: 'ranch',
+                // WHERE A PLACED POINT SITS ON THE ANIMAL: the edge it faces.
+                // `cow_e` puts the cow's east edge on the point, `cow_s` its
+                // south edge, so the body always trails behind the mark and
+                // never crosses it. Marking a spot beside a fence or a ditch
+                // therefore keeps the animal out of it.
+                //
+                // The vertical half is the FEET wherever the facing leaves a
+                // choice, so the animal stands on the ground plane it was marked
+                // in. North is the exception by construction — its leading edge
+                // is its top, so it stands below its own mark.
+                //
+                // Same convention as the hand-placed cow_* props markers, which
+                // is deliberate: one rule for placing an animal, however it was
+                // placed.
+                FACE_ORIGIN: { n: [0.5, 0], s: [0.5, 1], e: [1, 1], w: [0, 1] },
+
+                // ── Fences ──────────────────────────────────────────────
+                // An upright structure painted as tiles, which animals and the
+                // farmer pass BEHIND or IN FRONT of by their Y — unlike the
+                // ground and the ditches, which are always underfoot. It is a
+                // normal tile layer; what makes it upright is that each tile
+                // sorts from the line it stands on rather than taking a flat
+                // depth.
+                //
+                // HEIGHT lets a fence stand taller than the cell it occupies —
+                // the art is anchored to the BOTTOM of its tile and rises out of
+                // it, which is what a post does.
+                FENCE_LAYER:  'fences',
+                FENCE_HEIGHT: 1,        // in tiles; 1.5 for a tall fence
+
                 // ── Wandering ───────────────────────────────────────────
                 // SOME of the herd walks about. Not all of it: a field where
                 // every animal is on the move reads as agitated, and one where
@@ -975,6 +1015,41 @@ var CONFIG = {
                             w: { SHEET: 'e',  IDLE: 0, WALK: 1, EAT: 2, SIZE: 1.11, FLIP: true },
                         },
                     },
+                    // The side view is 60 tall where the front is 64, so its SIZE
+                    // is that same fraction of the front's — otherwise the sheep
+                    // would change height as it turned.
+                    sheep: {
+                        SHEETS: {
+                            ns: { FILE: 'graphics/animals/sheep/sheep_ns.webp', FRAME_W: 48, FRAME_H: 64 },
+                            e:  { FILE: 'graphics/animals/sheep/sheep_e.webp',  FRAME_W: 64, FRAME_H: 60 },
+                        },
+                        FACINGS: {
+                            n: { SHEET: 'ns', IDLE: 0, WALK: 1, EAT: 2, SIZE: 1.00 },
+                            s: { SHEET: 'ns', IDLE: 3, WALK: 4, EAT: 5, SIZE: 1.00 },
+                            e: { SHEET: 'e',  IDLE: 0, WALK: 1, EAT: 2, SIZE: 0.94 },
+                            w: { SHEET: 'e',  IDLE: 0, WALK: 1, EAT: 2, SIZE: 0.94, FLIP: true },
+                        },
+                    },
+
+                    // The _ns sheet is 120px across three columns, so a frame is
+                    // 40 wide and not the 30 the art is drawn in — there is a
+                    // little empty room either side of the animal. Frame size is
+                    // the CELL the sheet is cut on, not the ink inside it.
+                    bunny: {
+                        SHEETS: {
+                            ns: { FILE: 'graphics/animals/bunny/bunny_ns.webp', FRAME_W: 40, FRAME_H: 64 },
+                            e:  { FILE: 'graphics/animals/bunny/bunny_e.webp',  FRAME_W: 64, FRAME_H: 64 },
+                        },
+                        // Both sheets are 64 tall, so both facings take the same
+                        // SIZE and the animal keeps its height as it turns.
+                        FACINGS: {
+                            n: { SHEET: 'ns', IDLE: 0, WALK: 1, EAT: 2, SIZE: 0.85 },
+                            s: { SHEET: 'ns', IDLE: 3, WALK: 4, EAT: 5, SIZE: 0.85 },
+                            e: { SHEET: 'e',  IDLE: 0, WALK: 1, EAT: 2, SIZE: 0.85 },
+                            w: { SHEET: 'e',  IDLE: 0, WALK: 1, EAT: 2, SIZE: 0.85, FLIP: true },
+                        },
+                    },
+
                     // Only a SIDE view exists, so only east and west are listed
                     // and west is east mirrored. Nothing else has to be said:
                     // when a chicken walks north or south the turn finds no pose

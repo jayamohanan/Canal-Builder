@@ -1098,6 +1098,8 @@ console.log(
             cropsData:  layer(TM.CROPS_LAYER)  || [],   // crop markers (not drawn)
             pondData:   layer(TM.POND_LAYER)   || [],   // pond markers (not drawn)
             props:      objects((TM.PROPS || {}).LAYER),// placed scenery (object layer)
+            ranch:      objects((TM.ANIMALS || {}).LAYER),  // placed animals (object layer)
+            fenceData:  layer((TM.ANIMALS || {}).FENCE_LAYER) || [],  // upright fences
             // Canal cells a bridge makes crossable. Built here, with the grid,
             // rather than when the bridges are drawn — the farmer is created
             // before the props are, and asking about a set that does not exist
@@ -1552,6 +1554,29 @@ console.log(
                         .setDepth(depth), seg);
                     if (isGround) ground[row * g.cols + col] = spr;
                 }
+            }
+        }
+
+        // FENCES stand up. Every other tile layer is underfoot and takes a flat
+        // depth, but a fence has to be passed behind or in front of, so each
+        // tile sorts from the line it stands on — the same measure the crops,
+        // the farmer and the animals use, so all four agree.
+        //
+        // Anchored at the BOTTOM of its cell and allowed to be taller than one,
+        // because that is how a post occupies ground: it takes one tile of floor
+        // and rises out of it.
+        const FH = TM.FENCE_HEIGHT !== undefined ? TM.FENCE_HEIGHT : 1;
+        for (let row = 0; row < g.rows; row++) {
+            for (let col = 0; col < g.cols; col++) {
+                const gid = g.fenceData[row * g.cols + col];
+                if (!gid) continue;
+                const t = this._tileOf(gid);
+                if (!t) continue;
+                const footY = gTop + (row + 1) * g.tile;
+                this._addB(this.add.image(g.left + (col + 0.5) * g.tile, footY, t.key, t.frame)
+                    .setOrigin(0.5, 1)
+                    .setDisplaySize(g.tile + 1, g.tile * FH)
+                    .setDepth(this._yDepth(footY)), seg);
             }
         }
 
@@ -2401,35 +2426,70 @@ console.log(
         if (!g) return;
         const def   = this._levelDef(this.endless ? this.endless.segIndex : 0) || {};
         const ranch = def.RANCH;
-        if (!ranch || !ranch.COUNT) return;
-        const sp = (A.SPECIES || {})[ranch.SPECIES];
-        if (!sp) { console.warn(`[animals] level names species "${ranch.SPECIES}", which is not in ANIMALS.SPECIES`); return; }
+        if (!ranch) return;
 
-        // Every cell an animal could stand on. Canal tiles are the only thing
-        // ruled out so far — they stand on the land, not in the ditch.
-        const open = [];
-        for (let r = 0; r < g.rows; r++) {
-            for (let c = 0; c < g.cols; c++) {
-                if (this._canalCell(g, c, r)) continue;
-                open.push({ c, r, k: this._cellHash(c, r, 11) });
+        // TWO KINDS OF RANCH, told apart by whether the level gave a COUNT.
+        // With one, the herd is scattered for you; without, every animal is a
+        // point painted on the map's ranch layer and the count is however many
+        // points there are.
+        //
+        // Both end up as the same list — a cell, a facing and a species — so
+        // everything after this point is one path.
+        const want = [];
+        if (ranch.COUNT) {
+            const faces = Object.keys(((A.SPECIES || {})[ranch.SPECIES] || {}).FACINGS || {});
+            if (!faces.length) { console.warn(`[animals] level names species "${ranch.SPECIES}", which is not in ANIMALS.SPECIES`); return; }
+            // Every cell an animal could stand on. Canal tiles are the only
+            // thing ruled out so far — they stand on the land, not the ditch.
+            const open = [];
+            for (let r = 0; r < g.rows; r++) {
+                for (let c = 0; c < g.cols; c++) {
+                    if (this._canalCell(g, c, r)) continue;
+                    open.push({ c, r, k: this._cellHash(c, r, 11) });
+                }
             }
+            if (!open.length) return;
+            // Lowest hash first, then take the first COUNT. A stable shuffle:
+            // the same cells win every time, and they land spread across the
+            // field rather than filling a corner the way a scan order would.
+            open.sort((a, b) => a.k - b.k);
+            for (let i = 0; i < Math.min(ranch.COUNT, open.length); i++) {
+                const { c, r } = open[i];
+                want.push({ c, r,
+                    species: ranch.SPECIES,
+                    face: faces[Math.floor(this._cellHash(c, r, 12) * faces.length) % faces.length] });
+            }
+        } else {
+            // A point's name ends in its facing. Anything before that is a
+            // SPECIES, so one ranch layer can hold more than one animal; with no
+            // prefix it takes the level's own.
+            for (const o of (g.ranch || [])) {
+                // The underscore is REQUIRED, not optional: "cow" would
+                // otherwise parse as a "co" facing west, silently, because it
+                // happens to end in one of the four letters.
+                const m = /^(.*?)_([nsew])$/.exec(o.name);
+                if (!m) { console.warn(`[animals] ranch point "${o.name}" does not end in _n/_s/_e/_w`); continue; }
+                // The exact point is kept, not the cell it fell in: a placed
+                // animal is anchored to the mark itself. The cell is still
+                // wanted, for the canal it watches and the hash it draws its
+                // grazing rhythm from.
+                want.push({ c: Math.floor(o.col), r: Math.ceil(o.row) - 1,
+                            species: m[1] || ranch.SPECIES, face: m[2],
+                            placed: true,
+                            x: g.left + o.col * g.tile,
+                            y: gTop   + o.row * g.tile });
+            }
+            if (!want.length) { console.warn(`[animals] level has a placed ranch but no points on the "${A.LAYER || 'ranch'}" layer`); return; }
         }
-        if (!open.length) return;
-        // Lowest hash first, then take the first COUNT. A stable shuffle: the
-        // same cells win every time, and they land spread across the field
-        // rather than filling a corner the way a scan order would.
-        open.sort((a, b) => a.k - b.k);
-        const want  = Math.min(ranch.COUNT, open.length);
-        const faces = Object.keys(sp.FACINGS || {});
-        if (!faces.length) return;
 
         const F     = seg.tunnel && seg.tunnel.flood;
         const canal = F ? [...F.cells.values()] : [];
         const stg   = A.STAGGER_MS || [0, 0];
 
-        for (let i = 0; i < want; i++) {
-            const { c, r } = open[i];
-            const face = faces[Math.floor(this._cellHash(c, r, 12) * faces.length) % faces.length];
+        for (const spec of want) {
+            const { c, r, face } = spec;
+            const sp = (A.SPECIES || {})[spec.species];
+            if (!sp) { console.warn(`[animals] no species "${spec.species}" in ANIMALS.SPECIES`); continue; }
             // EVERY facing is resolved up front, not just the one it starts in.
             // A wandering animal turns, and turning changes more than the
             // picture: the side view is a different shape to the front, so the
@@ -2440,16 +2500,20 @@ console.log(
             if (!pose) continue;
             const { key, w, h } = pose;
             const fI = pose.idle.f;
-            // Standing on its cell, anchored at the feet — so it sorts against
-            // crops and the fence by where it touches the ground, like
-            // everything else in the world.
-            const x = g.left + (c + 0.5) * g.tile;
-            const y = gTop   + (r + 1)   * g.tile;
+            // A SCATTERED animal stands on its cell, anchored at the feet. A
+            // PLACED one is anchored by the edge it faces, on the mark itself —
+            // so the body trails behind the point and never crosses it.
+            const o0 = spec.placed ? ((A.FACE_ORIGIN || {})[face] || [0.5, 1]) : [0.5, 1];
+            const x  = spec.placed ? spec.x : g.left + (c + 0.5) * g.tile;
+            const y  = spec.placed ? spec.y : gTop   + (r + 1)   * g.tile;
             const spr = this._addB(this.add.image(x, y, key, fI)
-                .setOrigin(0.5, 1)
+                .setOrigin(o0[0], o0[1])
                 .setDisplaySize(w, h)
                 .setFlipX(pose.flip)
-                .setDepth(this._yDepth(y)), seg);
+                // Depth from where it MEETS THE GROUND, not from its anchor — a
+                // north-facing animal is pinned by its top, so sorting on that
+                // would place it a body-length further away than it stands.
+                .setDepth(this._yDepth(y + (1 - o0[1]) * h)), seg);
 
             const G  = (TM.PROPS || {}).GRAZE || {};
             const MV = A.MOVE || {};
@@ -2457,7 +2521,10 @@ console.log(
             // A MINORITY WANDERS. Decided by the cell's hash, so a given animal
             // is a wanderer or is not, and stays that way — and only at all if
             // its species has walk art to do it with.
-            const roams = MV.ENABLED !== false && poses.canWalk
+            // A PLACED animal stays where it was put. Choosing its spot and the
+            // way it looks, then having it amble off, would throw away the only
+            // thing the placement said. Scattered herds are the ones that roam.
+            const roams = !!ranch.COUNT && MV.ENABLED !== false && poses.canWalk
                        && this._cellHash(c, r, 16) < (MV.FRACTION !== undefined ? MV.FRACTION : 0.45);
             const down  = this._cellHash(c, r, 13) < 0.75;
             (seg.herd || (seg.herd = [])).push({
