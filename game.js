@@ -2815,7 +2815,19 @@ console.log(
         const g = this.tileGrid;
         const o = this._depthOrigin !== undefined ? this._depthOrigin : worldY;
         const t = (g && g.tile) || 1;
-        return 3 + ((worldY - o) / t) * 0.001 + (bias || 0);
+        // BASE 4, ABOVE EVERY GROUND ITEM. The canal, its water and the bridges
+        // over it are ground — things walked on and stood beside — and the
+        // highest of them is the main bridge at 3.15. Anything that sorts by
+        // position is an ACTOR and belongs over all of it.
+        //
+        // It used to be 3, which put actors under the main canal band (3.03 to
+        // 3.15) while correctly over the branch band (1.55 to 1.60). So an
+        // animal standing beside a branch looked right and the same animal
+        // beside the MAIN canal was drawn behind the ditch.
+        //
+        // The offset is deliberately tiny — a thousandth per tile — so a whole
+        // world of actors still fits between 4 and the next band up.
+        return 4 + ((worldY - o) / t) * 0.001 + (bias || 0);
     }
 
     // Which roam band a column is in: -1 west of the canal, +1 east, 0 forbidden.
@@ -3033,11 +3045,22 @@ console.log(
     _swayPeak(w) {
         if (this._swayK) return this._swayK;
         const S = (CONFIG.ROAD.TILEMAP.CROP_SWAY) || {};
-        const z  = Math.min(0.99, Math.max(0, S.DAMP !== undefined ? S.DAMP : 0.32));
+        return (this._swayK = this._springPeak(w, S.DAMP !== undefined ? S.DAMP : 0.32));
+    }
+
+    // How far a struck spring actually travels per unit of opening speed.
+    //
+    // A damped spring only gets a fraction of the way its opening speed
+    // suggests, because the damping is already pulling it back before it tops
+    // out. Dividing an impulse by this makes a knob mean the distance REACHED
+    // rather than a velocity nobody can picture. Two springs use it — the crops'
+    // sway, and the waterline's nudge — with different damping.
+    _springPeak(w, damp) {
+        const z  = Math.min(0.99, Math.max(0, damp));
         const rt = Math.sqrt(1 - z * z);
         const wd = w * rt;                       // damped frequency
         const tp = Math.atan2(rt, z) / wd;       // when the first swing tops out
-        return (this._swayK = Math.exp(-z * w * tp) * Math.sin(wd * tp) / wd);
+        return Math.exp(-z * w * tp) * Math.sin(wd * tp) / wd;
     }
 
     // Let the brushed plants settle. A damped spring integrated by hand rather
@@ -3932,12 +3955,14 @@ console.log(
         // churn shows. A per-head strip mask keeps them inside the banks.
         this._ensureFoamBlobTexture();
         this._ensureMarkTexture();
+        this._ensureRippleTexture();
         const foamMask = this._addB(this.add.graphics().setVisible(false), seg);
         foamMask._noRebase = true;
         return { g, cells, active: [], triggered: new Set(),
                  mainLeftCol: g.mainLeftCol, mainRightCol: g.mainRightCol,
                  foamMask, blobMask: foamMask.createGeometryMask(), marks: [],
                  channelW: this.road.canalW, seg,
+                 met: new Set(),        // cell pairs whose fronts have already met
                  heads: [], foamBlobs: [], foamWhite: [],
                  // The main canal's front has its own sprites: same behaviour,
                  // different depth band (see _mainDepth).
@@ -4104,6 +4129,64 @@ console.log(
     // A crisp solid-white rectangle, tinted per streak at runtime. Deliberately
     // NOT the soft foam ellipse: the shimmer wants hard edges, so it reads as a
     // facet of light on the surface rather than a glow.
+    // A hollow white circle, tinted per use — white for the same reason mark_px
+    // is: one texture serves any colour the effect ever wants.
+    //
+    // Drawn large and scaled DOWN in play, so the stroke stays clean at the size
+    // it actually appears; a 24px ring blown up would go to mush.
+    _ensureRippleTexture() {
+        if (this.textures.exists('ripple_ring')) return;
+        const D = 96, t = this.textures.createCanvas('ripple_ring', D, D);
+        const c = t.getContext();
+        c.strokeStyle = '#ffffff';
+        c.lineWidth = 7;
+        c.beginPath();
+        // Inset by the stroke, or half its width falls outside the canvas and
+        // the ring comes out flat-sided.
+        c.arc(D / 2, D / 2, D / 2 - 4, 0, Math.PI * 2);
+        c.stroke();
+        t.refresh();
+    }
+
+    // Water arriving at something: the end of a ditch, or another front head on.
+    //
+    // Rings are made per event and destroy themselves, with no pool. The foam is
+    // pooled because it runs every frame; this fires on the order of ten times
+    // in a whole level.
+    _waterHit(F, x, y, isMain) {
+        const H = (CONFIG.ROAD.WATER || {}).HIT || {};
+        if (H.ENABLED === false) return;
+        const g = F.g;
+        if (!g || !this.textures.exists('ripple_ring')) return;
+        const from = (H.FROM !== undefined ? H.FROM : 0.25) * g.tile;
+        const to   = (H.TO   !== undefined ? H.TO   : 1.15) * g.tile;
+        const ms   = H.MS !== undefined ? H.MS : 380;
+        const rings = Math.max(1, H.RINGS || 1);
+        // Above the water it lands on, and above the head that led it there. The
+        // main canal's water sits in a different band to a branch's, so the
+        // ripple follows the same split the head does.
+        const depth = isMain ? this._mainDepth() + 0.012 : 1.565;
+
+        for (let i = 0; i < rings; i++) {
+            const alpha = i === 0 ? 1 : Math.pow(H.FADE !== undefined ? H.FADE : 0.85, i);
+            const spr = this._addB(this.add.image(x, y, 'ripple_ring')
+                .setTint(H.COLOR !== undefined ? H.COLOR : 0x7fd4f0)
+                .setDisplaySize(from, from)
+                .setAlpha(0)
+                .setDepth(depth), F.seg);
+            const sc = spr.scaleX * (to / from);      // where it grows TO, in this
+            this.tweens.add({                          // sprite's own scale terms
+                targets: spr,
+                scaleX: sc, scaleY: sc,
+                alpha: { from: alpha, to: 0 },
+                delay: i * (H.GAP_MS !== undefined ? H.GAP_MS : 120),
+                duration: ms,
+                ease: 'Sine.easeOut',                  // fast out of the impact,
+                onComplete: () => spr.destroy(),       // slowing as it spreads
+            });
+        }
+    }
+
     _ensureMarkTexture() {
         if (this.textures.exists('mark_px')) return;
         const t = this.textures.createCanvas('mark_px', 4, 4);
@@ -4132,10 +4215,33 @@ console.log(
             cell.entryDir = entryDir; cell.filling = true; cell.progress = 0;
             F.active.push(cell);
         };
+        const H = (CONFIG.ROAD.WATER || {}).HIT || {};
         const spawn = (cell, d) => {          // send water into the neighbour in dir d
             const [dc, dr, opp] = DIR[d];
             const nb = F.cells.get((cell.col + dc) + ',' + (cell.row + dr));
-            if (nb && nb.conn[opp]) activate(cell.col + dc, cell.row + dr, opp);
+            if (!nb || !nb.conn[opp]) return;
+            // TWO FRONTS MEETING, HEAD ON. `entryDir` is the edge water came IN
+            // by, so a neighbour entered from its `d` side has its front running
+            // back toward us. Any other state is water joining settled water or
+            // merging at a junction, which happens constantly and is not an
+            // event worth marking.
+            if (nb.entryDir === d && (nb.filling || nb.filled)) {
+                // Once per pair: a cell spawns into the same neighbour twice —
+                // when it splits at SPLIT_AT, and again when it fills and pushes
+                // through — and the meeting only happens once.
+                const a = cell.col + ',' + cell.row, b = nb.col + ',' + nb.row;
+                const pair = a < b ? a + '|' + b : b + '|' + a;
+                if (H.ON_MEET !== false && !F.met.has(pair)) {
+                    F.met.add(pair);
+                    // The seam between them, half a tile along the way we pushed.
+                    this._waterHit(F,
+                        g.left   + (cell.col + 0.5 + dc * 0.5) * g.tile,
+                        tn.exitY + (cell.row + 0.5 + dr * 0.5) * g.tile,
+                        false);
+                }
+                return;
+            }
+            activate(cell.col + dc, cell.row + dr, opp);
         };
 
         // 0. Main canal: bottom→up, TWO reveals per cell. The DRY tile follows
@@ -4189,6 +4295,17 @@ console.log(
                 if (cell.isEnd && cell.progress >= endStop) {
                     cell.progress = cap;
                     cell.filled = true;
+                    // THE WATER HAS RUN OUT OF DITCH. The head stops at endStop
+                    // along the tile, which is its centre, so that is where it
+                    // strikes. isEnd is only ever set on branch cells, so the
+                    // main canal's own end — breakthrough, which has a whole
+                    // beat of its own — can never come through here.
+                    if (H.ON_END !== false) {
+                        this._waterHit(F,
+                            g.left   + (cell.col + 0.5) * g.tile,
+                            tn.exitY + (cell.row + 0.5) * g.tile,
+                            false);
+                    }
                     continue;
                 }
                 const through = cell.entryDir ? DIR[cell.entryDir][2] : null;
@@ -4700,6 +4817,7 @@ console.log(
             beltRate: 0,     // cycles/sec the load is currently allowing
             strain: 0,       // 0 = free-running, 1 = stalled
             wet: 0,                          // how far the water has actually come
+            wetV: 0,                         // …and how fast, for its spring
             bore, maskShape, foam: foamGfx, crack, crackW: beltW,
             flood: this._buildFlood(seg, band),   // canal water (tilemap only)
             dams: null, releaseTo: 0,             // mid-level walls (filled below)
@@ -5460,15 +5578,52 @@ console.log(
             // ease off. So this runs at a flat speed.
             const v = (WA.FLOOD_SPEED || 140) * this.layoutConfig.platformScale;
             tn.wet = Math.min(target, tn.wet + v * dt);
+        } else if (limit === undefined && (WA.SPRING || {}).ENABLED !== false) {
+            // CHASING THE MACHINE, on a spring. The target moves, and the water
+            // has weight: it falls behind a surge, runs up after it, passes the
+            // mark and settles. Unlike the chase below it can OVERSHOOT and pull
+            // back — that slosh is the whole effect, and it is why this runs
+            // whether the gap is positive or not.
+            const S = WA.SPRING || {};
+            const w = 2 * Math.PI * (S.HZ !== undefined ? S.HZ : 0.9);
+            const k = w * w;                                              // stiffness
+            const c = 2 * (S.DAMP !== undefined ? S.DAMP : 0.45) * w;     // damping
+            tn.wetV += (-k * (tn.wet - target) - c * tn.wetV) * dt;
+
+            // THE SURGE. Without this the spring is never disturbed while the
+            // machine climbs steadily, so it settles to a smooth trailing lag
+            // and the bounce is only ever seen when the rig changes pace.
+            //
+            // Only ever FORWARD, and only when there is room ahead — water finds
+            // a little space, spills into it, and rocks back. When the water has
+            // caught up, or the machine has stopped, there is no room and it
+            // goes quiet on its own.
+            const nT = S.NUDGE_TILES !== undefined ? S.NUDGE_TILES : 0.07;
+            const gEl = (tn.flood && tn.flood.g) || this.tileGrid;
+            if (nT > 0 && gEl && target - tn.wet > gEl.tile * 0.02) {
+                tn.wetT = (tn.wetT || 0) - dt * 1000;
+                if (tn.wetT <= 0) {
+                    tn.wetT = this._rndRange(S.NUDGE_MS || [260, 620]);
+                    // Divided by the peak so NUDGE_TILES is the distance the
+                    // surge actually carries it, not an opening speed.
+                    tn.wetV += (nT * gEl.tile) / this._springPeak(w, S.DAMP !== undefined ? S.DAMP : 0.45);
+                }
+            }
+            tn.wet  += tn.wetV * dt;
+            // The water may lag, and may crowd the blade, but it may never get
+            // AHEAD OF THE CUT — that is the one overshoot that reads as broken
+            // rather than alive. The velocity dies with the clamp, or the spring
+            // spends the next several frames pushing against a wall.
+            const cap = Math.min(tn.progressPx, tn.len);
+            if (tn.wet > cap) { tn.wet = cap; tn.wetV = Math.min(0, tn.wetV); }
+            if (tn.wet < 0)   { tn.wet = 0;   tn.wetV = Math.max(0, tn.wetV); }
         } else if (gap > 0) {
-            // CHASING THE MACHINE (AFTER_DIG off). Here the target moves, and the
-            // damping is the point — the water lingers behind a lurch and is
-            // still creeping up the cut after the rig has gone quiet.
-            const tau = Math.max(0.05, WA.FLOW_TAU || 0.9);
-            // Exponential approach — frame-rate independent, and it can never
+            // The old chase, kept behind SPRING.ENABLED. Closes a fraction of
+            // the gap each frame — frame-rate independent, and it can never
             // overtake the target however long the frame was. On its own it
-            // would crawl to a halt as the gap closes, so a steady minimum
-            // creep carries the last stretch home at a believable pace.
+            // would crawl to a halt as the gap closes, so a steady minimum creep
+            // carries the last stretch home at a believable pace.
+            const tau = Math.max(0.05, WA.FLOW_TAU || 0.9);
             const eased = gap * (1 - Math.exp(-dt / tau));
             const floor = (WA.MIN_SPEED || 0) * this.layoutConfig.platformScale * dt;
             tn.wet = Math.min(target, tn.wet + Math.max(eased, floor));

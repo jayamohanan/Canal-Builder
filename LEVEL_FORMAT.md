@@ -39,6 +39,14 @@ props      OBJECT layer not tile-based — points placed anywhere
 
 - `ground` should be full: gid `1` in every cell.
 - `main` must run the full height of the map in both centre columns.
+- **`main` and `branch` are separate layers on purpose — do not merge them.**
+  A main-canal cell is *dug and then watered*: it carries two sprites, a dry
+  trench revealed by the machine and a filled tile revealed by the water behind
+  it. A branch cell already exists as a ditch and only ever fills. They are also
+  driven differently — the main canal follows the waterline directly, while
+  branches spread by a cascade that refuses to enter main cells. Keeping them
+  apart also lets Tiled's terrain brush auto-tile branch connections without the
+  main canal interfering.
 - `branch` runs horizontally off the main canal into the fields.
 - `crop` is a **marker layer** — one gid, `129`, in any cell that should grow a
   plant. It is never rendered; the game reads it and plants there. Do not put

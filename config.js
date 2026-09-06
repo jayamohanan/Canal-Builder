@@ -1194,7 +1194,18 @@ var CONFIG = {
             },
 
             BLOCK: {
-                ENABLED: true,
+                // OFF. The walls exist to hold water back, and since AFTER_DIG
+                // went false there is nothing being held — the water follows the
+                // blade, so a dam has nothing to dam. They were still being
+                // placed and still standing in the channel, which read as
+                // scenery with no reason to be there.
+                //
+                // This switches off BOTH: the wall dropped at each level's far
+                // edge, and the mid-level dams raised from `block` points on the
+                // props layer. Those markers can stay painted in the maps; they
+                // are simply not read. Turning AFTER_DIG back on and this with
+                // it restores the whole staged-flooding behaviour.
+                ENABLED: false,
                 FILE:  'graphics/block.png',
                 // Which point ON THE ART lands on the level boundary. Not the
                 // centre: the wall's waterline sits high in the image, so this
@@ -2296,10 +2307,17 @@ var CONFIG = {
         },
 
         WATER: {
-            AFTER_DIG:  true,      // hold the water until the dig is FINISHED,
-                                   // then flood the whole level in one run from
-                                   // the mouth. False = water chases the machine,
-                                   // LAG behind the belt, as it used to
+            AFTER_DIG:  false,     // false = THE WATER FOLLOWS THE MACHINE, running
+                                   // up the cut LAG behind the blade, so a canal
+                                   // fills as it is dug. true = held back until
+                                   // the dig is finished, then the whole level
+                                   // floods in one run from the mouth.
+                                   //
+                                   // With it off the walls stop mattering: the
+                                   // boundary block and the mid-level dams are
+                                   // still placed, but there is nothing being
+                                   // held for them to hold. Set BLOCK.ENABLED
+                                   // false to take them off screen as well.
             COLOR:      0x2f8fd0,  // the canal surface
             EDGE_COLOR: 0x7fd4f0,  // brighter shallows along each bank — a lit
                                    // rim that separates water from the earth wall
@@ -2315,6 +2333,79 @@ var CONFIG = {
                                    // interest. Also makes a long level flood at
                                    // the same speed as a short one, where the
                                    // chase made longer levels start faster
+            // ── The waterline's momentum ──────────────────────────────────
+            // Chasing the blade by closing a fraction of the gap each frame is
+            // smooth, monotonic and dead — the water reads as a strip towed
+            // along behind the rig. Water has weight: it should fall behind a
+            // surge, run up after it, pass the mark and settle back.
+            //
+            // So the waterline is a DAMPED SPRING pulled toward its resting
+            // distance behind the blade, the same integration the crops' sway
+            // uses — struck there, driven here. It may briefly move BACKWARD as
+            // the spring pulls it in; that slosh is the point of it.
+            //
+            // Nothing is drawn for this. The tile reveal and the head bulge both
+            // read the waterline and nothing else, so they bounce together for
+            // free.
+            //
+            // Tuned in real units: HZ is how fast it bounces, DAMP how quickly
+            // that dies away — below 1 it overshoots, at 1 it merely settles.
+            SPRING: {
+                ENABLED: true,     // false = the old fraction-of-the-gap chase,
+                                   // which is what FLOW_TAU below drives
+                HZ:      0.9,      // bounces per second. Slow, because this is a
+                                   // heavy body of water and not a twig
+                DAMP:    0.45,     // ~two visible bounces before it settles.
+                                   // 0.25 rings longer, 0.8 nearly kills it
+
+                // A SPRING ONLY RINGS WHEN SOMETHING DISTURBS IT, and a machine
+                // climbing at a steady pace never does — the water just settles
+                // into a smooth trailing lag, which is the very thing this was
+                // meant to fix. Real water does not advance smoothly: it finds a
+                // little room, spills forward, and rocks back.
+                //
+                // So the line is nudged forward every so often, always forward
+                // and only when there is room ahead of it. That keeps it alive
+                // while following, and it falls quiet on its own when the water
+                // catches up and the machine stops.
+                NUDGE_TILES: 0.07,          // how far one surge carries it — the
+                                            // distance REACHED, not a velocity
+                NUDGE_MS:   [260, 620],     // irregular on purpose: an even beat
+                                            // reads as a pulse rather than water
+            },
+            // ── Water hitting something ───────────────────────────────────
+            // A front running to the end of a ditch, or two fronts meeting head
+            // on, are moments the player should feel — a branch finishing is a
+            // small piece of progress, and it used to read as nothing at all.
+            // A ring pops out of the impact point and fades.
+            //
+            // A RING, not a disc: a ring spreads the way a ripple does, where a
+            // disc reads as a blob dropped on the water.
+            //
+            // COLOUR is where the obvious choice is wrong. The canal is 0x2f8fd0
+            // and a ring in that same blue is invisible on it. This is the lit
+            // shallows colour from EDGE_COLOR below — still water, but it reads.
+            HIT: {
+                ENABLED: true,
+                COLOR:   0x7fd4f0,
+                ON_END:  true,     // a front reaching a dead-end stub. Common —
+                                   // one per branch tip, so a dozen on a map with
+                                   // a branch on every row
+                ON_MEET: true,     // two fronts meeting HEAD ON. Rare, and only
+                                   // head on: water joining settled water or
+                                   // merging at a junction happens constantly and
+                                   // is not an event
+                // Ring diameter in TILES, not pixels — everything else in the
+                // world is authored in tiles and this should not be the odd one.
+                FROM:    0.25,
+                TO:      1.15,
+                MS:      380,
+                // Two rings, the second a moment later and fainter. One ring is
+                // a pop; two is a ripple.
+                RINGS:   2,
+                GAP_MS:  120,
+                FADE:    0.85,     // the trailing ring's share of the alpha
+            },
             FLOW_TAU:   2.25,      // seconds for the level to close most of the gap
                                    // to that limit. This is what stops the water
                                    // reading as a strip towed by the auger — it
