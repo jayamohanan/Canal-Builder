@@ -1440,7 +1440,7 @@ var CONFIG = {
             // moving the plant.
             CROP_STAGE_SCALE: [1, 1, 1, 1.3, 1.3],
             CROP_STAGES:  5,
-            CROP_GROW_MS: 2000,     // time between growth stages
+            CROP_GROW_MS: 1000,     // time between growth stages
             CROP_WET:     0.15,     // canal-cell fill fraction that counts as "watered"
 
             // A patch of worked soil under each plant (graphics/plant-base.png),
