@@ -867,8 +867,15 @@ var CONFIG = {
                 COLOR:   0x0a1a10,   // a cold green-black, so dimmed fields read
                                      // as being in shade rather than greyed out
                 FADE_MS: 420,        // handover cross-fade
-                DEPTH:   3.5,        // above every piece of world art (spoil is
-                                     // the highest at 3.12) and below the UI
+                // ABOVE EVERYTHING IN THE WORLD, actors included. The shade
+                // falls on the whole farm — its crops, its animals, its farmer —
+                // or the field dims while the things living in it stay lit,
+                // which reads as a bug rather than as distance.
+                //
+                // 4.5 clears the actor band, which sorts from 4 (see _yDepth)
+                // and rises by thousandths. Ground art is all below 3.2. The UI
+                // is on its own camera and is not affected by this at all.
+                DEPTH:   4.5,
             },
 
             // ── Animal farms ────────────────────────────────────────────────
@@ -1293,6 +1300,15 @@ var CONFIG = {
             TERRAIN: 'graphics/tilesheets/terrain.webp',
             TERRAIN_GROUND: 0,      // row 1, col 1 — the field's base tile, dry
             TERRAIN_WATER:  1,      // row 1, col 2 — flat water; the flow head
+            // Row 1, col 3 — the SAME bare ground as col 1, damp. Not the tilled
+            // pair below: this is the field itself, unworked, with water in it.
+            //
+            // The whole field turns, not only the patches under the plants. With
+            // just the patches darkening the picture said "the plants were
+            // watered"; with the field turning it says "the land got water",
+            // which is the thing the machine is actually doing. It also gives a
+            // level with few crops something to show for being dug.
+            TERRAIN_GROUND_DAMP: 2,
                                     // and its foam blobs are cut from this
             TERRAIN_TILLED:     6,  // row 2, col 1 — DRY tilled soil, and the
                                     // first of that row's six edge variants
@@ -1380,6 +1396,23 @@ var CONFIG = {
                 // the field a different order each time. This way a plant always
                 // takes its turn at the same point.
                 STAGGER_MS: [0, 700],
+
+                // ── The field behind the patches ────────────────────────
+                // Bare ground turns too, but AFTER the plant it surrounds and
+                // more gently. Both used to key off the same canal threshold, so
+                // they fired on one beat and the big quiet change competed with
+                // the small loud one that actually matters.
+                //
+                // Sequenced instead: the plant's own soil turns under its splash,
+                // then the field washes in behind it. The plant is the event; the
+                // field is the aftermath.
+                BARE: {
+                    ENABLED:    true,
+                    DELAY_MS:   [500, 1400],  // after its canal fills — well past
+                                              // the plant's own moment
+                    FADE_MS:    900,          // slower than the patches' 450, so
+                                              // it reads as a wash and not a swap
+                },
             },
 
             // ── Crops ───────────────────────────────────────────────────────

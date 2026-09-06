@@ -1649,6 +1649,88 @@ console.log(
             }
             if (watch.length) list.push({ cr, watch, wet: false, fade: null });
         }
+
+        // THE FIELD ITSELF, not only the worked patches. Every ground cell that
+        // is not under a plant watches its own nearest canal exactly as a crop
+        // does, and turns damp when the water gets there — so the land changes
+        // colour behind the machine rather than only sprouting dark squares
+        // where the crops happen to be.
+        const B = W.BARE || {};
+        if (B.ENABLED === false || TM.TERRAIN_GROUND_DAMP === undefined) return;
+        const ground = seg.groundSprites || [];
+        const planted = new Set((seg.crops || []).map((cr) => cr.col + ',' + cr.row));
+        const bare = seg.bareGround = [];
+        for (let r = 0; r < g.rows; r++) {
+            for (let c = 0; c < g.cols; c++) {
+                const spr = ground[r * g.cols + c];
+                if (!spr || planted.has(c + ',' + r)) continue;
+                let bd = Infinity, watch = [];
+                for (const cc of canal) {
+                    const d = Math.abs(cc.col - c) + Math.abs(cc.row - r);
+                    if (d > bd) continue;
+                    if (d < bd) { bd = d; watch = [cc]; } else watch.push(cc);
+                }
+                if (!watch.length) continue;
+                bare.push({ spr, watch, col: c, row: r, due: undefined, fade: null });
+            }
+        }
+    }
+
+    // Wash the bare field damp behind the water.
+    //
+    // Deliberately LATER and SLOWER than the tilled patches. Both used to key off
+    // the same canal threshold, and a large quiet change landing on the same beat
+    // as a small loud one takes the eye off the small one — which is the plant,
+    // the thing worth watching. So the plant's soil turns under its splash first,
+    // and the field follows as the aftermath.
+    _updateBareGround(dtMs) {
+        const TM = CONFIG.ROAD.TILEMAP, W = TM.GROUND_WET || {}, B = W.BARE || {};
+        if (W.ENABLED === false || B.ENABLED === false) return;
+        if (TM.TERRAIN_GROUND_DAMP === undefined) return;
+        const at = W.AT !== undefined ? W.AT : 0.15;
+        const dt = Math.min(dtMs || 16, 100);
+        const ms = B.FADE_MS !== undefined ? B.FADE_MS : 900;
+        for (const seg of this.segments) {
+            const list = seg.bareGround;
+            if (!list || !list.length) continue;
+            for (let i = list.length - 1; i >= 0; i--) {
+                const e = list[i];
+                if (e.due === undefined) {
+                    let on = false;
+                    for (const cc of e.watch) if (cc.progress > at) { on = true; break; }
+                    if (!on) continue;
+                    // Its own wait, from the cell's hash — the field fills in
+                    // unevenly, the way ground soaks rather than switches.
+                    e.due = this._rndRange(B.DELAY_MS || [500, 1400]);
+                    continue;
+                }
+                e.due -= dt;
+                if (e.due > 0) continue;
+                list[i] = list[list.length - 1]; list.pop();
+                this._dampenGround(seg, e, ms);
+            }
+        }
+    }
+
+    // Cross-fade one bare cell to its damp twin. The same trick the tilled
+    // patches use: the damp tile fades in just above the dry one, then replaces
+    // it and the copy goes — a hard swap pops when a neighbourhood turns at once.
+    _dampenGround(seg, e, ms) {
+        const TM = CONFIG.ROAD.TILEMAP;
+        const spr = e.spr;
+        if (!spr || !spr.scene) return;
+        const frame = TM.TERRAIN_GROUND_DAMP;
+        if (ms <= 0) { spr.setFrame(frame); return; }
+        e.fade = this._addB(this.add.image(spr.x, spr.y, 'terrain', frame)
+            .setDisplaySize(spr.displayWidth, spr.displayHeight)
+            .setAlpha(0).setDepth(spr.depth + 0.001), seg);
+        this.tweens.add({
+            targets: e.fade, alpha: 1, duration: ms, ease: 'Sine.easeOut',
+            onComplete: () => {
+                if (spr.scene) spr.setFrame(frame);
+                if (e.fade) { e.fade.destroy(); e.fade = null; }
+            },
+        });
     }
 
     // Turn each tilled patch wet as its canal arrives, and play the splash that
@@ -7617,6 +7699,7 @@ console.log(
         // Grow crops as the water reaches them.
         this._updateCrops(time);
         this._updateWetGround(delta || 16);
+        this._updateBareGround(delta || 16);
         this._updateFarmers(delta || 16);
         this._updateProps(delta || 16);
         this._updateSway(delta || 16);
