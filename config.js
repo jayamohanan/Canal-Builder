@@ -154,6 +154,31 @@ var CONFIG = {
         FORCE: null,
     },
 
+    // ── The roster ────────────────────────────────────────────────────────────
+    // A strip of slots along the top of the farm, one filling each time a level
+    // is finished. It answers a game that otherwise reads as passing through:
+    // everything a farm grows is reaped with the farm, so nothing the player
+    // earned was ever visible for longer than a level.
+    //
+    // THE EMPTY SLOTS DO THE WORK. Three filled and two waiting says "two more
+    // in this stretch" without a word — which a level number cannot do, because
+    // counting up has no end in sight. It is glanceable rather than readable,
+    // which matters on a platform where nobody reads.
+    ROSTER: {
+        ENABLED: true,
+        SLOTS:   5,          // per block — the unlock ladder runs in fives
+        SIZE:    46,         // slot side, px at design scale
+        GAP:     8,
+        Y:       14,         // down from the top of the farm half
+        EMPTY_COLOR: 0x000000,
+        EMPTY_ALPHA: 0.22,   // a hollow for the icon to drop into
+        FULL_COLOR:  0x000000,
+        FULL_ALPHA:  0.30,
+        ICON_FRAC:   0.78,   // icon size inside its slot
+        POP_MS:      420,    // the drop-in when a slot fills
+        DEPTH:       99000,  // over the world, under the pause button
+    },
+
     // ── Task list ─────────────────────────────────────────────────────────────
     // Every field is a job with a name and a number. A small list sits at the top
     // left of the FARM half showing two of them: the one being dug, and the one

@@ -621,6 +621,7 @@ console.log(
         }
 
         this._buildPauseButton();
+        this._buildRoster();
 
         // Endless mode: the landscape camera must ignore every UI/fixed
         // object created above — one-time snapshot now that create() is done.
@@ -2131,6 +2132,84 @@ console.log(
                     `${(src.width * src.height * 4 / 1048576).toFixed(1)}MB of GPU memory`);
             }
             this.textures.remove(key);
+        }
+    }
+
+    // ================================================================
+    // THE ROSTER — what you have collected
+    // ================================================================
+    // A row of slots across the top of the farm. One fills each time a level is
+    // finished, and the empty ones ahead of it are the point: they say how much
+    // of this stretch is left without a word of text.
+    //
+    // Screen-fixed, on the farm camera. It rides scrollFactor 0 rather than
+    // living in the world, so it stays put while the farm scrolls under it.
+    _buildRoster() {
+        const R = CONFIG.ROSTER || {};
+        if (R.ENABLED === false) return;
+        const s = this.layoutConfig.scale, B = this.layoutConfig.partB;
+        const n    = Math.max(1, R.SLOTS || 5);
+        const size = (R.SIZE || 46) * s;
+        const gap  = (R.GAP  || 8)  * s;
+        const total = n * size + (n - 1) * gap;
+        const x0 = (B.width - total) / 2 + size / 2;   // centred in the farm half
+        const y  = (R.Y || 14) * s + size / 2;
+        const depth = R.DEPTH !== undefined ? R.DEPTH : 99000;
+
+        this.roster = { slots: [], filled: 0, size, x0, y, gap };
+        for (let i = 0; i < n; i++) {
+            const x = x0 + i * (size + gap);
+            const box = this._addB(this.add.rectangle(x, y, size, size,
+                    R.EMPTY_COLOR !== undefined ? R.EMPTY_COLOR : 0x000000,
+                    R.EMPTY_ALPHA !== undefined ? R.EMPTY_ALPHA : 0.22)
+                .setScrollFactor(0).setDepth(depth), null);
+            this.roster.slots.push({ box, x, y, icon: null });
+        }
+    }
+
+    // Drop something into the next empty slot.
+    //
+    // `crop` is a crop name; the icon is cut out of that crop's own sheet using
+    // the bounding box of its fruit, because those frames are drawn to overlay a
+    // plant and are mostly empty cell. A drawn icon sheet replaces this later and
+    // only this method changes.
+    _fillRosterSlot(crop) {
+        const R = CONFIG.ROSTER || {}, ro = this.roster;
+        if (R.ENABLED === false || !ro || ro.filled >= ro.slots.length) return;
+        const lib = (typeof LEVEL_DATA !== 'undefined' && LEVEL_DATA.CROP_LIBRARY) || {};
+        const box = (lib.ICON || {})[crop];
+        const key = crop + '_stages';
+        if (!box || !this.textures.exists(key)) return;
+
+        const slot = ro.slots[ro.filled++];
+        slot.box.setFillStyle(R.FULL_COLOR !== undefined ? R.FULL_COLOR : 0x000000,
+                              R.FULL_ALPHA !== undefined ? R.FULL_ALPHA : 0.30);
+
+        // The crop's LAST frame is its fruit (or, for a root, the vegetable
+        // alone) — the same frame the plant wears at its final stage.
+        const lay = this._cropLayout(crop, key);
+        const fr  = lay.harvest !== null ? lay.harvest : lay.fruit;
+        if (fr === null) return;
+
+        const fit = ro.size * (R.ICON_FRAC !== undefined ? R.ICON_FRAC : 0.78);
+        const k   = Math.min(fit / box[2], fit / box[3]);   // fit, keeping aspect
+        const spr = this._addB(this.add.image(slot.x, slot.y, key, fr)
+            .setScrollFactor(0)
+            .setDepth((R.DEPTH !== undefined ? R.DEPTH : 99000) + 1), null);
+        // setCrop is in FRAME coordinates, so these are the measured numbers as
+        // they stand. Crop first, then size — the display size applies to what
+        // is left showing, not to the whole frame.
+        spr.setCrop(box[0], box[1], box[2], box[3]);
+        spr.setDisplaySize(box[2] * k, box[3] * k);
+        slot.icon = spr;
+
+        // Drops in rather than appearing: it has just travelled from the field.
+        const ms = R.POP_MS !== undefined ? R.POP_MS : 420;
+        if (ms > 0) {
+            const sx = spr.scaleX, sy = spr.scaleY;
+            spr.setScale(sx * 1.6, sy * 1.6).setAlpha(0);
+            this.tweens.add({ targets: spr, scaleX: sx, scaleY: sy, alpha: 1,
+                duration: ms, ease: 'Back.easeOut' });
         }
     }
 
@@ -5955,6 +6034,15 @@ console.log(
             // the one being completed, and it stays lit however far ahead the
             // machine has got.
             this._focusDim(nextSeg);
+            // The field is in, so what it grew joins the roster. Fired here and
+            // not at breakthrough: this is the moment the farm is actually
+            // restored, which is what the slot is a record of.
+            // From the FINISHED segment's own plants, not _cropForLevel(): the
+            // level counter moved on when the machine did, several seconds ago,
+            // so asking the game "what crop is this level" would answer with the
+            // one being dug now.
+            const done = seg && seg.crops && seg.crops[0];
+            if (done) this._fillRosterSlot(done.crop);
             // Tick the job off, and only then release whatever was waiting.
             this._completeTask(() => {
                 E.held = false;
