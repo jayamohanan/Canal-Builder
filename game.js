@@ -458,12 +458,10 @@ class GameScene extends Phaser.Scene {
             // they are a few hundred KB each and a level can start at any
             // point in the cycle after a rebase.
             // The patch of worked soil each plant stands in, drawn under it.
-            // South Lake — the source. Two images the same size, overlaid.
-            const LK = CONFIG.ROAD.LAKE || {};
-            if (LK.ENABLED !== false) {
-                if (LK.DRY)   this.load.image('lake_dry',   LK.DRY);
-                if (LK.WATER) this.load.image('lake_water', LK.WATER);
-            }
+            // South Lake needs nothing loaded — it is laid from the terrain
+            // sheet, which is already here. It used to be two 22x7 paintings
+            // costing about 19MB of GPU memory for something visible only while
+            // the first level is on screen.
             // The watering splash: one row of square frames, sliced at the
             // tilemap's own frame size since that is what the art is drawn to.
             if ((CONFIG.PAUSE || {}).ENABLED !== false) {
@@ -505,6 +503,15 @@ class GameScene extends Phaser.Scene {
                         if (typeof f.IDLE === 'string') this.load.image(f.IDLE, f.IDLE);
                         if (typeof f.EAT  === 'string') this.load.image(f.EAT,  f.EAT);
                     }
+                }
+            }
+            // Roster icons. One sheet per stretch of the run, so nothing is
+            // fetched for levels the player may never reach.
+            const RO = CONFIG.ROSTER || {};
+            if (RO.ENABLED !== false) {
+                const fs2 = RO.FRAME || 48;
+                for (const f of (RO.SHEETS || [])) {
+                    this.load.spritesheet(f, f, { frameWidth: fs2, frameHeight: fs2 });
                 }
             }
             const FN = TM.FENCE || {};
@@ -1120,6 +1127,34 @@ console.log(
             const it = items[o.name];
             if (it && it.WALKABLE) {
                 grid.bridged.add(Math.floor(o.col) + ',' + Math.floor(o.row));
+            }
+        }
+        // THE MOUTH. The first level's bottom row touches the lake, and a
+        // straight canal piece ends there like a cut pipe; these swap it for the
+        // flared pair so the channel opens into the water.
+        //
+        // Substituted here rather than painted into the map, because the map
+        // pool WRAPS — the file that is level 1 comes round again as level 8,
+        // and a flare authored into it would put a lake mouth in the middle of
+        // the run. Only the level at index 0 ever meets water.
+        const MT = TM.MOUTH_TILES || {};
+        if (MT.ENABLED !== false && levelIndex === 0 && grid.mainData.length) {
+            const cs = this.tileSets.find((t) => t.canal);
+            const swap = MT.SWAP || {};
+            if (cs && Object.keys(swap).length) {
+                // COPIED FIRST. mainData is the array Phaser cached for this
+                // map, and every level built from the same file shares it —
+                // writing through it would flare level 8's canal too.
+                const md = grid.mainData = grid.mainData.slice();
+                const n = Math.max(1, MT.ROWS || 1);
+                for (let r = Math.max(0, rows - n); r < rows; r++) {
+                    for (let c = 0; c < cols; c++) {
+                        const i = r * cols + c, gid = md[i];
+                        if (!gid || gid < cs.firstgid) continue;
+                        const to = swap[gid - cs.firstgid + 1];   // TILES ids, not gids
+                        if (to) md[i] = cs.firstgid + to - 1;
+                    }
+                }
             }
         }
         this._mapReport(levelIndex, map, grid);
@@ -1890,10 +1925,8 @@ console.log(
         if (LK.ENABLED === false || !g) return 0;
         // First level only — after that the lake has scrolled away for good.
         if (this.endless && this.endless.segIndex > 0) return 0;
-        if (!this.textures.exists('lake_dry')) return 0;
-        if (LK.ROWS) return LK.ROWS;
-        const src = this.textures.get('lake_dry').getSourceImage();
-        return g.cols * (src.height / src.width);
+        if (!this.textures.exists('terrain')) return 0;
+        return LK.ROWS || 7;
     }
 
     // South Lake: the world's water source, drawn at the foot of the screen.
@@ -1911,18 +1944,36 @@ console.log(
         const rows = this._lakeRows(g);
         if (!rows) return;
         const LK = CONFIG.ROAD.LAKE || {};
-        const w = g.cols * g.tile, h = rows * g.tile;
-        const put = (key, depth) => this.textures.exists(key) && this._addB(
-            this.add.image(g.left, bandBot, key)
-                .setOrigin(0, 1).setDisplaySize(w, h).setDepth(depth), seg);
-        put('lake_dry',   LK.DEPTH_DRY   !== undefined ? LK.DEPTH_DRY   : 3.02);
-        put('lake_water', LK.DEPTH_WATER !== undefined ? LK.DEPTH_WATER : 3.11);
-        // Claimed by this segment: when it is reaped the textures go too, not
-        // just the sprites drawn from them. Nothing else in the game does this
-        // yet — every other image stays uploaded for the whole session — but the
-        // lake earns it, being the largest pair in the game and visible only
-        // while the first level is on screen.
-        if (LK.RELEASE !== false) seg.ownTextures = ['lake_dry', 'lake_water'];
+        const water = LK.WATER_FRAME !== undefined ? LK.WATER_FRAME : 1;
+        const bank  = LK.BANK_FRAME  !== undefined ? LK.BANK_FRAME  : 3;
+        const edge  = LK.EDGE_FRAME  !== undefined ? LK.EDGE_FRAME  : 4;
+        const dW    = LK.DEPTH       !== undefined ? LK.DEPTH       : 3.11;
+        const dB    = LK.BANK_DEPTH  !== undefined ? LK.BANK_DEPTH  : 3.00;
+        const dE    = LK.EDGE_DEPTH  !== undefined ? LK.EDGE_DEPTH  : 3.20;
+
+        // Hangs UP from the screen's floor, so row 0 is the top — the row the
+        // farm shares — and the last runs off the bottom. There is no far bank:
+        // that is what makes it read as a lake rather than a pond.
+        const top = bandBot - rows * g.tile;
+        const lay = (c, r, frame, depth) => this._addB(this.add.image(
+                g.left + (c + 0.5) * g.tile,
+                top    + (r + 0.5) * g.tile,
+                'terrain', frame)
+            // +1px so neighbours overlap and no sub-pixel seam shows, the same
+            // trick the ground pass uses.
+            .setDisplaySize(g.tile + 1, g.tile + 1)
+            .setDepth(depth), seg);
+
+        for (let c = 0; c < g.cols; c++) {
+            // THE SHORE, unbroken across the full width. Bank under the rig,
+            // water's edge over it, so the machine stands on the bank with the
+            // shallows washing over its feet. One tile could not do that —
+            // there would be nowhere to put the machine.
+            lay(c, 0, bank, dB);
+            lay(c, 0, edge, dE);
+            // Open water below, all the way across.
+            for (let r = 1; r < rows; r++) lay(c, r, water, dW);
+        }
     }
 
     // The wall across the main canal at the level's far edge.
@@ -2169,38 +2220,36 @@ console.log(
 
     // Drop something into the next empty slot.
     //
-    // `crop` is a crop name; the icon is cut out of that crop's own sheet using
-    // the bounding box of its fruit, because those frames are drawn to overlay a
-    // plant and are mostly empty cell. A drawn icon sheet replaces this later and
-    // only this method changes.
-    _fillRosterSlot(crop) {
+    // `name` is a crop or a species — a slot does not care which kind of thing
+    // filled it. Icons come only from the UI sheets: art drawn AT icon size,
+    // which world art cut down never is. A tomato drawn to read at 128px on a
+    // plant does not survive being shrunk into a 40px slot.
+    _fillRosterSlot(name) {
         const R = CONFIG.ROSTER || {}, ro = this.roster;
         if (R.ENABLED === false || !ro || ro.filled >= ro.slots.length) return;
-        const lib = (typeof LEVEL_DATA !== 'undefined' && LEVEL_DATA.CROP_LIBRARY) || {};
-        const box = (lib.ICON || {})[crop];
-        const key = crop + '_stages';
-        if (!box || !this.textures.exists(key)) return;
+
+        const at = (R.ICONS || {})[name];
+        if (at === undefined) {
+            // The level still counts — its slot is spent, just blank. Said out
+            // loud because an empty slot otherwise reads as a bug in the roster
+            // rather than as a missing drawing.
+            console.warn(`[roster] "${name}" has no icon in ROSTER.ICONS — its slot will be blank`);
+        }
+        const per   = Math.max(1, R.PER_SHEET || 10);
+        const sheet = at === undefined ? null : (R.SHEETS || [])[Math.floor(at / per)];
 
         const slot = ro.slots[ro.filled++];
         slot.box.setFillStyle(R.FULL_COLOR !== undefined ? R.FULL_COLOR : 0x000000,
                               R.FULL_ALPHA !== undefined ? R.FULL_ALPHA : 0.30);
-
-        // The crop's LAST frame is its fruit (or, for a root, the vegetable
-        // alone) — the same frame the plant wears at its final stage.
-        const lay = this._cropLayout(crop, key);
-        const fr  = lay.harvest !== null ? lay.harvest : lay.fruit;
-        if (fr === null) return;
+        if (!sheet || !this.textures.exists(sheet)) return;
 
         const fit = ro.size * (R.ICON_FRAC !== undefined ? R.ICON_FRAC : 0.78);
-        const k   = Math.min(fit / box[2], fit / box[3]);   // fit, keeping aspect
-        const spr = this._addB(this.add.image(slot.x, slot.y, key, fr)
+        // The frame number says both WHICH SHEET and which cell of it, so adding
+        // a sheet is appending a file and numbering on from where the last left.
+        const spr = this._addB(this.add.image(slot.x, slot.y, sheet, at % per)
             .setScrollFactor(0)
+            .setDisplaySize(fit, fit)
             .setDepth((R.DEPTH !== undefined ? R.DEPTH : 99000) + 1), null);
-        // setCrop is in FRAME coordinates, so these are the measured numbers as
-        // they stand. Crop first, then size — the display size applies to what
-        // is left showing, not to the whole frame.
-        spr.setCrop(box[0], box[1], box[2], box[3]);
-        spr.setDisplaySize(box[2] * k, box[3] * k);
         slot.icon = spr;
 
         // Drops in rather than appearing: it has just travelled from the field.
@@ -4414,6 +4463,7 @@ console.log(
         // from the dig's length: the blade now runs past the level's last row
         // (OVERRUN_TILES) and every row would reveal that much late.
         const cellUp = (row) => (g.rows - row - 1) * g.tile;
+
         for (const cell of F.cells.values()) {
             if (!cell.isMain) continue;
             cell.entryDir = 's';
@@ -6037,12 +6087,18 @@ console.log(
             // The field is in, so what it grew joins the roster. Fired here and
             // not at breakthrough: this is the moment the farm is actually
             // restored, which is what the slot is a record of.
-            // From the FINISHED segment's own plants, not _cropForLevel(): the
-            // level counter moved on when the machine did, several seconds ago,
-            // so asking the game "what crop is this level" would answer with the
-            // one being dug now.
-            const done = seg && seg.crops && seg.crops[0];
-            if (done) this._fillRosterSlot(done.crop);
+            // WHAT THIS FARM WAS FOR. A ranch's reward is the animal — its
+            // crops are feed — so the herd claims the slot and the plants only
+            // do when there is no herd.
+            //
+            // Read off the FINISHED segment, never _cropForLevel(): the level
+            // counter moved on when the machine did, several seconds ago, so
+            // asking the game "what is this level" answers with the one being
+            // dug now.
+            const def  = seg ? this._levelDef(seg.levelIndex || 0) : null;
+            const herd = def && def.RANCH && def.RANCH.SPECIES;
+            const crop = seg && seg.crops && seg.crops[0] && seg.crops[0].crop;
+            if (herd || crop) this._fillRosterSlot(herd || crop);
             // Tick the job off, and only then release whatever was waiting.
             this._completeTask(() => {
                 E.held = false;

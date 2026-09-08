@@ -80,41 +80,13 @@ const LEVEL_DATA = {
     //   root     last frame is the pulled vegetable, for harvest; no fruit
     //   (unset)  normal — last frame is the fruit, drawn over the final body
     CROP_LIBRARY: {
-        DIR: 'graphics/crops1/',
+        DIR: 'graphics/crops/',
         EXT: '.png',
         CLASS: {
             'hops':        'trellis',
             'green-beans': 'trellis',
             'carrot':      'root',
             'potato':      'root',
-        },
-
-        // WHERE THE FRUIT SITS INSIDE ITS FRAME — [x, y, w, h] within the icon
-        // frame's own 128-wide cell, measured off the art.
-        //
-        // The fruit frames are drawn to overlay a plant, so the ink is a small
-        // patch high in a mostly empty cell. Dropped into a roster slot whole,
-        // a tomato would be a speck in a lot of nothing; cropped to this, it is
-        // an icon. Roots point at their HARVEST frame, which is already the
-        // vegetable alone, so their numbers only trim the margins.
-        //
-        // hops and green-beans are the two cropping cannot save — their fruit
-        // runs the length of the vine, so no rectangle holds a compact icon.
-        // They read as a tall streak until drawn ones replace them.
-        //
-        // All of this is temporary scaffolding for a purpose-drawn icon sheet.
-        // Both are only ever "what fills the slot", so the swap is one line.
-        ICON: {
-            'tomato':      [27, 128,  68,  60],
-            'mango':       [19,  98,  84,  71],
-            'egg-plant':   [48, 153,  44,  55],
-            'grape':       [44, 108,  55,  68],
-            'corn':        [20,  95,  87,  87],
-            'melon':       [ 2,  72, 123, 159],
-            'carrot':      [48, 156,  38,  98],
-            'potato':      [15, 184,  91,  68],
-            'green-beans': [30,  75,  73, 145],
-            'hops':        [17,  47,  98, 209],
         },
     },
 

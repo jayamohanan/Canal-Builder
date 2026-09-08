@@ -1,0 +1,56 @@
+{ "compressionlevel":-1,
+ "height":1,
+ "infinite":false,
+ "layers":[
+        {
+         "data":[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+         "height":1,
+         "id":1,
+         "name":"ground",
+         "opacity":1,
+         "type":"tilelayer",
+         "visible":true,
+         "width":22,
+         "x":0,
+         "y":0
+        }, 
+        {
+         "data":[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 125, 127, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+         "height":1,
+         "id":2,
+         "name":"main",
+         "opacity":1,
+         "type":"tilelayer",
+         "visible":true,
+         "width":22,
+         "x":0,
+         "y":0
+        }],
+ "nextlayerid":16,
+ "nextobjectid":60,
+ "orientation":"orthogonal",
+ "renderorder":"right-down",
+ "tiledversion":"1.12.2",
+ "tileheight":128,
+ "tilesets":[
+        {
+         "firstgid":1,
+         "source":"..\/..\/..\/Tiled\/Canal Builder\/tilesheet\/terrain.tsx"
+        }, 
+        {
+         "firstgid":25,
+         "source":"..\/..\/..\/Tiled\/Canal Builder\/tilesheet\/canal.tsx"
+        }, 
+        {
+         "firstgid":129,
+         "source":"..\/..\/..\/Tiled\/Canal Builder\/tilesheet\/markers.tsx"
+        }, 
+        {
+         "firstgid":145,
+         "source":"..\/..\/..\/Tiled\/Canal Builder\/tilesheet\/fences.tsx"
+        }],
+ "tilewidth":128,
+ "type":"map",
+ "version":"1.10",
+ "width":22
+}

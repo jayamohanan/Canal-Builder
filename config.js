@@ -76,7 +76,7 @@ var CONFIG = {
     // Columns come from the map's own width; rows are anchored to the map's grid
     // and continued in both directions to fill the visible band.
     DEBUG_GRID: {
-        ENABLED: true,
+        ENABLED: false,
         COLOR:   0xffffff,
         ALPHA:   0.25,     // faint: this has to sit over the art without hiding it
         WIDTH:   1,        // px @ platformScale
@@ -175,6 +175,34 @@ var CONFIG = {
         FULL_COLOR:  0x000000,
         FULL_ALPHA:  0.30,
         ICON_FRAC:   0.78,   // icon size inside its slot
+
+        // ── The icon sheets ─────────────────────────────────────────────
+        // One sheet per two unlock blocks, so a short session never downloads
+        // the icons for a stretch it will not reach — a player who stops at
+        // level 5 pulls 240x96 instead of every icon in the game.
+        //
+        // Named for the LAND, not the contents or the level range: blocks get
+        // rebalanced and a goat may end up in the orchard, but the orchard is
+        // still the orchard. Sheet index is floor((level-1)/PER_SHEET), so the
+        // order of this list is the order of the run.
+        SHEETS: [
+            'graphics/ui/icons/icons_farm.webp',   // 1-10  vegetables, then livestock
+        ],
+        FRAME:     48,       // one icon, square. 1.2x the ~40px it draws at
+        PER_SHEET: 10,       // 5 x 2
+
+        // WHICH FRAME EACH THING IS, counted left to right and top to bottom:
+        // 0-4 across the top row, 5-9 across the second.
+        //
+        // Crops and animals share one table because they share one roster — a
+        // slot does not care which kind of thing filled it.
+        //
+        // Anything missing here falls back to the fruit cropped out of its crop
+        // sheet, so an unlock with no icon yet still shows something.
+        ICONS: {
+            'tomato': 0, 'potato':  1, 'egg-plant': 2, 'green-beans': 3, 'melon': 4,
+            'cow':    5, 'chicken': 6, 'bunny':     7, 'sheep':       8, 'goat':  9,
+        },
         POP_MS:      420,    // the drop-in when a slot fills
         DEPTH:       99000,  // over the world, under the pause button
     },
@@ -551,6 +579,25 @@ var CONFIG = {
             //
             // APPEND ONLY: add new markers at the end of markers.tsx. Inserting
             // or reordering re-numbers everything after it.
+            // ── The canal's mouth ────────────────────────────────────────
+            // The FIRST level's bottom row meets the lake, and a straight canal
+            // piece stops there like a cut pipe. These swap it for the flared
+            // pair — the left turning west to north, the right east to north —
+            // so the channel reads as drawing out of the water.
+            //
+            // Done by SUBSTITUTING TILE IDS as the map is read, rather than
+            // authoring it into the map: every level shares the pool of maps and
+            // the rotation wraps, so the same file is level 1 and later level 8.
+            // Painting the flare in would put a lake mouth in the middle of the
+            // run. Swapping on load keeps it to the one level that touches water.
+            //
+            // Keys are TILES ids, the same numbers as the table above.
+            MOUTH_TILES: {
+                ENABLED: true,
+                ROWS: 1,                       // rows up from the bottom
+                SWAP: { 33: 101, 51: 103 },    // straight -> flared, left and right
+            },
+
             MARKER_TILESET: 'markers.tsx',
             MARKERS: [
                 'crop',        // 0
@@ -1925,7 +1972,19 @@ var CONFIG = {
                 93: { conn: 'nsw' },             // minor_nsw
                 95: { conn: 'ne' },              // minor_ne
                 97: { conn: 'new' },             // minor_new
-                99: { conn: 'nw' },              // minor_nw
+                99: { conn: 'nw' },
+                // A FLARED PAIR — canal.tsx's newest tiles. The left turns from
+                // west to north, the right from east to north, so a channel drawn
+                // with them opens out rather than stopping at a square edge.
+                //
+                // Nothing paints them yet. They are described anyway because an
+                // UNDESCRIBED canal tile fails silently: it draws, and then the
+                // water refuses to enter it with no error anywhere.
+                //
+                // `main` is documentation here as everywhere — only `conn` is
+                // read — but it records which half of a two-wide channel each is.
+                101: { conn: 'nw', main: 'L' },
+                103: { conn: 'ne', main: 'R' },              // minor_nw
             },
         },
 
@@ -1943,36 +2002,51 @@ var CONFIG = {
         // machine begins on the bank and level 1's first canal tile lands on the
         // lake's top row — the canal is joined to the lake, not merely near it.
         LAKE: {
-            // The two lake images are the most expensive textures in the game —
-            // 22x7 tiles each, dry and flooded, about 19MB of GPU memory between
-            // them — and they are on screen only at the very start. The world
-            // scrolls one way and the camera is not the player's to move, so the
-            // moment the lake passes below the view it can never be seen again:
-            // its textures are freed. Everything else about a reaped level only
-            // destroys SPRITES, which leaves the texture uploaded for the whole
-            // session; this actually hands the memory back.
+            // BUILT FROM TILES out of the terrain sheet, which is loaded anyway,
+            // so the lake costs no texture memory at all. It used to be two 22x7
+            // paintings — the basin and the water — worth about 19MB between
+            // them, for something on screen only while the first level is.
             //
-            // Safe because the one path that could rebuild the lake — a resize,
-            // which restarts the scene from level 0 — re-runs preload and fetches
-            // it again from cache.
-            RELEASE: true,
+            // SEVEN ROWS, and the last one is shared. Six are open water running
+            // off the foot of the screen; the seventh is LEVEL 1'S OWN BOTTOM
+            // ROW, where the lake and the farm meet. On that row three things
+            // stack over the level's ground: the bank, then the machine, then
+            // the water's edge — so the rig starts its first trench standing on
+            // the shore with the shallows washing over its feet.
+            //
+            // That stack is the whole reason the bank and the edge are separate
+            // tiles. One tile could not have the machine inside it.
             ENABLED: true,
-            DRY:   'graphics/pond.webp',      // basin: bank and floor
-            WATER: 'graphics/pond-water.webp',// the water only, drawn over it
-            ROWS:  0,          // height in tiles. 0 = DERIVE it from the art's
-                               // own aspect against the grid's width, so a
-                               // re-export at a different size just works and
-                               // the lake can never come out stretched
-            START_ROW: 1,      // the dig line sits this many tiles below the
-                               // lake's top edge — 1 puts it on the line between
-                               // the lake's top row and the one under it
-            // Depths. The lake bed goes over everything the map draws (ground
-            // 1.4, branches 1.5, crops 3.0) so the bottom rows of level 1 are
-            // simply covered; the lake water goes over the machine (3.04–3.07)
-            // AND over the main canal's water (3.10), so nothing surfaces
-            // through the lake.
-            DEPTH_DRY:   3.02,
-            DEPTH_WATER: 3.11,
+            ROWS:      7,      // total height in tiles, the shared row included
+            START_ROW: 1,      // the overlap with level 1 — 1 makes that seventh
+                               // row the shared one, and is also where the dig
+                               // line lands, since the dig starts at the grid's
+                               // bottom edge
+            // Frames in the terrain sheet's first row.
+            WATER_FRAME: 1,    // col 2 — open water
+            BANK_FRAME:  3,    // col 4 — the shore
+            EDGE_FRAME:  4,    // col 5 — the water's edge, laid over the shore
+            // The six open rows overlap nothing, so one depth does. The shared
+            // row's two tiles STRADDLE THE MACHINE (3.05-3.07): the bank passes
+            // under it, the edge over it.
+            DEPTH:      3.11,
+            BANK_DEPTH: 3.00,
+            // THE EDGE GOES BETWEEN THE TRENCH AND ITS WATER, which is the one
+            // place that satisfies everything at once:
+            //
+            //   3.00  bank            the shore
+            //   3.03  canal DRY       the cut, over the bank but UNDER the lake
+            //   3.05  machine         standing in its cut
+            //   3.08  lake EDGE       shallows washing over the rig and the dry
+            //                         trench — so the mouth reads as under water
+            //   3.10  canal WATER     over the lake: the canal's own water is
+            //                         what joins the two, so it must not be
+            //                         washed out by the thing it joins to
+            //
+            // The dry mouth therefore lies beneath the lake until the water
+            // reaches it, and surfaces as it fills — which is the reveal doing
+            // the work rather than a depth trick.
+            EDGE_DEPTH: 3.08,
         },
 
         // ── The channel ───────────────────────────────────────────────────
