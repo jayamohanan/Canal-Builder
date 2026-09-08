@@ -1117,16 +1117,27 @@ console.log(
             ponds:      (this._levelDef(levelIndex) || {}).PONDS || {},
             mainLeftCol: mainRightCol - (mainW - 1), mainRightCol, mainW,
         };
-        // A bridge's marker is a point, so it carries a fractional cell; the
-        // tile it makes crossable is the one that point falls in. The deck may
-        // well hang over its neighbours — it is two tiles long — but the marker
-        // is what says which cell the crossing is AT.
+        // EVERY TILE THE DECK COVERS is crossable, not just the one its marker
+        // falls in. A main bridge is two tiles long and is placed centred on the
+        // channel, which puts its marker exactly on the seam between the two
+        // canal columns — so flooring that point picked one of them and left the
+        // other water. A farmer would then walk half way over and stop.
+        //
+        // The span comes from the item's own size, the same numbers that draw
+        // it: SIZE_W tiles across, SIZE tiles down (each defaulting to 1), laid
+        // about the marker. So a deck is walkable exactly as far as it is drawn.
         const items = (TM.PROPS || {}).ITEMS || {};
         grid.bridged = new Set();
         for (const o of grid.props) {
             const it = items[o.name];
-            if (it && it.WALKABLE) {
-                grid.bridged.add(Math.floor(o.col) + ',' + Math.floor(o.row));
+            if (!it || !it.WALKABLE) continue;
+            const cw = Math.max(1, Math.round(it.SIZE_W || 1));
+            const ch = Math.max(1, Math.round(it.SIZE   || 1));
+            for (let dc = 0; dc < cw; dc++) {
+                for (let dr = 0; dr < ch; dr++) {
+                    grid.bridged.add(Math.floor(o.col - cw / 2 + dc + 0.5) + ',' +
+                                     Math.floor(o.row - ch / 2 + dr + 0.5));
+                }
             }
         }
         // THE MOUTH. The first level's bottom row touches the lake, and a
@@ -1422,6 +1433,29 @@ console.log(
         }
         if (seg) seg.objects.push(obj);
         return obj;
+    }
+
+    // The opposite of _addB: a UI object the FARM camera must not draw.
+    //
+    // Needed for anything that travels between the two halves — a coin leaving
+    // the field for the counter is one object crossing a camera boundary, so it
+    // has to belong to exactly one of them or it is drawn twice, once per
+    // viewport, at two different places on screen.
+    _addA(obj) {
+        if (this.camB) this.camB.ignore(obj);
+        return obj;
+    }
+
+    // A world point in the MAIN camera's coordinates.
+    //
+    // Not _worldToScreen, which stops at camB's own space because the roster
+    // lives there and camB's viewport offset is applied to it at render. An
+    // object drawn by the MAIN camera has no such offset coming, so it must be
+    // added here or the point lands short by the whole farm viewport.
+    _worldToUI(x, y) {
+        const c = this.camB;
+        if (!c) return { x, y };
+        return { x: c.x + (x - c.scrollX), y: c.y + (y - c.scrollY) };
     }
 
     // After create() has built everything, camB must ignore every NON-world
@@ -2509,17 +2543,44 @@ console.log(
         if (!this.textures.exists(who)) return;
         const walkKey = this._makeFarmerAnims(who);
 
-        // Planted cells inside a roam band — nowhere else is worth standing.
-        const spots = [];
+        // WHERE HE STARTS: BESIDE the field, never in it.
+        //
+        // Every plant is a seed at build — the level has not been watered yet —
+        // so a spot chosen from the planted cells is always a spot on top of a
+        // seed. The wander already refuses to STOP on one (_farmerMayStop); the
+        // spawn was the one place that rule was not applied, which is why he
+        // opens every level standing on a seedling.
+        //
+        // So: bare ground, inside a roam band, TOUCHING a planted cell. Beside
+        // the crop reads as a farmer at his field; anywhere bare would put him
+        // in a corner with nothing to do with him.
+        const bare = [], beside = [], loose = [];
+        const planted = (c, r) => c >= 0 && c < g.cols && r >= 0 && r < g.rows &&
+                                  !!g.cropsData[r * g.cols + c];
         for (let r = 0; r < g.rows; r++) {
             for (let c = 0; c < g.cols; c++) {
-                if (!g.cropsData[r * g.cols + c]) continue;
                 if (this._farmerBand(g, c) === 0) continue;
                 if (this._canalCell(g, c, r)) continue;      // never on water
-                spots.push({ c, r });
+                if (planted(c, r)) continue;                 // never on a seed
+                bare.push({ c, r });
+                // Eight-way, so a plot's diagonal corner counts as beside it.
+                let touches = false;
+                for (let dr = -1; dr <= 1 && !touches; dr++)
+                    for (let dc = -1; dc <= 1; dc++)
+                        if ((dc || dr) && planted(c + dc, r + dr)) { touches = true; break; }
+                if (!touches) continue;
+                // BEHIND THE CROP, not in front of it. A cell with a plant below
+                // it has that plant drawing over him, so the field reads as him
+                // standing in it; the same cell with the patch only above him
+                // has him blocking the whole thing from the camera.
+                (planted(c, r + 1) ? beside : loose).push({ c, r });
             }
         }
-        // A level with an empty crops layer has nowhere sensible to put him.
+        // Behind the crop first, then merely beside it, then anywhere bare he may
+        // roam. A level whose every roamable cell is planted leaves him nowhere
+        // to stand that is not a seedling, and no farmer at all beats one
+        // standing on one.
+        const spots = beside.length ? beside : (loose.length ? loose : bare);
         if (!spots.length) return;
 
         const idx = this.endless ? this.endless.segIndex : 0;
@@ -2669,9 +2730,22 @@ console.log(
             if (it.AFTER_DIG_TILES !== undefined && seg.tunnel) {
                 spr.setVisible(false);
                 const up = (g.rows - o.row) * g.tile;      // height above the dig line
+                // THE CLEARANCE IS THE MODE'S. Under DAM the rig runs 3.5 tiles
+                // past the level and keeps going, so a deck laid as the blade
+                // drew level would land under the belt — that is what the item's
+                // AFTER_DIG_TILES (4) is for. Under FOLLOW the rig stops on the
+                // boundary, there is no overrun to wait out, and four tiles is
+                // longer than a six-row dig: the bridge never appeared at all.
+                //
+                // Still clamped to the end of the dig, for a marker so close to
+                // the top that even the short wait would outrun the level.
+                const end = (seg.tunnel.digLen || seg.tunnel.len || 0);
+                const clear = this._damMode()
+                    ? it.AFTER_DIG_TILES
+                    : (P.FOLLOW_CLEAR_TILES !== undefined ? P.FOLLOW_CLEAR_TILES : 0.5);
                 (seg.tunnel.bridges || (seg.tunnel.bridges = [])).push({
                     spr, tile: g.tile,
-                    at: up + it.AFTER_DIG_TILES * g.tile,
+                    at: Math.min(up + clear * g.tile, end),
                     done: false,
                 });
             }
@@ -3302,7 +3376,15 @@ console.log(
         const rec = seg.cropAt && seg.cropAt.get(col + ',' + row);
         if (!rec) return true;                       // bare ground: fine
         const F = CONFIG.ROAD.TILEMAP.FARMER || {};
-        return rec.stage >= (F.STOP_MIN_STAGE !== undefined ? F.STOP_MIN_STAGE : 2);
+        if (rec.stage < (F.STOP_MIN_STAGE !== undefined ? F.STOP_MIN_STAGE : 2)) return false;
+        // NEVER ON THE FRONT ROW OF A PATCH. Depth is by y, so a plant BELOW him
+        // draws over him and one above draws behind. Standing where nothing is
+        // planted below puts him in front of the whole patch with his back to
+        // the camera, and he covers the crop the player came to watch.
+        //
+        // One planted cell below is enough: the field then reads as him standing
+        // IN it, with a row of his own crop between him and the viewer.
+        return row + 1 < g.rows && !!g.cropsData[(row + 1) * g.cols + col];
     }
 
     // Turn him toward the crops he is standing among, so a stop reads as tending
@@ -3391,6 +3473,7 @@ console.log(
         f.cheering = true;
         f.walking  = false;                       // he stops where he stands
         if (spr.anims) spr.anims.stop();
+        f.striding = false;              // whatever the legs were doing, they stop
         spr.setFrame(F.IDLE_FRAME || 0);
         spr.setScale(sx, sy).setPosition(spr.x, y0);
 
@@ -3433,8 +3516,551 @@ console.log(
                 // Back to wandering, after a beat — walking off the instant he
                 // lands would undo the pause the jump just created.
                 f.waitT = this._rndRange(F.PAUSE_MS || [1800, 6500]);
+                this._sendFarmerHome(seg, f);
             },
         });
+    }
+
+    // GATHER THE FIELD. Every plant is at its last stage by the time this runs,
+    // so every fruit that exists is ripe.
+    //
+    // The fruit is already a separate sprite over the plant — that is what the
+    // stage split is for — so picking it is that sprite leaving and nothing
+    // else: no frame change, no regrow, and the plant stands exactly as it did.
+    //
+    // Staggered across the field, and each one knocks its own plant on the way
+    // out, so it reads as fruit being taken off rather than a layer being
+    // switched off.
+    _beginHarvest(seg) {
+        const F = CONFIG.ROAD.TILEMAP.FARMER || {}, HV = F.HARVEST || {};
+        if ((CONFIG.ROAD.TILEMAP.CROP_HARVEST || {}).ENABLED === false) return;
+        if (HV.ENABLED === false || !seg || !seg.crops) return;
+        const f = seg.farmer;
+        if (!f || !f.spr || !f.spr.scene || f.harvesting) return;
+        f.harvesting = true;
+        f.walking    = false;      // whatever he was strolling to can wait
+        f.hopT       = 0;
+        f.crossTo    = null;
+        f.stuck      = false;
+        // The stroll's own walk cycle is not this one's to inherit: he may not
+        // move at all on the first frame of the run, and a cycle left running
+        // from the wander would play under a standing farmer.
+        f.striding   = false;
+        if (f.spr.anims) f.spr.anims.stop();
+        f.spr.setFrame((CONFIG.ROAD.TILEMAP.FARMER || {}).IDLE_FRAME || 0);
+    }
+
+    // The field is finished. Anything the farmer is not going to get, comes off
+    // now — a level with no farmer, or with the run switched off, or a root crop
+    // that never grew a fruit to take. Then he celebrates, unless he is still
+    // working, in which case his own run does it when he finishes.
+    _fieldGathered(seg) {
+        const f = seg && seg.farmer;
+        // Still working: his run finishes it and cheers. A farmer whose sprite
+        // has gone does NOT count as working — the flag would otherwise stay set
+        // on a torn-down level and the completion would wait on him forever.
+        if (f && f.harvesting && f.spr && f.spr.scene) return;
+        for (const cr of (seg && seg.crops) || []) this._pickFruit(seg, cr);
+        this._cheerFarmer(seg);
+    }
+
+    // WHAT A PLANT IS CARRYING THAT CAN BE TAKEN, and where it is — or null.
+    //
+    // Two kinds, and the difference is only where the yield lives until it is
+    // taken. A fruit hangs on the plant and has been drawn since the last stage.
+    // A ROOT keeps its yield underground: nothing is drawn at all, and its art
+    // (the pulled vegetable, last frame of the sheet) only exists once it is out
+    // of the ground. So a root is ready when the plant is grown, and its
+    // position is the plant's own.
+    //
+    // Level 2 is exactly this: tomatoes one side of the canal, potatoes the
+    // other. Reading `cr.fruit` alone, the whole potato half was invisible to
+    // the harvest — she cleared her side, saw nothing to cross for, and stopped.
+    _cropYield(cr) {
+        if (!cr || cr.picked) return null;
+        if (cr.fruit && cr.fruit.scene) return cr.fruit;
+        if (cr.lay && cr.lay.harvest !== null && cr.done) return cr.sprite;
+        return null;
+    }
+
+    // Will this plant have something to take, now or later?
+    _cropWillBear(cr) {
+        if (!cr || cr.picked || !cr.lay) return false;
+        return cr.lay.fruit !== null || cr.lay.harvest !== null;
+    }
+
+    // Take one fruit off its plant.
+    //
+    // The fruit is already its own sprite over the plant — that is what the
+    // stage split is for — so this is that sprite leaving and nothing else: no
+    // frame change, no regrow, the plant stands exactly as it did.
+    _pickFruit(seg, cr) {
+        const TM = CONFIG.ROAD.TILEMAP, H = TM.CROP_HARVEST || {};
+        if (H.ENABLED === false || !this._cropYield(cr)) return false;
+        let fr = cr.fruit;
+        if (!fr || !fr.scene) {
+            // A ROOT COMES OUT OF THE GROUND. Its art is drawn for the first
+            // time here, at the plant it was pulled from, and then lifts away on
+            // the same curve a fruit does — the plant stays standing, as it does
+            // for a fruit crop, so the field does not go bare behind him.
+            const p = cr.sprite;
+            if (!p || !p.scene) return false;
+            fr = this._addB(this.add.image(p.x, p.y, p.texture.key, cr.lay.harvest)
+                .setOrigin(0.5, p.originY)
+                .setFlipX(p.flipX)
+                .setAngle(p.angle)
+                .setScale(p.scaleX, p.scaleY)
+                .setDepth(this._yDepth(p.y,
+                    TM.CROP_FRUIT_BIAS !== undefined ? TM.CROP_FRUIT_BIAS : 0.0003)), seg);
+            // AND THE PLANT DROPS A STAGE. A root sheet's last growth frame is
+            // the crop READY — the produce showing at the surface — so leaving
+            // it there would have the potatoes both lifted away and still lying
+            // in the ground. One stage back is the same plant with nothing under
+            // it, which is exactly what a pulled row looks like.
+            p.setFrame(this._cropFrame(cr.lay, cr.stage - 1));
+        }
+        cr.picked = true;
+        cr.fruit  = null;                       // the plant has none now
+        const tile = (seg.tunnel && seg.tunnel.flood && seg.tunnel.flood.g)
+                   ? seg.tunnel.flood.g.tile : (this.tileGrid ? this.tileGrid.tile : 0);
+        // The plant gives as it comes off, the way it does when he brushes past —
+        // the same spring, so a pick and a brush cannot look like two mechanisms.
+        const sh = H.SHAKE !== undefined ? H.SHAKE : 0.7;
+        if (sh > 0) this._brushCrop(seg, cr.col + ',' + cr.row, 0, sh);
+        // Sideways as well as up: a pick is a hand taking it, not a balloon let go.
+        const side = (this._cellHash(cr.col, cr.row, 10) - 0.5) * 2 *
+                     (H.DRIFT !== undefined ? H.DRIFT : 0.18) * tile;
+        const pop = H.POP !== undefined ? H.POP : 1.25;
+        this.tweens.add({
+            targets: fr,
+            x: fr.x + side,
+            y: fr.y - (H.RISE !== undefined ? H.RISE : 0.55) * tile,
+            scaleX: fr.scaleX * pop, scaleY: fr.scaleY * pop,
+            alpha: 0,
+            duration: H.MS !== undefined ? H.MS : 520, ease: H.EASE || 'Sine.easeOut',
+            onComplete: () => { fr.destroy(); },
+        });
+        return true;
+    }
+
+    // WHERE THE MAIN CANAL CAN BE CROSSED — the row of the nearest bridge over
+    // it, or null if this map has none.
+    //
+    // Read off `bridged`, which the grid builds from the props layer, so a
+    // bridge is a crossing for exactly the tiles it is drawn over. Branch
+    // bridges are in that set too and are filtered out here by column: they
+    // span a ditch he would have walked anyway.
+    _mainBridge(g, row) {
+        if (!g || !g.bridged || !g.bridged.size) return null;
+        let best = null, bd = Infinity;
+        for (const key of g.bridged) {
+            const i = key.indexOf(',');
+            const c = +key.slice(0, i), r = +key.slice(i + 1);
+            if (c < g.mainLeftCol || c > g.mainRightCol) continue;
+            const d = Math.abs(r - row);
+            if (d < bd) { bd = d; best = r; }
+        }
+        return best;
+    }
+
+    // The last walkable column on a side of the main canal — his take-off mark
+    // going one way, his landing mark coming the other. Derived from the same
+    // corridor _farmerBand carves out, so the two can never disagree about
+    // where a side ends.
+    _bankCol(g, band) {
+        const F = CONFIG.ROAD.TILEMAP.FARMER || {};
+        const pad = F.MACHINE_COLS !== undefined ? F.MACHINE_COLS : 1;
+        return band < 0 ? g.mainLeftCol - pad - 1 : g.mainRightCol + pad + 1;
+    }
+
+    // A row in that column he can actually stand on, as near `row` as there is
+    // one. The bank is a column of ordinary ground, but a branch ditch can run
+    // out to the main at any row, and landing in one would put him in water.
+    _bankRow(g, col, row) {
+        const r0 = Math.max(0, Math.min(g.rows - 1, row));
+        for (let d = 0; d < g.rows; d++) {
+            for (const r of (d ? [r0 - d, r0 + d] : [r0])) {
+                if (r < 0 || r >= g.rows) continue;
+                if (!this._canalCell(g, col, r)) return r;
+            }
+        }
+        return r0;                       // nowhere dry: land where he meant to
+    }
+
+    // OVER THE CHANNEL. A real jump, not a cut: he crouches, leaves the bank,
+    // travels a ballistic arc — x linear, y parabolic, which is what a thrown
+    // body does — and gives at the knees on landing.
+    //
+    // Stretch keyed to |cos| over the flight, so he is drawn out at take-off and
+    // at touchdown, where the vertical speed is highest, and back to himself at
+    // the apex where it is zero. Stretching at the top would read as him being
+    // pulled up by the head.
+    _leapCanal(seg, f, toBand, near) {
+        const F = CONFIG.ROAD.TILEMAP.FARMER || {}, HV = F.HARVEST || {};
+        const g = f.g, tile = g.tile, spr = f.spr;
+        const col  = this._bankCol(g, toBand);
+        // The TARGET'S YIELD, which for a root crop is the plant itself — there
+        // is no fruit sprite to read a position off.
+        const ny   = (this._cropYield(near) || near.sprite).y;
+        const row  = this._bankRow(g, col, Math.floor((ny - f.gTop) / tile));
+        const x0 = spr.x, y0 = spr.y;
+        const x1 = g.left + (col + 0.5) * tile, y1 = f.gTop + (row + 0.5) * tile;
+        const ms   = HV.JUMP_MS   !== undefined ? HV.JUMP_MS   : 520;
+        const dip  = HV.CROUCH_MS !== undefined ? HV.CROUCH_MS : 90;
+        const land = HV.LAND_MS   !== undefined ? HV.LAND_MS   : 90;
+        const rise = (HV.JUMP_RISE !== undefined ? HV.JUMP_RISE : 1.1) * tile;
+        const sq   = HV.JUMP_SQUASH  !== undefined ? HV.JUMP_SQUASH  : 0.14;
+        const st   = HV.JUMP_STRETCH !== undefined ? HV.JUMP_STRETCH : 0.12;
+
+        f.walking = false;
+        this._farmerStride(f, 0);          // his legs are not what carries him
+        f.hopT = dip + ms + land * 2 + 40; // held out of the run for the whole flight
+        spr.setFlipX(x1 < x0);
+
+        const p = { t: 0 };
+        this.tweens.add({                  // the crouch he pushes off from
+            targets: spr, scaleX: f.sx * (1 + sq), scaleY: f.sy * (1 - sq),
+            duration: dip, ease: 'Sine.easeOut',
+            onComplete: () => {
+                if (!spr.scene) return;
+                this.tweens.add({
+                    targets: p, t: 1, duration: ms, ease: 'Linear',
+                    onUpdate: () => {
+                        if (!spr.scene) return;
+                        const t = p.t, u = 1 - t;
+                        spr.x = u * x0 + t * x1;
+                        // A parabola through both banks, apex `rise` above the
+                        // higher of them.
+                        spr.y = u * u * y0 + 2 * u * t * ((y0 + y1) / 2 - rise) + t * t * y1;
+                        const k = Math.abs(Math.cos(Math.PI * t));
+                        spr.setScale(f.sx * (1 - st * k), f.sy * (1 + st * k));
+                        this._cutFarmerDepth(f);
+                    },
+                    onComplete: () => {
+                        if (!spr.scene) return;
+                        spr.setPosition(x1, y1);
+                        f.band = toBand;       // he lives on that side now
+                        f.cell = null;
+                        this._cutFarmerDepth(f);
+                        this.tweens.add({      // the give in his knees
+                            targets: spr, scaleX: f.sx * (1 + sq), scaleY: f.sy * (1 - sq),
+                            duration: land, ease: 'Sine.easeOut', yoyo: true,
+                            onComplete: () => { if (spr.scene) spr.setScale(f.sx, f.sy); },
+                        });
+                    },
+                });
+            },
+        });
+    }
+
+    // HIS DAY IS OVER. Point him at the nearer side of the map and set him
+    // walking; _walkFarmerOff takes it from there.
+    //
+    // OUT THE SIDE HE IS ON, which is also the nearer one — he has just finished
+    // gathering that half, so it is the short way out and it never takes him
+    // back across the channel he only just crossed.
+    _sendFarmerHome(seg, f) {
+        const F = CONFIG.ROAD.TILEMAP.FARMER || {}, L = F.LEAVE || {};
+        if (!f || f.leaving || !f.spr || !f.spr.scene) return;
+        this._farmerPays(seg, f);
+        if (L.ENABLED === false) return;
+        const g = f.g;
+        const band = this._farmerBand(g, Math.floor((f.spr.x - g.left) / g.tile));
+        // In the canal's own corridor he belongs to neither side, so the nearer
+        // edge decides.
+        f.leaveDir = band ? Math.sign(band)
+                          : (f.spr.x - g.left < g.w / 2 ? -1 : 1);
+        this.time.delayedCall(L.DELAY_MS !== undefined ? L.DELAY_MS : 700, () => {
+            if (!f.spr || !f.spr.scene) return;
+            f.leaving   = true;
+            f.walking   = false;
+            f.harvesting = false;
+            f.crossTo   = null;
+        });
+    }
+
+    // SETTLING UP. Coins fly from the farmer to the counter for the field he
+    // just gathered.
+    //
+    // From HIM, not from the plants: one payment with a payer, at the end. Per
+    // fruit there would be no one paying — we dig the canal, we do not pick the
+    // crop — and a farm restored is the thing being paid for.
+    _farmerPays(seg, f) {
+        const P = (CONFIG.ROAD.TILEMAP.FARMER || {}).PAY || {};
+        if (P.ENABLED === false || f.paid || !f.spr || !f.spr.scene) return;
+        f.paid = true;
+        // WHAT THE FIELD WAS WORTH. A flat sum for the level, plus an optional
+        // rate per plant actually gathered — at PER_CROP 0 the farm's size does
+        // not enter into it, which is the current shape.
+        let picked = 0;
+        for (const cr of (seg && seg.crops) || []) if (cr.picked) picked++;
+        const amount = Math.round((P.AMOUNT !== undefined ? P.AMOUNT : 1000) +
+                                  (P.PER_CROP !== undefined ? P.PER_CROP : 0) * picked);
+        if (amount <= 0) return;
+        const at = this._worldToUI(f.spr.x, f.spr.y);
+        this.animateCoinReward(at.x, at.y, amount,
+            P.DELAY_MS !== undefined ? P.DELAY_MS : 250);
+    }
+
+    // Walk him out of the map and take him off it.
+    //
+    // Straight out sideways, no band rules and no crop rules: he is done with
+    // the field and everything those rules protect is behind him.
+    _walkFarmerOff(seg, f, dt) {
+        const F = CONFIG.ROAD.TILEMAP.FARMER || {}, L = F.LEAVE || {};
+        const g = f.g, spr = f.spr;
+        const step = (F.SPEED || 1.1) * (L.SPEED_MUL !== undefined ? L.SPEED_MUL : 1.35)
+                   * g.tile * dt;
+        spr.x += f.leaveDir * step;
+        spr.setFlipX(f.leaveDir < 0);
+        this._farmerStride(f, step);
+        this._cutFarmerDepth(f);
+        // GONE. A margin past the edge, so he is not deleted while a sliver of
+        // him is still on screen.
+        const m = (L.MARGIN !== undefined ? L.MARGIN : 1.5) * g.tile;
+        const out = f.leaveDir < 0 ? g.left - m : g.left + g.w + m;
+        if ((f.leaveDir < 0 && spr.x <= out) || (f.leaveDir > 0 && spr.x >= out)) {
+            spr.destroy();
+            seg.farmer = null;
+        }
+    }
+
+    // A STANDING FARMER STILL BREATHES.
+    //
+    // One idle frame means a stopped farmer is a still image, which beside
+    // swaying crops and wandering animals reads as something having broken. A
+    // slow squash and stretch on his own scale gives him a pulse with no second
+    // drawing and no extra object.
+    //
+    // Driven off a phase rather than a tween, so it can be interrupted on any
+    // frame the moment he moves — a tween would have to be killed and would
+    // leave him at whatever size it had reached.
+    _breatheFarmer(f, dtMs) {
+        const B = (CONFIG.ROAD.TILEMAP.FARMER || {}).IDLE_BREATH || {};
+        if (B.ENABLED === false) return;
+        f.breath = (f.breath || 0) + (dtMs || 16) / 1000;
+        const a = B.AMOUNT !== undefined ? B.AMOUNT : 0.03;
+        const k = Math.sin(f.breath * 2 * Math.PI * (B.HZ !== undefined ? B.HZ : 0.55));
+        const side = B.SIDE !== undefined ? B.SIDE : 0.6;
+        f.spr.setScale(f.sx * (1 - a * side * k), f.sy * (1 + a * k));
+    }
+
+    // HIS LEGS FOLLOW THE GROUND HE COVERS, not a flag.
+    //
+    // Driven by the distance actually moved this frame, because during a harvest
+    // there are several ways to be stationary with a target still set — waiting
+    // out a fruit's ripening, mid-crossing, arriving — and a walk cycle playing
+    // under a farmer who is standing still reads as the animation having come
+    // loose from the character.
+    _farmerStride(f, moved) {
+        const F = CONFIG.ROAD.TILEMAP.FARMER || {};
+        // Per FRAME, so it scales with the step: below a fraction of a tile
+        // there is nothing on screen for the legs to be explaining.
+        if (moved > f.g.tile * 0.004) {
+            if (!f.striding) {
+                f.striding = true;
+                f.spr.anims.play(f.walkKey, true);
+                f.spr.setScale(f.sx, f.sy);   // out of the breath, back to himself
+            }
+        } else if (f.striding) {
+            f.striding = false;
+            f.spr.anims.stop();
+            f.spr.setFrame(F.IDLE_FRAME || 0);
+        }
+    }
+
+    // The harvest run: walk the field, taking the fruit off whatever he passes.
+    //
+    // Runs INSTEAD of the wander, and owns his movement while it does. Three
+    // things happen in order every frame: take what is in reach, pick the next
+    // target if he has none, then move — walking if it is close, appearing there
+    // if it is not.
+    _runHarvest(seg, f, dt) {
+        const F = CONFIG.ROAD.TILEMAP.FARMER || {}, HV = F.HARVEST || {};
+        const spr = f.spr, g = f.g, tile = g.tile;
+
+        // 1. WHATEVER IS IN REACH, on the way past. No dwell, no stopping: the
+        //    row is cleared by walking down it.
+        const reach = (HV.REACH !== undefined ? HV.REACH : 1.15) * tile;
+        // `left` is every fruit still on a plant, ripe or not — it holds the run
+        // open. The rest is what he may actually take, split by SIDE.
+        //
+        // HIS OWN SIDE FIRST, always — nearest over there beats nearest full
+        // stop. A plain nearest-first would send him across the channel for a
+        // fruit a tile closer and then straight back for the one behind him,
+        // and the crossing is the one move that costs something to watch. He
+        // clears his side, then crosses once.
+        const side = this._farmerBand(g, Math.floor((spr.x - g.left) / tile));
+        // A crop in the canal's own corridor belongs to whichever side he is
+        // standing on: he can reach it without crossing anything.
+        const sideOf = (x) => this._farmerBand(g, Math.floor((x - g.left) / tile)) || side;
+
+        let left = 0,                 // fruit standing on plants — holds the run open
+            owed = 0, owedHere = 0,   // ...plus the plants yet to bear one
+            near = null, nd = Infinity, far = null, fd = Infinity;
+        for (const cr of seg.crops) {
+            const fr = this._cropYield(cr);
+            if (!fr) {
+                // A PLANT THAT HAS NOT BORNE YET still counts as work on that
+                // side. Without it he would call his side finished, cross for a
+                // ripe one, and have to come back for the plant behind him.
+                if (this._cropWillBear(cr)) {
+                    owed++;
+                    if (sideOf(cr.sprite.x) === side) owedHere++;
+                }
+                continue;
+            }
+            const d = Math.hypot(fr.x - spr.x, fr.y - spr.y);
+            // IN REACH IS ALWAYS FREE. Batching decides when he sets OFF, never
+            // whether he takes what he is already standing next to.
+            if (d <= reach) { this._pickFruit(seg, cr); continue; }
+            left++; owed++;
+            if (sideOf(fr.x) === side) {
+                owedHere++;
+                if (d < nd) { nd = d; near = cr; }
+            } else if (d < fd) { fd = d; far = cr; }
+        }
+
+        // HIS OWN SIDE FIRST, and not merely nearest-first: he crosses only when
+        // there is nothing left over here AT ALL — no ripe fruit and no plant
+        // still to bear one. Crossing for whatever happens to be closest would
+        // have him over the bridge and back for a plant that was always going to
+        // ripen behind him, and the crossing is the one move that costs
+        // something to watch.
+        if (!near && !owedHere) { near = far; nd = fd; }
+
+        // A WALK IS WORTH MAKING FOR A HANDFUL, not for one. He waits until
+        // BATCH are ready and then clears them in one round, rather than setting
+        // out afresh for each fruit as it ripens — that reads as pacing.
+        //
+        // The exception is the tail of the field: once fewer than BATCH are
+        // outstanding at all, there will never be a batch, and holding out for
+        // one would leave the last few hanging and the level unable to end.
+        const batch = HV.BATCH !== undefined ? HV.BATCH : 4;
+        if (near && left < batch && owed >= batch) near = null;
+
+        // 2. NOTHING RIPE RIGHT NOW. He starts on the first fruit of the field
+        //    and works as it comes, so he catches up with the crop and then has
+        //    to wait for it. He stands where he is — walking off between plants
+        //    would read as him losing interest and coming back.
+        if (!left) {
+            f.walking = false;
+            this._farmerStride(f, 0);
+            // STILL GROWING: hold the run open for what is coming.
+            if (!this._cropsDone(seg)) return;
+            // THE WHOLE FIELD IS IN AND PICKED. Now he celebrates — after the
+            // work, not before it.
+            f.harvesting = false;
+            f.crossTo    = null;
+            f.waitT      = this._rndRange(F.PAUSE_MS || [1800, 6500]);
+            this._cheerFarmer(seg);
+            return;
+        }
+
+        // 2b. NOTHING TO SET OUT FOR — too few fruit to be worth the walk, or
+        //     the only one left is across the bridge and this side is not
+        //     finished. He waits where he is.
+        if (!near) {
+            f.walking = false;
+            this._farmerStride(f, 0);
+            return;
+        }
+
+        // 3. WHERE HE IS HEADING. The fruit, unless the main channel is between
+        //    them — then the BRIDGE, and over it on foot.
+        //
+        //    Branch and minor ditches he simply walks: they are a stride wide
+        //    and stepping one is not worth a mechanism.
+        if (f.hopT > 0) { f.hopT -= dt * 1000; this._farmerStride(f, 0); return; }  // airborne
+        // WHERE THE TARGET IS. `cr.fruit` is null on a root crop — its yield is
+        // still in the ground and the plant itself is the thing to walk to — so
+        // the position comes from the yield, never from the fruit.
+        const goal = this._cropYield(near) || near.sprite;
+        const myBand = this._farmerBand(g, Math.floor((spr.x - g.left) / tile));
+        const toBand = this._farmerBand(g, Math.floor((goal.x - g.left) / tile));
+
+        // ARRIVED. Once he is standing in the band he set out for, the crossing
+        // is over and he goes back to heading straight for fruit.
+        if (f.crossTo && myBand === f.crossTo.band) f.crossTo = null;
+        // ...and if one somehow does not end, it must not take the level with
+        // it: the roster waits on the field being picked, so a farmer stuck part
+        // way over stops the game rather than just looking wrong. Past this he
+        // gives up on the deck and jumps instead.
+        if (f.crossTo) {
+            f.crossTo.t = (f.crossTo.t || 0) + dt * 1000;
+            const cap = HV.CROSS_TIMEOUT_MS !== undefined ? HV.CROSS_TIMEOUT_MS : 8000;
+            if (f.crossTo.t > cap) {
+                console.warn('[farmer] crossing stalled — jumping instead');
+                f.crossTo = null;
+                f.stuck   = true;
+            }
+        }
+
+        // SETTING OUT. Band 0 is the canal's own corridor — mid-crossing, or on
+        // the deck — and only a real side-to-side difference starts one.
+        let leapFrom = null;
+        if (!f.crossTo && myBand && toBand && myBand !== toBand) {
+            const br = f.stuck ? null
+                     : this._mainBridge(g, Math.floor((spr.y - f.gTop) / tile));
+            if (br !== null) f.crossTo = { band: toBand, row: br, onDeck: false };
+            // NO BRIDGE ON THIS MAP. Not every level has been given one yet, and
+            // a farmer who cannot reach the far side would leave fruit standing
+            // there — which now holds the whole level open, since the roster
+            // waits on the field being picked. So he jumps it, as he used to.
+            else leapFrom = myBand;
+        }
+
+        let tx = goal.x, ty = goal.y;
+        if (f.crossTo) {
+            // TWO LEGS: up to the near side of the deck, then straight across to
+            // the far side. Never one diagonal to the fruit — that line leaves
+            // the deck and crosses open water.
+            //
+            // BOTH MARKS ARE _bankCol, the last column that belongs to a SIDE.
+            // The columns hard against the channel are inside the machine
+            // corridor and band 0, which belongs to neither side — aim at one of
+            // those and "he has arrived on the far band" is never true, so the
+            // crossing never ends and he stands on the deck for good. That hung
+            // the level outright once the roster began waiting on the field
+            // being picked.
+            const col = this._bankCol(g, f.crossTo.onDeck ? f.crossTo.band
+                                                          : -f.crossTo.band);
+            tx = g.left + (col + 0.5) * tile;
+            ty = f.gTop + (f.crossTo.row + 0.5) * tile;
+        } else if (leapFrom) {
+            const col = this._bankCol(g, leapFrom);
+            tx = g.left + (col + 0.5) * tile;
+            ty = f.gTop + (this._bankRow(g, col,
+                    Math.floor((goal.y - f.gTop) / tile)) + 0.5) * tile;
+        }
+
+        // The walk itself — his own step, hurried. He is working, not strolling.
+        const dx = tx - spr.x, dy = ty - spr.y;
+        const d  = Math.max(1e-3, Math.hypot(dx, dy));
+        const step = (F.SPEED || 1.1) * (HV.SPEED_MUL !== undefined ? HV.SPEED_MUL : 2.4)
+                   * tile * dt;
+        const there = d <= Math.max(step, tile * 0.2);
+        // AT THE NEAR END OF THE DECK: the next leg is the deck itself.
+        if (there && f.crossTo && !f.crossTo.onDeck) {
+            spr.setPosition(tx, ty);
+            f.crossTo.onDeck = true;
+        } else if (there && leapFrom) {
+            spr.setPosition(tx, ty);
+            this._leapCanal(seg, f, toBand, near);
+            return;
+        }
+        const moved = Math.min(step, d);
+        f.walking = true;
+        this._farmerStride(f, moved);
+        spr.x += (dx / d) * moved;
+        spr.y += (dy / d) * moved;
+        if (Math.abs(dx) > tile * 0.05) spr.setFlipX(dx < 0);
+        // Rock whatever he walks INTO, as the wander does — on cell entry, not
+        // on proximity, or every plant near him would shake the whole way.
+        const cell = Math.floor((spr.x - g.left) / tile) + ',' +
+                     Math.floor((spr.y - f.gTop) / tile);
+        if (cell !== f.cell) { f.cell = cell; this._brushCrop(seg, cell, dx); }
+        this._cutFarmerDepth(f);
     }
 
     // Walk the farmers. Point to point, straight line, any angle — no grid and
@@ -3470,7 +4096,22 @@ console.log(
                     duration: (RV.FADE_MS || 380) * 0.6, ease: 'Sine.easeOut' });
             }
 
+            // BREATHING, whenever nothing else owns his size. The tween test is
+            // what keeps it out of the way of the walk-on pop, the cheer, the
+            // leap and the harvest lift — each of those is animating scale, and
+            // two things writing one property fight every frame.
+            if (!f.waiting && !f.cheering && !f.striding && !(f.hopT > 0) &&
+                    !this.tweens.isTweening(f.spr)) {
+                this._breatheFarmer(f, dtMs);
+            }
+
             if (f.cheering) continue;      // jumping; the chain owns him
+
+            // ON HIS WAY OUT. Nothing else applies any more.
+            if (f.leaving) { this._walkFarmerOff(seg, f, dt); continue; }
+
+            // GATHERING. Owns his movement outright until the field is picked.
+            if (f.harvesting) { this._runHarvest(seg, f, dt); continue; }
 
             if (!f.walking) {
                 f.waitT -= dtMs;
@@ -4411,7 +5052,14 @@ console.log(
                     } else {
                         cr.sprite.scaleY = target;
                     }
-                    if (st >= stages) cr.done = true;
+                    if (st >= stages) {
+                        cr.done = true;
+                        // THE FIRST GROWN PLANT PUTS HIM TO WORK. Keyed to the
+                        // stage and not to a fruit appearing, or a field of
+                        // roots — which never draw one — would never start a
+                        // run at all.
+                        this._beginHarvest(seg);
+                    }
                 }
             }
         }
@@ -4636,6 +5284,19 @@ console.log(
     _cropsDone(seg) {
         if (!seg.crops) return true;
         for (const cr of seg.crops) if (!cr.done) return false;
+        return true;
+    }
+
+    // Is there any fruit left standing in the field?
+    //
+    // Reads the plants, not the farmer: a level may have no farmer, or a run
+    // that ended early, and the question is about the field either way. A fruit
+    // still fading out has already left its plant and does not count — it is
+    // picked, just not yet gone.
+    _fieldPicked(seg) {
+        for (const cr of (seg && seg.crops) || []) {
+            if (this._cropYield(cr)) return false;
+        }
         return true;
     }
 
@@ -5865,8 +6526,12 @@ console.log(
         // counter spinning.
         if (tn.workLeft !== undefined && tn.workLabel) {
             const dropped = tn.workShown === undefined || tn.workShown > tn.workLeft;
+            // WHAT THIS SECOND COST, before the figure is overwritten with the
+            // new one — the only moment the difference exists.
+            const drop = tn.workShown === undefined ? 0 : tn.workShown - tn.workLeft;
             tn.workShown = tn.workLeft;
             if (dropped) {
+                this._showWorkDrop(tn, drop);
                 const P = CONFIG.PLATFORM;
                 this.tweens.killTweensOf(tn.workLabel);
                 tn.workLabel.setScale(1);
@@ -5877,6 +6542,53 @@ console.log(
                 });
             }
         }
+    }
+
+    // Float this second's hit up off the readout: "-50", rising and fading.
+    //
+    // The readout only ever shows a TOTAL, and a total that steps down is a
+    // number changing, not an amount delivered. The difference is what the
+    // batteries just bought, and it exists for exactly one instant — between the
+    // old figure being read and the new one being written — so it is drawn here
+    // and nowhere else.
+    _showWorkDrop(tn, drop) {
+        const PL = CONFIG.ROAD.TILEMAP.POWER_LABEL || {}, D = PL.DROP || {};
+        if (D.ENABLED === false || !(drop > 0) || !tn.workLabel || !tn.workLabel.scene) return;
+        const lab = tn.workLabel;
+        // Not while the readout itself is hidden — before the dig starts, and
+        // after breakthrough. A figure flying off nothing explains nothing.
+        if (!lab.visible) return;
+        const s    = this.layoutConfig.scale;
+        const tile = (tn.flood && tn.flood.g) ? tn.flood.g.tile
+                   : (this.tileGrid ? this.tileGrid.tile : 40);
+        const ms   = D.MS !== undefined ? D.MS : 780;
+        const txt = this._addB(this.add.text(lab.x, lab.y, '-' + this._bigNum(drop), {
+                fontSize: Math.max(8, Math.round((D.SIZE || 20) * s)) + 'px',
+                fontFamily: CONFIG.FONT_FAMILY,
+                fontStyle: CONFIG.FONT_WEIGHT,
+                color: D.COLOR || '#ffd9d0',
+                stroke: D.STROKE || '#1d2b16',
+                strokeThickness: Math.max(1, Math.round((D.STROKE_W || 4) * s)),
+            }).setOrigin(1, 0.5)
+              // Just under the readout, so the figure it is explaining is never
+              // covered by its own annotation.
+              .setDepth((PL.DEPTH !== undefined ? PL.DEPTH : 4.6) - 0.001),
+            tn.flood && tn.flood.seg);
+        this.tweens.add({
+            targets: txt,
+            x: lab.x + (D.DX !== undefined ? D.DX : -0.25) * tile,
+            y: lab.y - (D.RISE !== undefined ? D.RISE : 1.1) * tile,
+            duration: ms, ease: 'Sine.easeOut',
+            onComplete: () => txt.destroy(),
+        });
+        // HELD, then faded. A fade that starts on frame one is unreadable at the
+        // moment it matters most — while it is still next to the figure it came
+        // out of.
+        const hold = Math.max(0, Math.min(0.9, D.HOLD !== undefined ? D.HOLD : 0.25));
+        this.tweens.add({
+            targets: txt, alpha: 0,
+            delay: ms * hold, duration: ms * (1 - hold), ease: 'Sine.easeIn',
+        });
     }
 
     // ── The dig regime: TUNNEL.LEVEL_MODE ────────────────────────────────────
@@ -6506,15 +7218,23 @@ console.log(
         if (C.HOLD_CAMERA_FOR_CROPS) E.camHold = true;
         E.held = true;
         const wait = () => {
+            // TWO THINGS HAVE TO HAPPEN, in order.
+            //
+            // GROWN — every plant at its last stage, which also means every
+            // branch that feeds one has filled.
             if (seg && !this._cropsDone(seg)) { this.time.delayedCall(300, wait); return; }
-            // THE FIELD IS IN. Only now does the light move on — every plant has
-            // reached its last stage, which means every branch that feeds one has
-            // filled. Until this moment the finished-looking farm below is still
-            // the one being completed, and it stays lit however far ahead the
-            // machine has got.
-            // HIS FIELD IS IN, and he says so — before the light moves on, so
-            // the farm is still the lit one while he jumps in it.
-            this._cheerFarmer(seg);
+            // ...and once it is grown, whatever he was never going to reach is
+            // taken anyway, and the level with no farmer at all is closed out.
+            // Harmless to call twice: it defers while his run is going.
+            this._fieldGathered(seg);
+            // GATHERED — and not a moment before. The slot is the record of a
+            // farm restored, so it cannot be awarded while there is still fruit
+            // standing in the field: the icon would fly to the roster over a
+            // farmer who was visibly still working.
+            if (seg && !this._fieldPicked(seg)) { this.time.delayedCall(200, wait); return; }
+            // THE FIELD IS IN. Only now does the light move on — until this
+            // moment the finished-looking farm below is still the one being
+            // completed, and it stays lit however far ahead the machine has got.
             this._focusDim(nextSeg);
             // The field is in, so what it grew joins the roster. Fired here and
             // not at breakthrough: this is the moment the farm is actually
@@ -8248,6 +8968,14 @@ console.log(
 
     animateCoinReward(startX, startY, amount, delayBeforeFly = 0, platform = null) {
         const C   = CONFIG.COIN_REWARD_ANIMATION;
+        // No counter on screen, no flight — but the coins are still earned. This
+        // is called at every level end now, so it must not be able to take the
+        // game down with it if the UI half is ever built without one.
+        if (!this.coinIcon || !this.coinIcon.scene) {
+            this.coins += amount;
+            if (this.coinText) this.updateCoinDisplay();
+            return;
+        }
         const tX  = this.coinIcon.x, tY = this.coinIcon.y;
         let done  = 0;
         
@@ -8255,9 +8983,9 @@ console.log(
         // these are UI, not world objects.
         const coins = [];
         for (let i = 0; i < C.COIN_COUNT; i++) {
-            const coin = this.add.image(startX, startY - i * C.INITIAL_STACK_OFFSET, 'coin')
+            const coin = this._addA(this.add.image(startX, startY - i * C.INITIAL_STACK_OFFSET, 'coin')
                 .setDisplaySize(this.rewardCoinSize, this.rewardCoinSize)
-                .setDepth(100 + i);  // above everything in the field
+                .setDepth(100 + i));  // above everything in the field
             coins.push(coin);
         }
 

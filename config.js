@@ -724,6 +724,12 @@ var CONFIG = {
                 FADE_MS: 450,
                 RISE_TILES: 0.15,            // small settle as it fades in
 
+                // How far the cut must pass a main-canal bridge before its deck
+                // drops in, under TUNNEL.LEVEL_MODE 'FOLLOW'. The item's own
+                // AFTER_DIG_TILES is the 'DAM' figure — see the bridges below
+                // for why the two modes cannot share one number.
+                FOLLOW_CLEAR_TILES: 0.5,
+
                 // ── Grazing ─────────────────────────────────────────────
                 // A prop with an EAT image alternates between the two. Two
                 // drawings are plenty; what sells it is the TIMING, so the two
@@ -769,6 +775,23 @@ var CONFIG = {
                     //
                     // WALKABLE lifts the farmer's ban on the canal cell the
                     // marker sits in — that is the whole point of a bridge.
+                    //
+                    // HOW MUCH CLEARANCE A BRIDGE WAITS FOR IS THE MODE'S, NOT
+                    // THE BRIDGE'S. The clearance exists so a deck is not
+                    // dropped on top of the machine, and how much is needed
+                    // depends entirely on where the machine will be:
+                    //
+                    //   DAM     — the rig drives 3.5 tiles PAST the level and
+                    //             keeps going, so a deck laid the moment the
+                    //             blade drew level would land under the belt.
+                    //             AFTER_DIG_TILES (4) is that clearance.
+                    //
+                    //   FOLLOW  — the rig stops on the boundary and the water
+                    //             is already at its heel. There is no overrun to
+                    //             wait out, and on a six-row map a four-tile
+                    //             wait is longer than the whole dig — the bridge
+                    //             simply never appeared. PROPS.FOLLOW_CLEAR_TILES
+                    //             (0.5) lets it drop in as the cut passes.
                     //
                     // AFTER_DIG_TILES holds a bridge back until the cut has run
                     // that far past it. A main-canal bridge cannot stand before
@@ -1331,6 +1354,128 @@ var CONFIG = {
                     LAND_MS:  110,      // the give in his knees on landing
                     GAP_MS:    60,      // between hops
                 },
+                // ── GATHERING THE FIELD ─────────────────────────────────
+                // He harvests BY PASSING, not by stopping: everything within
+                // REACH comes off as he goes, so a row is cleared by walking
+                // down it rather than by a visit to each plant. Standing at
+                // every one would take a minute of real time on a full field.
+                //
+                // HE WALKS. However far it is, if it is on his side of the
+                // canal he walks to it — the walk is the work, and a distance
+                // rule that jumped him across his own field would throw that
+                // away for the sake of a few seconds.
+                //
+                // THE CANAL HE CROSSES BY BRIDGE. A field split by the main
+                // channel is crossed where the map says it can be: he walks to
+                // the near end of the deck, straight over it, and on to the
+                // fruit. Two legs, never one diagonal — a straight line to the
+                // far side leaves the deck and crosses open water.
+                //
+                // Branch and minor ditches he just walks. They are a stride wide
+                // and stepping one is not worth a mechanism.
+                //
+                // A map with NO bridge over the main falls back to the leap
+                // below. Not every level has been given one yet, and a farmer
+                // who cannot reach the far side strands fruit there — which now
+                // holds the level open, since the roster waits on the field
+                // being picked.
+                HARVEST: {
+                    ENABLED:  true,
+                    // HOW MANY RIPE FRUIT ARE WORTH SETTING OUT FOR. Below this
+                    // he waits: a walk across the field for one fruit, then back
+                    // for the next as it ripens, reads as pacing rather than as
+                    // working. He gathers a handful in one round instead.
+                    //
+                    // Whatever is already within REACH still comes off — this
+                    // decides when he MOVES, not what he may take.
+                    //
+                    // The tail of the field is exempt. Once fewer than this are
+                    // outstanding there will never be a batch, and holding out
+                    // for one would strand the last few and leave the level
+                    // unable to end.
+                    BATCH:    4,
+                    REACH:    1.15,   // tiles — what comes off in passing
+                    SPEED_MUL: 2.4,   // faster than his wander; he has a job on
+                    // A crossing that has not finished in this long is not
+                    // going to. He gives up on the deck and jumps, because the
+                    // roster waits on the field being picked and a farmer stuck
+                    // part way over halts the game, not just himself.
+                    CROSS_TIMEOUT_MS: 8000,
+                    // ── The leap ────────────────────────────────────────
+                    JUMP_MS:     520, // bank to bank
+                    JUMP_RISE:   1.1, // apex above the banks, in tiles
+                    CROUCH_MS:    90, // the gather before he pushes off
+                    LAND_MS:      90, // the give in his knees, and back up
+                    JUMP_SQUASH: 0.14,
+                    JUMP_STRETCH: 0.12,
+                },
+                // ── HE PAYS FOR THE HARVEST ─────────────────────────────
+                // The coin economy already existed and had no earning side: the
+                // counter, the icon and the flight were all built, coins were
+                // spent on batteries, and nothing ever put one in. This is the
+                // other half.
+                //
+                // THE FARMER PAYS, at the end, for the field he gathered — not
+                // the player per fruit. We dig the canal; the produce is his,
+                // and what we are owed is settled once the farm is restored.
+                //
+                // FLAT, FOR NOW. A field-size rate was tried and did not track
+                // progression at all: level 10 paid less than level 7 for being
+                // a smaller farm, while the dig cost between them had gone up
+                // forty times. One number a level says the same thing without
+                // pretending to a curve it does not have.
+                //
+                // When coins have to buy something that scales, this wants to
+                // become a column beside COST in levels.js — or a fraction of
+                // it, so the reward follows the difficulty with no second table
+                // to keep in step.
+                PAY: {
+                    ENABLED:   true,
+                    AMOUNT:    1000,  // per level, whatever it grew
+                    PER_CROP:  0,     // ...plus this for each plant gathered
+                    DELAY_MS:  250,   // after the cheer, before the coins fly
+                },
+
+                // ── AND HE LEAVES ───────────────────────────────────────
+                // The field is gathered and celebrated; there is nothing left
+                // for him to do in it. He walks off the side he is standing on
+                // and out of the map, rather than wandering a finished farm
+                // while the machine works two levels above.
+                //
+                // Off the SIDE, not the bottom: the sides are the only edges the
+                // player is not looking at — the farm scrolls upward, so leaving
+                // downward would walk him back through the level and leaving
+                // upward would take him into the next one.
+                LEAVE: {
+                    ENABLED:   true,
+                    DELAY_MS:  700,   // a beat after the cheer, so the two read
+                                      // as finishing and then going, not as one
+                                      // move. Long enough, too, that the coins
+                                      // are away before he is: he is paid where
+                                      // he stood in the field, not halfway off
+                                      // the edge of it
+                    SPEED_MUL: 2.0,   // twice his wander; his day is over and
+                                      // there is nothing to watch him do on the
+                                      // way out
+                    MARGIN:    1.5,   // tiles past the map edge before he is
+                                      // taken off — clear of the widest sprite
+                },
+                // ── BREATHING ───────────────────────────────────────────
+                // There is one idle frame, so a standing farmer is a still
+                // image — and a still image beside a field of swaying crops and
+                // wandering animals reads as a bug. A slow squash and stretch
+                // gives him a pulse without a second drawing.
+                //
+                // Volume is conserved, and the sideways half is smaller than the
+                // vertical: a chest rises more than it widens. He is anchored
+                // near his feet (origin y 0.85), so this settles into the ground
+                // rather than bobbing off it.
+                IDLE_BREATH: {
+                    ENABLED: true,
+                    HZ:      0.55,   // a slow breath, not a pant
+                    AMOUNT:  0.03,   // 3% taller at the top of it
+                    SIDE:    0.6,    // how much of that goes sideways
+                },
                 SIZE:  1.9,         // height as a fraction of a tile
                 IDLE_FRAME: 0,      // standing still is a STILL POSE, not a
                                     // loop — this frame is held. Frame 1 unused
@@ -1389,6 +1534,36 @@ var CONFIG = {
                 // until the actor band moved from 3 to 4 to lift animals over
                 // the main canal. Crops have been drawn across it since.
                 DEPTH:   4.6,
+
+                // ── THE HIT, spelled out ────────────────────────────────
+                // The number drops once a second and the label pulses, but the
+                // drop itself is never shown: the player sees 2.5K become 2.45K
+                // and has to do the subtraction to know what a second of charge
+                // is worth. This floats the difference — "-50" — up off the
+                // readout and fades it, so the delivery is legible as an amount
+                // and not just as movement.
+                //
+                // DOWNWARD. A number being taken away should fall, not rise —
+                // and the readout sits on the dig line with the machine's work
+                // above it, so up is where the eye already is.
+                DROP: {
+                    ENABLED: true,
+                    SIZE:     20,       // font size @ design scale; under the
+                                        // readout's 26 — it is the annotation,
+                                        // not the figure
+                    COLOR:   '#ffd9d0', // warm, and only ever negative
+                    STROKE:  '#1d2b16',
+                    STROKE_W: 4,
+                    RISE:    -1.1,      // how far it floats, in tiles. NEGATIVE
+                                        // is downward — the sign is the
+                                        // direction, so one number moves it
+                                        // either way
+                    DX:      -0.25,     // sideways lean, in tiles
+                    MS:       780,
+                    HOLD:     0.25,     // share of MS at full opacity before it
+                                        // starts to go — long enough to read
+                                        // while it is still beside the figure
+                },
             },
 
             BLOCK: {
@@ -1617,6 +1792,48 @@ var CONFIG = {
                     CANAL_RING: 1,            // banks: the ditch's own margin
                     CROP_RING:  1,            // the ground each plant is watered on
                 },
+            },
+
+            // ── The harvest ─────────────────────────────────────────────────
+            // Stage 5 is the FRUIT LAID OVER the stage-4 plant, drawn as its own
+            // sprite for exactly this reason: the fruit can be taken and the
+            // plant left standing. Picking it is that sprite coming off.
+            //
+            // BOTH KINDS OF YIELD. A fruit crop hangs its produce on the plant
+            // at the last stage and picking it is that sprite leaving. A ROOT
+            // keeps its yield underground and draws nothing until it is pulled —
+            // its art is the last frame of the sheet, the vegetable out of the
+            // ground — so the pick is what creates it. Either way the plant
+            // stays standing and the field does not go bare.
+            //
+            // It runs when the FIELD is in, not when each plant reaches stage 5.
+            // Per-plant, the first fruit would be picked while the last was
+            // still a seed and the farm would never once be seen fruited — and
+            // the roster icon, which flies off a plant, would be leaving a bare
+            // one. The field ripens, the farmer jumps, then he walks it and
+            // takes the fruit off as he goes (FARMER.HARVEST).
+            CROP_HARVEST: {
+                ENABLED:   true,
+                // A fruit is not picked the instant it appears — but nothing
+                // here enforces that any more. FARMER.HARVEST.BATCH does it by
+                // itself: he waits until a handful are ready before setting out,
+                // so fruit stands on the plant for as long as it takes the rest
+                // of the batch to arrive. A timer on top of that was two rules
+                // holding the same door shut.
+                RISE:      1.2,        // how far it lifts, in tiles. Well clear
+                                       // of the plant it came off: at half a
+                                       // tile the yield fades out still level
+                                       // with the leaves it was hanging in, so
+                                       // it reads as dissolving rather than as
+                                       // being carried away
+                DRIFT:     0.18,       // sideways wander, in tiles — a pick is
+                                       // never straight up
+                POP:       1.25,       // it swells as it comes free, then goes
+                MS:        520,
+                EASE:     'Sine.easeOut',
+                SHAKE:     0.7,        // how hard the plant is knocked as its
+                                       // fruit comes off, against CROP_SWAY's
+                                       // LEAN_DEG. 0 leaves the plant still
             },
 
             // ── Crops ───────────────────────────────────────────────────────
