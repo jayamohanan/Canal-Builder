@@ -167,12 +167,46 @@ var CONFIG = {
     ROSTER: {
         ENABLED: true,
         SLOTS:   5,          // per block — the unlock ladder runs in fives
+        // The stretch of the run you are in, named over the slots. It changes
+        // every SLOTS levels, which is what makes it worth reading: a level
+        // number counts up forever and says nothing, while a name that holds for
+        // five levels and then changes tells you the subject has moved on.
+        //
+        // Places, not categories — "Vegetable Patch" and "Farmyard" are ground
+        // you can picture, where "Basic Crops" would be the developer's word for
+        // a tier and would age badly beside them.
+        //
+        // Farmyard rather than Ranch: a ranch is cattle on open land, and this
+        // block has pigs, chickens and rabbits in it.
+        BLOCKS: [
+            'Vegetable Patch',   // 1-5
+            'Farmyard',          // 6-10
+        ],
+        LABEL_SIZE:  15,     // px at design scale
+        // White on a dark outline, not dark on the field. The name sits over
+        // open ground whose colour is whatever the level happens to be, and a
+        // brown that reads as ink on pale soil reads as a greyed-out label on
+        // anything darker. The outline carries the contrast so the fill can stay
+        // white over every background.
+        LABEL_COLOR:  '#ffffff',
+        LABEL_STROKE: '#2b2013',
+        LABEL_STROKE_W: 3,   // px at design scale
+        LABEL_GAP:   5,      // between the name and the slots
+
         SIZE:    46,         // slot side, px at design scale
+        RADIUS:  12,         // corner rounding, px at design scale. Clamped to
+                             // half the side, where the cell becomes a circle.
+                             // At GAP 0 the rounding pinches each seam slightly —
+                             // the row still reads as one strip, with the cells
+                             // legible inside it. Open GAP a little to let them
+                             // read as separate rounded tiles instead.
         GAP:     0,          // none — the slots meet, so the row reads as ONE
                              // strip of cells rather than five loose buttons.
                              // Their strokes fall on the same line at each seam,
                              // which is what draws the divider between them
-        Y:       14,         // down from the top of the farm half
+        Y:       12,         // down from the top of the farm half — to the top of
+                             // the NAME, with the slots below it. One number
+                             // moves the whole block
         // Pale, so a dark icon reads against it — the farm behind is earth and
         // foliage, and a light panel separates the roster from it without a
         // border round the whole thing.
@@ -220,6 +254,28 @@ var CONFIG = {
             'cow':    5, 'chicken': 6, 'bunny':     7, 'sheep':       8, 'goat':  9,
         },
         POP_MS:      420,    // the drop-in when a slot fills
+
+        // ── The flight ──────────────────────────────────────────────────
+        // The unlocked produce leaves the plant it was found on and travels to
+        // its slot. Without that the icon simply appears, and an unlock that
+        // appears has no cause — the flight is what says "this came from there".
+        //
+        // It crosses cameras: the plant is in the scrolling world, the roster is
+        // pinned to the screen. The launch point is converted once, at take-off,
+        // and the flier is a screen-space object from then on. The plant is not
+        // moving by that point, so nothing needs tracking.
+        FLY_MS:   900,
+        FLY_ARC:  0.45,      // how high it bows, as a fraction of the distance.
+                             // An arc reads as carried; a straight line reads as
+                             // a UI element sliding
+        FLY_TOP:  6,         // the arc's PEAK may come no closer than this to the
+                             // top of the screen. The roster is already up there,
+                             // so a bow measured off the distance sends the curve
+                             // clean off the top — most of the flight would
+                             // happen where it cannot be seen
+        FLY_FROM: 1.9,       // it starts larger than the slot — near the plant it
+                             // is a piece of produce, and becomes an icon on
+                             // arrival
         DEPTH:       99000,  // over the world, under the pause button
     },
 
@@ -1236,6 +1292,45 @@ var CONFIG = {
                 CYCLE:  ['farmer1', 'farmer2'],
                 EXT:    '.webp',
                 FRAMES: 5,
+                // ── WHEN HE TURNS UP ────────────────────────────────────
+                // Levels are built several ahead of the machine, so without
+                // this a farmer is already standing in a field the player has
+                // not reached — three farms up the screen, tending crops that
+                // are still seeds in ground nobody has watered.
+                //
+                // He walks on once HIS OWN level is being dug, which is the
+                // moment that farm becomes the one being played.
+                REVEAL: {
+                    AFTER_TILES: 0.5,   // how far into the level the blade must
+                                        // be. Not 0: the handover itself would
+                                        // then pop him in, and a beat later
+                                        // reads as him coming out to the field
+                                        // rather than being switched on with it
+                    FADE_MS:  380,
+                    POP_FROM: 0.35,     // scale he swells from
+                    POP_EASE: 'Back.easeOut',
+                },
+                // ── THE FIELD IS IN ─────────────────────────────────────
+                // Every plant on his farm has reached its last stage, and he
+                // jumps for it. Squash, launch, stretch, land — the whole shape
+                // of the move is squash-and-stretch, so it reads as delight
+                // rather than as a sprite being moved up and down.
+                //
+                // Volume is conserved on both halves: what he loses in height he
+                // gains in width and the other way about. Without that he simply
+                // gets shorter and taller, which reads as a scaling bug.
+                CHEER: {
+                    ENABLED: true,
+                    HOPS:     2,        // one is a hiccup; three is a dance
+                    SQUASH:   0.18,     // compression before the launch
+                    STRETCH:  0.16,     // how far he draws out in the air
+                    RISE:     0.55,     // apex, in tile heights
+                    DIP_MS:   130,      // the crouch
+                    UP_MS:    190,      // ...and the launch off it
+                    DOWN_MS:  170,
+                    LAND_MS:  110,      // the give in his knees on landing
+                    GAP_MS:    60,      // between hops
+                },
                 SIZE:  1.9,         // height as a fraction of a tile
                 IDLE_FRAME: 0,      // standing still is a STILL POSE, not a
                                     // loop — this frame is held. Frame 1 unused
@@ -1297,18 +1392,17 @@ var CONFIG = {
             },
 
             BLOCK: {
-                // OFF. The walls exist to hold water back, and since AFTER_DIG
-                // went false there is nothing being held — the water follows the
-                // blade, so a dam has nothing to dam. They were still being
-                // placed and still standing in the channel, which read as
-                // scenery with no reason to be there.
+                // DAM MODE ONLY. Walls exist to hold water back, and under
+                // FOLLOW nothing is being held — a dam with nothing to dam is
+                // scenery standing in the channel for no reason — so
+                // TUNNEL.LEVEL_MODE takes them off screen on its own and this
+                // flag is not consulted.
                 //
-                // This switches off BOTH: the wall dropped at each level's far
-                // edge, and the mid-level dams raised from `block` points on the
-                // props layer. Those markers can stay painted in the maps; they
-                // are simply not read. Turning AFTER_DIG back on and this with
-                // it restores the whole staged-flooding behaviour.
-                ENABLED: false,
+                // Inside DAM mode it still switches BOTH off: the wall dropped
+                // at each level's far edge, and the mid-level dams raised from
+                // `block` points on the props layer. Those markers can stay
+                // painted in the maps either way; they are simply not read.
+                ENABLED: true,
                 FILE:  'graphics/block.png',
                 // Which point ON THE ART lands on the level boundary. Not the
                 // centre: the wall's waterline sits high in the image, so this
@@ -1508,6 +1602,20 @@ var CONFIG = {
                                               // the plant's own moment
                     FADE_MS:    900,          // slower than the patches' 450, so
                                               // it reads as a wash and not a swap
+
+                    // ── HOW FAR THE DAMP REACHES ────────────────────────
+                    // Water spreads a little way out of a ditch and a little way
+                    // around a watered plant. It does not soak a whole field, and
+                    // a field that turns wholesale says nothing about where the
+                    // water went — the far corners change colour on the same
+                    // beat as the bank, so the colour stops meaning "the water
+                    // reached here" and starts meaning "the level is done".
+                    //
+                    // Rings are in TILES, measured as a square ring (diagonals
+                    // included, so a corner does not stay dry between two damp
+                    // neighbours). Everything outside both stays dry ground.
+                    CANAL_RING: 1,            // banks: the ditch's own margin
+                    CROP_RING:  1,            // the ground each plant is watered on
                 },
             },
 
@@ -2071,6 +2179,19 @@ var CONFIG = {
             // reaches it, and surfaces as it fills — which is the reveal doing
             // the work rather than a depth trick.
             EDGE_DEPTH: 3.08,
+            // HOW SOLID THE WATER IS, ROW BY ROW from the shore down. One
+            // entry per row, listed rather than derived: a curve would have to
+            // be described by numbers that are harder to read than the four
+            // values themselves, and these get retuned by eye.
+            //
+            // THINNEST AT THE BANK, thickening with depth. The shore row lies
+            // over the bank tile, so the ground reads through it the way the
+            // canal's water reads its trench, and the bed appears to fall away
+            // as the water closes over it.
+            //
+            // Rows past the end of the list are left exactly as the sprite was
+            // drawn, so the open water is fully solid.
+            ROW_ALPHA: [0.8, 0.85, 0.9, 0.95],
         },
 
         // ── The channel ───────────────────────────────────────────────────
@@ -2174,13 +2295,49 @@ var CONFIG = {
                                         // fraction of the configured rate — the
                                         // rest scales with how hard it is working
             },
-            OVERRUN_TILES: 3.5,    // keep cutting this far PAST the level's last
+            // ══ HOW A LEVEL GETS ITS WATER ══════════════════════════════
+            // ONE SWITCH, TWO WHOLE REGIMES. These are not independent knobs
+            // that happen to sit near each other — each mode's parts exist
+            // because of the other parts, and mixing them gives behaviour
+            // neither design asked for.
+            //
+            // 'DAM'  (the original) — the trench is cut DRY. The machine must
+            //        drive clear of the level before the level can end, because
+            //        a stopper is dropped on the boundary to hold the water and
+            //        a wall cannot be placed through the belt. So: overrun the
+            //        level by OVERRUN_TILES, get the belt out, drop the wall,
+            //        pull the wall below, and the whole length floods at once.
+            //        The overrun IS the belt clearance — that is the only reason
+            //        the number exists.
+            //
+            // 'FOLLOW' (current) — the water runs up the cut behind the blade
+            //        from the first tile. Nothing is being held, so there is
+            //        nothing to place a wall for, so the belt never has to get
+            //        out of the way. A level is dug the moment the water reaches
+            //        its far edge, with the belt still standing in it. No
+            //        stopper, no mid-level dams, no overrun.
+            //
+            // Mixing them is what the game was doing: FOLLOW's water with DAM's
+            // overrun, so the machine drove 3.5 tiles of clearance for a wall
+            // that was never placed, while the finished water sat waiting at the
+            // boundary. That dead stretch was the only thing the overrun bought.
+            //
+            // Switching to DAM restores all of it together — the held water, the
+            // boundary wall, the mid-level dams, and the overrun everywhere it
+            // is spent (finish line, dry cells above the map, the next level's
+            // starting position, its cost span, its work budget). Those cannot
+            // be set apart: a machine credited with ground it never cut would
+            // start the next level inside solid earth.
+            LEVEL_MODE: 'FOLLOW',     // 'FOLLOW' | 'DAM'
+            OVERRUN_TILES: 3.5,    // DAM MODE ONLY — ignored under FOLLOW.
+                                   // Keep cutting this far PAST the level's last
                                    // row before the level counts as dug. The belt
                                    // straddles the cut line — 40% ahead of it,
                                    // 60% trailing — so stopping the line on the
                                    // boundary leaves most of the machine still
                                    // standing on the level it has just finished.
-                                   // This carries it fully clear.
+                                   // This carries it fully clear, which is what
+                                   // lets the wall go in behind it.
                                    //
                                    // DIG distance only. The canal, the water, the
                                    // lilies and the reveal all still measure to
@@ -2291,12 +2448,30 @@ var CONFIG = {
                 // belt: the belt is down IN the trench it is cutting, so the
                 // filling water covers its trailing end rather than the belt
                 // sitting on top of a dry-looking canal.
-                WATER_OVER: 0.35,  // how far up the belt the waterline is let
+                WATER_OVER: 0.52,  // how far up the belt the waterline is let
                                    // come, as a fraction of the belt's height
                                    // measured from its REAR edge. 0 = water
                                    // stops at the belt's back edge; (1 -
                                    // AHEAD_FRAC) = water right up to the
                                    // reveal line
+                                   //
+                                   // THE DITCH BEHIND THE BLADE IS AT FULL DEPTH,
+                                   // so it holds water to the brim, and the belt
+                                   // is a ramp lying IN that water rather than a
+                                   // wall holding it back. At 0.35 the water
+                                   // stopped a tile and a half short of the cut
+                                   // for no reason the trench could give.
+                                   //
+                                   // Not the full 0.6 though: the waterline is
+                                   // hard-clamped at the blade and can never
+                                   // cross onto uncut ground, so a target sitting
+                                   // exactly there IS the clamp — the water pins
+                                   // against it and every surge is absorbed by
+                                   // the wall instead of sloshing. This leaves a
+                                   // few tenths of a tile of headroom for the
+                                   // spring to move in, which is also about where
+                                   // the ditch stops being full depth and starts
+                                   // ramping up to the surface.
                 // Draw order: the machine sits ABOVE every ground element — the
                 // canal tiles, the crops and their soil patches (which reach
                 // ~3.02) — and BELOW the main canal's water, which was raised to
@@ -2414,8 +2589,19 @@ var CONFIG = {
             // top: a level needs about 10s to flood and grow, and at 1.8 tiles
             // a second the machine covers 18 tiles in that time against 6.7
             // tiles of headroom. It leaves the view after under four seconds.
-            HOLD_MACHINE_FOR_CROPS: false,  // the rig keeps digging regardless
-            HOLD_CAMERA_FOR_CROPS:  true,   // but the view stays on the field
+            //
+            // THE MACHINE HOLDS, because under LEVEL_MODE 'FOLLOW' it has no
+            // reason not to. The blade and the water now arrive at the boundary
+            // together and the level is finished; digging on from there would be
+            // cutting the NEXT level while this one's field is still coming in,
+            // and the completion beat — the branches filling, the crops topping
+            // out, the light moving on, the icon flying to the roster — would be
+            // playing behind a machine that had already left it.
+            //
+            // The camera hold below then costs nothing: with the rig parked
+            // there is nothing for it to climb out of view.
+            HOLD_MACHINE_FOR_CROPS: true,   // the rig waits for its field
+            HOLD_CAMERA_FOR_CROPS:  true,   // and the view stays on it
             HOLD_EDGE:   0.08,     // ...unless the machine is about to leave.
                                    // The hold is SOFT: the camera stays on the
                                    // finished field for as long as it can, then
@@ -2463,17 +2649,29 @@ var CONFIG = {
         },
 
         WATER: {
-            AFTER_DIG:  false,     // false = THE WATER FOLLOWS THE MACHINE, running
-                                   // up the cut LAG behind the blade, so a canal
-                                   // fills as it is dug. true = held back until
-                                   // the dig is finished, then the whole level
-                                   // floods in one run from the mouth.
-                                   //
-                                   // With it off the walls stop mattering: the
-                                   // boundary block and the mid-level dams are
-                                   // still placed, but there is nothing being
-                                   // held for them to hold. Set BLOCK.ENABLED
-                                   // false to take them off screen as well.
+            // WHETHER THE WATER WAITS is no longer set here — it is one half of
+            // TUNNEL.LEVEL_MODE, because it cannot be chosen independently of
+            // the stopper and the overrun that a held flood needs. DAM holds the
+            // water to the end of the dig; FOLLOW runs it up the cut LAG behind
+            // the blade. Everything below is how the water BEHAVES once it is
+            // moving, and applies to both.
+            // ── ARRIVING TOGETHER ─────────────────────────────────────────
+            // The hold-back (TRENCHER.WATER_OVER, scaled by LAG) exists because
+            // the ground under the blade is not cut yet — water cannot sit on
+            // soil the machine has not opened. At the level's far edge that
+            // reason runs out: the blade stops there, so everything behind it IS
+            // cut, and the canal should stand full to the brim.
+            //
+            // So the hold-back tapers to nothing over the last CLOSE_TILES of
+            // the dig. The blade slows into the boundary with the water gaining
+            // on it, and the two arrive at the edge together — the machine stops
+            // because there is no more level to cut, and the water stops for the
+            // same reason, not because it was told to wait.
+            //
+            // Without this the level ends with the water a half tile short and a
+            // separate flood step to close it: two different motions for what
+            // should be one arrival.
+            CLOSE_TILES: 1.5,      // over how many tiles the hold-back unwinds
             // HOW SOLID THE CANAL'S WATER IS. The water tile is a layer of its
             // own over the dry cut, so lowering this lets the trench show
             // through and the channel reads shallow rather than filled.

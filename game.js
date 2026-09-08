@@ -517,7 +517,7 @@ class GameScene extends Phaser.Scene {
             const FN = TM.FENCE || {};
             if (FN.ENABLED !== false && FN.FILE) this.load.image('fence_pole', FN.FILE);
             const BK = TM.BLOCK || {};
-            if (BK.ENABLED !== false && BK.FILE) this.load.image('block', BK.FILE);
+            if (this._blocksOn() && BK.FILE) this.load.image('block', BK.FILE);
             const PW = TM.PLANT_WATER || {};
             if (PW.ENABLED !== false && PW.FILE) {
                 this.load.spritesheet('plant_water', PW.FILE,
@@ -1686,29 +1686,57 @@ console.log(
             if (watch.length) list.push({ cr, watch, wet: false, fade: null });
         }
 
-        // THE FIELD ITSELF, not only the worked patches. Every ground cell that
-        // is not under a plant watches its own nearest canal exactly as a crop
-        // does, and turns damp when the water gets there — so the land changes
-        // colour behind the machine rather than only sprouting dark squares
-        // where the crops happen to be.
+        // THE GROUND THE WATER ACTUALLY TOUCHES — the ditch's banks, and the
+        // ring of soil each plant is watered on. Nothing else.
+        //
+        // This used to bind EVERY bare cell to its nearest canal, which damped
+        // the whole field: a tile ten rows out has a nearest canal like any
+        // other, so it turned on the same beat as the bank. The colour then said
+        // "the level finished" instead of "the water got here", which is the one
+        // thing it is for.
+        //
+        // Built by GROWING OUT of the two sources rather than by testing every
+        // cell against them: a cell is damp because something wet is next to it,
+        // so walking the ring around each wet thing is both the cheaper loop and
+        // the literal statement of the rule.
         const B = W.BARE || {};
         if (B.ENABLED === false || TM.TERRAIN_GROUND_DAMP === undefined) return;
         const ground = seg.groundSprites || [];
         const planted = new Set((seg.crops || []).map((cr) => cr.col + ',' + cr.row));
         const bare = seg.bareGround = [];
-        for (let r = 0; r < g.rows; r++) {
-            for (let c = 0; c < g.cols; c++) {
-                const spr = ground[r * g.cols + c];
-                if (!spr || planted.has(c + ',' + r)) continue;
-                let bd = Infinity, watch = [];
-                for (const cc of canal) {
-                    const d = Math.abs(cc.col - c) + Math.abs(cc.row - r);
-                    if (d > bd) continue;
-                    if (d < bd) { bd = d; watch = [cc]; } else watch.push(cc);
-                }
-                if (!watch.length) continue;
-                bare.push({ spr, watch, col: c, row: r, due: undefined, fade: null });
-            }
+        const want = new Map();     // 'c,r' -> the canal cells it waits on
+
+        // A cell can be reached from several sources — two ditches, or a ditch
+        // and a plant. It keeps ALL of their canal cells and turns for whichever
+        // fills first, the same rule the tilled patches follow.
+        const claim = (c, r, cells) => {
+            if (c < 0 || r < 0 || c >= g.cols || r >= g.rows) return;
+            const k = c + ',' + r;
+            let w = want.get(k);
+            if (!w) want.set(k, w = []);
+            for (const cc of cells) if (w.indexOf(cc) < 0) w.push(cc);
+        };
+        const ring = (c, r, n, cells) => {
+            for (let dr = -n; dr <= n; dr++)
+                for (let dc = -n; dc <= n; dc++) claim(c + dc, r + dr, cells);
+        };
+
+        // The banks. Each cell waits on the ditch beside it, so the margin
+        // darkens as that stretch fills rather than all at once.
+        const cring = B.CANAL_RING !== undefined ? B.CANAL_RING : 1;
+        if (cring >= 0) for (const cc of canal) ring(cc.col, cc.row, cring, [cc]);
+
+        // The ground around each plant, waiting on whatever waters the plant —
+        // so the patch and its surround turn together and read as one wet spot.
+        const pring = B.CROP_RING !== undefined ? B.CROP_RING : 1;
+        if (pring >= 0) for (const e of list) ring(e.cr.col, e.cr.row, pring, e.watch);
+
+        for (const [k, watch] of want) {
+            if (planted.has(k) || !watch.length) continue;
+            const [c, r] = k.split(',').map(Number);
+            const spr = ground[r * g.cols + c];
+            if (!spr) continue;
+            bare.push({ spr, watch, col: c, row: r, due: undefined, fade: null });
         }
     }
 
@@ -1955,14 +1983,24 @@ console.log(
         // farm shares — and the last runs off the bottom. There is no far bank:
         // that is what makes it read as a lake rather than a pond.
         const top = bandBot - rows * g.tile;
-        const lay = (c, r, frame, depth) => this._addB(this.add.image(
-                g.left + (c + 0.5) * g.tile,
-                top    + (r + 0.5) * g.tile,
-                'terrain', frame)
-            // +1px so neighbours overlap and no sub-pixel seam shows, the same
-            // trick the ground pass uses.
-            .setDisplaySize(g.tile + 1, g.tile + 1)
-            .setDepth(depth), seg);
+        const lay = (c, r, frame, depth, alpha) => {
+            const spr = this._addB(this.add.image(
+                    g.left + (c + 0.5) * g.tile,
+                    top    + (r + 0.5) * g.tile,
+                    'terrain', frame)
+                // +1px so neighbours overlap and no sub-pixel seam shows, the
+                // same trick the ground pass uses.
+                .setDisplaySize(g.tile + 1, g.tile + 1)
+                .setDepth(depth), seg);
+            if (alpha !== undefined) spr.setAlpha(alpha);
+            return spr;
+        };
+
+        // How solid the water is at a given row, straight off the list.
+        // undefined past its end, so those rows are left exactly as the sprite
+        // was made rather than being set to a computed 1.
+        const rowA = LK.ROW_ALPHA || [];
+        const shallow = (r) => rowA[r];
 
         for (let c = 0; c < g.cols; c++) {
             // THE SHORE, unbroken across the full width. Bank under the rig,
@@ -1970,9 +2008,11 @@ console.log(
             // shallows washing over its feet. One tile could not do that —
             // there would be nowhere to put the machine.
             lay(c, 0, bank, dB);
-            lay(c, 0, edge, dE);
-            // Open water below, all the way across.
-            for (let r = 1; r < rows; r++) lay(c, r, water, dW);
+            // Thinned: the shallow end, lying over the bank, so the ground shows
+            // through it the way the canal's water shows its trench.
+            lay(c, 0, edge, dE, shallow(0));
+            // Open water below, thickening away from the shore.
+            for (let r = 1; r < rows; r++) lay(c, r, water, dW, shallow(r));
         }
     }
 
@@ -1993,7 +2033,7 @@ console.log(
     // keeps it locked to the canal at any tile size.
     _placeBlock(tn, atY) {
         const TM = CONFIG.ROAD.TILEMAP, BK = TM.BLOCK || {};
-        if (BK.ENABLED === false || !this.textures.exists('block')) return null;
+        if (!this._blocksOn() || !this.textures.exists('block')) return null;
         const F = tn && tn.flood;
         if (!F || !F.g) return null;
         const g = F.g;
@@ -2097,7 +2137,7 @@ console.log(
     _buildDams(tn) {
         const BK = CONFIG.ROAD.TILEMAP.BLOCK || {};
         const F = tn && tn.flood, g = F && F.g;
-        if (!g || !g.props || BK.ENABLED === false) return [];
+        if (!g || !g.props || !this._blocksOn()) return [];
         const name  = BK.MID_MARKER || 'block';
         const clear = BK.CLEAR_TILES !== undefined ? BK.CLEAR_TILES : 4;
         const dams = [];
@@ -2204,25 +2244,97 @@ console.log(
         const gap  = (R.GAP  || 8)  * s;
         const total = n * size + (n - 1) * gap;
         const x0 = (B.width - total) / 2 + size / 2;   // centred in the farm half
-        const y  = (R.Y || 14) * s + size / 2;
         const depth = R.DEPTH !== undefined ? R.DEPTH : 99000;
 
-        this.roster = { slots: [], filled: 0, size, x0, y, gap };
+        // Y is the top of the whole block. The name sits there and the slots go
+        // under it, so moving the block is one number and the two can never
+        // drift apart.
+        const lSize = (R.LABEL_SIZE || 15) * s;
+        const lGap  = (R.LABEL_GAP  || 5)  * s;
+        const label = this._addB(this.add.text(B.width / 2, (R.Y || 12) * s, '', {
+                fontSize: Math.max(8, Math.round(lSize)) + 'px',
+                fontFamily: CONFIG.FONT_FAMILY,
+                fontStyle: CONFIG.FONT_WEIGHT,
+                color: R.LABEL_COLOR || '#ffffff',
+                stroke: R.LABEL_STROKE || '#2b2013',
+                strokeThickness: (R.LABEL_STROKE_W !== undefined ? R.LABEL_STROKE_W : 3) * s,
+            }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(depth + 2), null);
+        const y = (R.Y || 12) * s + lSize + lGap + size / 2;
+
+        this.roster = { slots: [], filled: 0, size, x0, y, gap, label };
+        this._setRosterLabel();
         for (let i = 0; i < n; i++) {
             const x = x0 + i * (size + gap);
-            const box = this._addB(this.add.rectangle(x, y, size, size,
-                    R.EMPTY_COLOR !== undefined ? R.EMPTY_COLOR : 0xf4efe3,
-                    R.EMPTY_ALPHA !== undefined ? R.EMPTY_ALPHA : 0.45)
+            // Graphics, not a rectangle: a rectangle has square corners and no
+            // way to round them. The cost is that fill and stroke are a drawing
+            // rather than properties, so every recolour goes through _paintSlot.
+            const box = this._addB(this.add.graphics({ x, y })
                 .setScrollFactor(0).setDepth(depth), null);
-            // Drawn centred on the edge, so at GAP 0 two neighbours put their
-            // strokes on exactly the same line — one divider, not a double one.
-            if (R.STROKE_W > 0) {
-                box.setStrokeStyle(R.STROKE_W * s,
-                    R.STROKE_COLOR !== undefined ? R.STROKE_COLOR : 0x5c4a33,
-                    R.STROKE_ALPHA !== undefined ? R.STROKE_ALPHA : 0.85);
-            }
-            this.roster.slots.push({ box, x, y, icon: null });
+            const slot = { box, x, y, icon: null };
+            this._paintSlot(slot, false);
+            this.roster.slots.push(slot);
         }
+    }
+
+    // Draw one slot, empty or filled.
+    //
+    // The whole cell is redrawn each time rather than recoloured, because a
+    // rounded box is a path: there is no fill property to set once the corners
+    // stop being the object's own bounds.
+    _paintSlot(slot, full) {
+        const R = CONFIG.ROSTER || {}, gfx = slot && slot.box;
+        if (!gfx || !gfx.scene) return;
+        const s    = this.layoutConfig.scale;
+        // The side the ROW was laid out with, so a redraw can never disagree
+        // with the spacing the slots were placed at.
+        const size = (this.roster && this.roster.size) || (R.SIZE || 46) * s;
+        // Half the side is a circle; past that the arcs would cross.
+        const rad  = Math.min(size / 2, (R.RADIUS !== undefined ? R.RADIUS : 12) * s);
+        const x0   = -size / 2, y0 = -size / 2;
+        gfx.clear();
+        gfx.fillStyle(full ? (R.FULL_COLOR  !== undefined ? R.FULL_COLOR  : 0xfffdf6)
+                           : (R.EMPTY_COLOR !== undefined ? R.EMPTY_COLOR : 0xd9d1bf),
+                      full ? (R.FULL_ALPHA  !== undefined ? R.FULL_ALPHA  : 1)
+                           : (R.EMPTY_ALPHA !== undefined ? R.EMPTY_ALPHA : 1));
+        gfx.fillRoundedRect(x0, y0, size, size, rad);
+        // Drawn ON the edge, so at GAP 0 two neighbours put their strokes on
+        // exactly the same line — one divider between them, not a double one.
+        if (R.STROKE_W > 0) {
+            gfx.lineStyle(R.STROKE_W * s,
+                R.STROKE_COLOR !== undefined ? R.STROKE_COLOR : 0x5c4a33,
+                R.STROKE_ALPHA !== undefined ? R.STROKE_ALPHA : 0.85);
+            gfx.strokeRoundedRect(x0, y0, size, size, rad);
+        }
+    }
+
+    // Name the stretch of the run being played, over the slots.
+    //
+    // Blocks are SLOTS levels long — the same number the roster holds — so the
+    // name and the row of slots always describe the same span. Past the end of
+    // the list it simply says nothing, which is better than inventing a name for
+    // a block that has not been designed yet.
+    // Takes the level BEING DUG, never endless.segIndex: that counts levels
+    // BUILT, and the world is built several levels ahead of the machine — the
+    // roster would rename itself for a farm the player has not reached.
+    _setRosterLabel(levelIndex) {
+        const R = CONFIG.ROSTER || {}, ro = this.roster;
+        if (!ro || !ro.label) return;
+        const per = Math.max(1, R.SLOTS || 5);
+        const i   = Math.floor((levelIndex || 0) / per);
+        if (i === ro.block) return;
+        // A NEW STRETCH EMPTIES THE ROW. The name and the slots describe the
+        // same span, so carrying vegetables into the Farmyard would have the
+        // label contradicting what is under it — and the empty slots would stop
+        // meaning "more to come here", which is the whole job they do.
+        if (ro.block !== undefined) {
+            for (const slot of ro.slots) {
+                if (slot.icon) { slot.icon.destroy(); slot.icon = null; }
+                this._paintSlot(slot, false);
+            }
+            ro.filled = 0;
+        }
+        ro.block = i;
+        ro.label.setText((R.BLOCKS || [])[i] || '');
     }
 
     // Drop something into the next empty slot.
@@ -2231,7 +2343,7 @@ console.log(
     // filled it. Icons come only from the UI sheets: art drawn AT icon size,
     // which world art cut down never is. A tomato drawn to read at 128px on a
     // plant does not survive being shrunk into a 40px slot.
-    _fillRosterSlot(name) {
+    _fillRosterSlot(name, from) {
         const R = CONFIG.ROSTER || {}, ro = this.roster;
         if (R.ENABLED === false || !ro || ro.filled >= ro.slots.length) return;
 
@@ -2246,8 +2358,7 @@ console.log(
         const sheet = at === undefined ? null : (R.SHEETS || [])[Math.floor(at / per)];
 
         const slot = ro.slots[ro.filled++];
-        slot.box.setFillStyle(R.FULL_COLOR !== undefined ? R.FULL_COLOR : 0xfffdf6,
-                              R.FULL_ALPHA !== undefined ? R.FULL_ALPHA : 0.82);
+        this._paintSlot(slot, true);
         if (!sheet || !this.textures.exists(sheet)) return;
 
         const fit = ro.size * (R.ICON_FRAC !== undefined ? R.ICON_FRAC : 0.78);
@@ -2258,15 +2369,83 @@ console.log(
             .setDisplaySize(fit, fit)
             .setDepth((R.DEPTH !== undefined ? R.DEPTH : 99000) + 1), null);
         slot.icon = spr;
+        const sx = spr.scaleX, sy = spr.scaleY;
 
-        // Drops in rather than appearing: it has just travelled from the field.
+        // FLOWN IN FROM THE PLANT IT GREW ON, when there is one to fly from.
+        // An icon that simply appears has no cause; the flight is what says this
+        // came out of that field.
+        if (from) {
+            const ms  = R.FLY_MS  !== undefined ? R.FLY_MS  : 900;
+            const arc = R.FLY_ARC !== undefined ? R.FLY_ARC : 0.45;
+            const big = R.FLY_FROM !== undefined ? R.FLY_FROM : 1.9;
+            const x0 = from.x, y0 = from.y, x1 = slot.x, y1 = slot.y;
+            // A quadratic bow, control point lifted above the midpoint by a
+            // share of the distance — so it is carried up and over rather than
+            // sliding, which is what a UI element does.
+            const cx = (x0 + x1) / 2;
+            let   cy = Math.min(y0, y1) - Math.hypot(x1 - x0, y1 - y0) * arc;
+            // KEEP THE PEAK ON SCREEN. The slot is near the top already, so a
+            // bow measured off the distance can arc clean over the edge and
+            // spend most of the flight out of sight.
+            //
+            // The curve's high point is NOT at the halfway mark. It sits at
+            // t = (y0-cy)/(y0-2cy+y1), which with a launch low in the field and
+            // a slot near the top lands well past 0.5 — so checking the midpoint
+            // reads a value the flight has already climbed above, and the icon
+            // clears the screen edge anyway.
+            //
+            // Solved instead for where the peak actually is. Writing the
+            // endpoints as heights above the ceiling, u and v, the curve just
+            // touches that ceiling when the control sits sqrt(u*v) above it —
+            // the geometric mean — so that is the highest the control may go.
+            // Clamping the CONTROL to that value clamps the CURVE to the line.
+            const half = fit * 0.5 * (1 + big) / 2;   // the icon is still big up there
+            const top  = (R.FLY_TOP !== undefined ? R.FLY_TOP : 6) * this.layoutConfig.scale + half;
+            // Never above the destination either: a slot sitting higher than the
+            // ceiling has nothing to clamp to, and the flight simply flattens.
+            const lim   = Math.min(top, y0, y1);
+            const minCy = lim - Math.sqrt((y0 - lim) * (y1 - lim));
+            if (cy < minCy) cy = minCy;
+            const p = { t: 0 };
+            spr.setPosition(x0, y0).setScale(sx * big, sy * big);
+            this.tweens.add({
+                targets: p, t: 1, duration: ms, ease: 'Sine.easeInOut',
+                onUpdate: () => {
+                    const t = p.t, u = 1 - t;
+                    spr.x = u * u * x0 + 2 * u * t * cx + t * t * x1;
+                    spr.y = u * u * y0 + 2 * u * t * cy + t * t * y1;
+                    const k = big + (1 - big) * t;      // produce -> icon
+                    spr.setScale(sx * k, sy * k);
+                },
+                onComplete: () => spr.setPosition(x1, y1).setScale(sx, sy),
+            });
+            return;
+        }
+
+        // No launch point: drop it in on the spot.
         const ms = R.POP_MS !== undefined ? R.POP_MS : 420;
         if (ms > 0) {
-            const sx = spr.scaleX, sy = spr.scaleY;
             spr.setScale(sx * 1.6, sy * 1.6).setAlpha(0);
             this.tweens.add({ targets: spr, scaleX: sx, scaleY: sy, alpha: 1,
                 duration: ms, ease: 'Back.easeOut' });
         }
+    }
+
+    // Where a world point sits for a PINNED object on the same camera.
+    //
+    // The roster is drawn by camB like everything else — _addB makes the main
+    // camera ignore it — but with scrollFactor 0, so its coordinates are the
+    // camera's own, before scroll. A world point converts by subtracting the
+    // scroll and NOTHING ELSE: camB's viewport offset is applied to both alike
+    // at render, so adding it here counts it twice and throws the launch point
+    // off toward the screen edge.
+    //
+    // Converted once at take-off — the field is finished by then, so the plant
+    // it left is not moving and nothing needs following.
+    _worldToScreen(x, y) {
+        const c = this.camB;
+        if (!c) return { x, y };
+        return { x: x - c.scrollX, y: y - c.scrollY };
     }
 
     // A white lattice on the TILE boundaries, for checking alignment — where the
@@ -2353,8 +2532,23 @@ console.log(
             .setOrigin(0.5, 0.85), seg);       // stands on his feet, not his middle
         spr.setFrame(F.IDLE_FRAME || 0);  // idle is a still pose, not a loop
 
+        // HELD BACK UNTIL HIS LEVEL IS BEING DUG. Hidden rather than unbuilt, so
+        // his spot is still chosen from the field's own hash at build time and
+        // he cannot land somewhere else for having been made later.
+        const RV = F.REVEAL || {};
+        const waiting = RV.ENABLED !== false;
+        if (waiting) {
+            spr.setAlpha(0).setScale(spr.scaleX * (RV.POP_FROM !== undefined ? RV.POP_FROM : 0.35),
+                                     spr.scaleY * (RV.POP_FROM !== undefined ? RV.POP_FROM : 0.35));
+        }
+
         seg.farmer = {
             spr, gTop,
+            waiting,
+            // The size he settles at, kept from before the shrink — the pop
+            // tween has to have something to return to.
+            sx: spr.scaleX / (waiting ? (RV.POP_FROM !== undefined ? RV.POP_FROM : 0.35) : 1),
+            sy: spr.scaleY / (waiting ? (RV.POP_FROM !== undefined ? RV.POP_FROM : 0.35) : 1),
             g,                                  // HIS level's grid, not the global one
             walkKey,                            // his own walk animation
             band: this._farmerBand(g, pick.c),
@@ -3170,6 +3364,79 @@ console.log(
         f.spr.setDepth(this._yDepth(f.gTop + (row + 0.5) * g.tile, 0.0005));
     }
 
+    // HIS FIELD IS IN. Every plant on this farm has reached its last stage, so
+    // he jumps.
+    //
+    // Squash, launch, stretch, land. The squash is what sells it: a sprite that
+    // simply rises and falls reads as an object being moved, while one that
+    // gathers itself first reads as something doing the moving. Volume is
+    // conserved through both halves — width goes up as height comes down, and
+    // back — or he would just look like he was being rescaled.
+    //
+    // He jumps ON THE SPOT. Anything else would need the walk logic (bands,
+    // canals, reachability) to agree with it, and a farmer who cheers his way
+    // into a ditch is worse than one who stays put.
+    _cheerFarmer(seg) {
+        const F = CONFIG.ROAD.TILEMAP.FARMER || {}, C = F.CHEER || {};
+        const f = seg && seg.farmer;
+        if (C.ENABLED === false || !f || !f.spr || !f.spr.scene) return;
+        if (f.waiting || f.cheering) return;      // not on screen yet, or already at it
+        const spr = f.spr;
+        // The size he rests at. Taken from the record, not from the sprite: mid
+        // walk-cycle he may be part way through some other tween.
+        const sx = f.sx || spr.scaleX, sy = f.sy || spr.scaleY;
+        const y0 = spr.y;
+        const tile = f.g ? f.g.tile : 0;
+
+        f.cheering = true;
+        f.walking  = false;                       // he stops where he stands
+        if (spr.anims) spr.anims.stop();
+        spr.setFrame(F.IDLE_FRAME || 0);
+        spr.setScale(sx, sy).setPosition(spr.x, y0);
+
+        const sq   = C.SQUASH  !== undefined ? C.SQUASH  : 0.18;
+        const st   = C.STRETCH !== undefined ? C.STRETCH : 0.16;
+        const rise = (C.RISE   !== undefined ? C.RISE    : 0.55) * tile;
+        const hops = Math.max(1, C.HOPS || 2);
+
+        const tweens = [];
+        for (let i = 0; i < hops; i++) {
+            // CROUCH — wider and shorter.
+            tweens.push({ scaleX: sx * (1 + sq), scaleY: sy * (1 - sq),
+                          duration: C.DIP_MS !== undefined ? C.DIP_MS : 130,
+                          ease: 'Sine.easeOut' });
+            // LAUNCH — up, and drawn out the other way.
+            tweens.push({ y: y0 - rise, scaleX: sx * (1 - st), scaleY: sy * (1 + st),
+                          duration: C.UP_MS !== undefined ? C.UP_MS : 190,
+                          ease: 'Quad.easeOut' });
+            // FALL — back to his own size on the way down.
+            tweens.push({ y: y0, scaleX: sx, scaleY: sy,
+                          duration: C.DOWN_MS !== undefined ? C.DOWN_MS : 170,
+                          ease: 'Quad.easeIn' });
+            // LAND — the give in his knees, half the crouch, then upright.
+            tweens.push({ scaleX: sx * (1 + sq * 0.5), scaleY: sy * (1 - sq * 0.5),
+                          duration: C.LAND_MS !== undefined ? C.LAND_MS : 110,
+                          ease: 'Sine.easeOut', yoyo: true,
+                          // completeDelay, not hold: hold pauses him AT the
+                          // crouch, half way through. The gap belongs after he
+                          // has straightened up, between one hop and the next.
+                          completeDelay: i < hops - 1
+                              ? (C.GAP_MS !== undefined ? C.GAP_MS : 60) : 0 });
+        }
+
+        this.tweens.chain({
+            targets: spr, tweens,
+            onComplete: () => {
+                if (!spr.scene) return;
+                spr.setScale(sx, sy).setPosition(spr.x, y0);
+                f.cheering = false;
+                // Back to wandering, after a beat — walking off the instant he
+                // lands would undo the pause the jump just created.
+                f.waitT = this._rndRange(F.PAUSE_MS || [1800, 6500]);
+            },
+        });
+    }
+
     // Walk the farmers. Point to point, straight line, any angle — no grid and
     // no axis-locked paths. Crops and branch canals are not obstacles; he walks
     // over both. Only the canal's middle columns and the map's edges are out of
@@ -3182,6 +3449,28 @@ console.log(
         for (const seg of this.segments) {
             const f = seg.farmer;
             if (!f || !f.spr || !f.spr.scene || !f.g) continue;
+
+            // NOT YET IN THE FIELD. He waits for his own level's blade, never
+            // for this.tunnel: levels are built ahead, so the global one belongs
+            // to whichever farm is being dug now and would show every farmer at
+            // once the moment the first was.
+            if (f.waiting) {
+                const RV = F.REVEAL || {};
+                const tn = seg.tunnel;
+                const at = (RV.AFTER_TILES !== undefined ? RV.AFTER_TILES : 0.5) * f.g.tile;
+                if (!tn || (tn.progressPx || 0) <= at) continue;
+                f.waiting = false;
+                // Scale and alpha on separate curves, as the animals walk on:
+                // the size overshoots and settles, which is what makes it a pop,
+                // while the fade stays even — an overshooting fade would flash
+                // past full opacity.
+                this.tweens.add({ targets: f.spr, scaleX: f.sx, scaleY: f.sy,
+                    duration: RV.FADE_MS || 380, ease: RV.POP_EASE || 'Back.easeOut' });
+                this.tweens.add({ targets: f.spr, alpha: 1,
+                    duration: (RV.FADE_MS || 380) * 0.6, ease: 'Sine.easeOut' });
+            }
+
+            if (f.cheering) continue;      // jumping; the chain owns him
 
             if (!f.walking) {
                 f.waitT -= dtMs;
@@ -3662,7 +3951,13 @@ console.log(
         // that was left out of a parallel list.
         const out = [];
         for (const lv of this._levels()) {
-            if (lv && lv.CROP && !out.includes(lv.CROP)) out.push(lv.CROP);
+            if (!lv) continue;
+            // Every crop the level names, not just its own: a mixed field needs
+            // all of its sheets loaded, and a crop introduced on level 2 is
+            // still growing on level 5.
+            const names = lv.CROPS ? Object.keys(lv.CROPS).map((k) => lv.CROPS[k])
+                                   : [lv.CROP];
+            for (const n of names) if (n && !out.includes(n)) out.push(n);
         }
         if (out.length) return out;
         return TM.CROP ? [TM.CROP] : [];
@@ -3684,15 +3979,46 @@ console.log(
         return `${TM.CROP_DIR || 'graphics/crops/'}${/\.[^.]+$/.test(f) ? f : f + (TM.CROP_EXT || '.webp')}`;
     }
 
-    // Which crop the level being built right now grows — read off THAT LEVEL,
-    // not counted out of a separate list. The map and the crop are one object
-    // (see levels.js), so they wrap together and cannot drift apart: level 8 is
-    // entry 1's map growing entry 1's crop, every time round.
-    _cropForLevel() {
-        const def = this._levelDef(this.endless ? this.endless.segIndex : 0);
-        if (def && def.CROP) return String(def.CROP).replace(/\.[^.]+$/, '');
-        const cy = this._cropCycle();          // no level data: fall back
-        return cy.length ? cy[0] : null;
+    // WHAT A LEVEL GROWS. Two shapes, because a level may or may not have been
+    // given a crop per marker yet:
+    //
+    //   { byMarker: Map(marker -> crop), any: null }   CROPS — a mixed field,
+    //                                                  each marker its own crop
+    //   { byMarker: empty,        any: 'tomato' }      CROP  — ONE crop, grown
+    //                                                  by EVERY marker painted
+    //
+    // The `any` form is what makes the shorthand safe on a map that paints 1, 2
+    // and 3: without it those cells would match no marker and stay bare, so a
+    // level would go half-empty for saying nothing wrong. A level names markers
+    // only when it wants variety; until then whatever is painted grows its crop.
+    _levelCrops(index) {
+        const def = this._levelDef(index) || {};
+        const clean = (n) => (n ? String(n).replace(/\.[^.]+$/, '') : null);
+        const byMarker = new Map();
+        if (def.CROPS) {
+            for (const mk of Object.keys(def.CROPS)) {
+                const n = Number(mk), name = clean(def.CROPS[mk]);
+                if (name && Number.isFinite(n)) byMarker.set(n, name);
+            }
+            if (byMarker.size) return { byMarker, any: null };
+        }
+        // No table, or an empty one: one crop covers the whole field.
+        const cy = this._cropCycle();          // no level data at all: fall back
+        return { byMarker, any: clean(def.CROP) || (cy.length ? cy[0] : null) };
+    }
+
+    // THE LEVEL'S OWN CROP — the highest marker it names, or its single crop.
+    //
+    // A field carries the crops before it plus one of its own, and the new one
+    // is what the level is FOR: it is what earns the roster slot. Painting order
+    // says which that is, so no level has to name a favourite twice.
+    _cropForLevel(index) {
+        const { byMarker, any } = this._levelCrops(index !== undefined ? index
+                                 : (this.endless ? this.endless.segIndex : 0));
+        if (any) return any;
+        let best = null, at = -Infinity;
+        for (const [mk, name] of byMarker) if (mk > at) { at = mk; best = name; }
+        return best;
     }
 
     // Plant a crop seed at the centre of every cell marked on the CROPS
@@ -3702,8 +4028,10 @@ console.log(
     _buildCrops(seg, band) {
         const TM = CONFIG.ROAD.TILEMAP;
         if (!TM || !this.tileGrid) return;
-        const crop = this._cropForLevel();
-        if (!crop) return;
+        // WHAT EACH MARKER GROWS. A field can be mixed, so this is a table read
+        // per cell rather than one crop read once.
+        const grows = this._levelCrops(this.endless ? this.endless.segIndex : 0);
+        if (!grows.byMarker.size && !grows.any) return;
         const g = this.tileGrid, gTop = band.bandTop;
         const F = seg.tunnel && seg.tunnel.flood;
         if (!F || !F.cells.size) return;
@@ -3714,18 +4042,43 @@ console.log(
         // frameWidth = width / stages and frameHeight = full height. No
         // per-sheet dimensions are hardcoded — drop in a differently sized
         // sheet and it still slices correctly.
-        const stages = TM.CROP_STAGES || 5;
-        const key    = `${crop}_stages`;
-        if (!this.textures.exists(key)) {
-            const img = this.textures.get(`${crop}_src`).getSourceImage();
-            // Sliced at a FIXED frame width, not width/stages: sheets no longer
-            // all hold the same number of frames, so the count is read off the
-            // image instead of assumed.
-            this.textures.addSpriteSheet(key, img,
-                { frameWidth: TM.CROP_FRAME_W || 128, frameHeight: img.height });
+        // ONE SET OF ART PER MARKER, built once for the level and then looked up
+        // per cell. Sheet, frame layout and scale all belong to the crop, so a
+        // mixed field cannot share them.
+        const build = (crop, why) => {
+            if (!this.textures.exists(`${crop}_src`)) {
+                console.warn(`[crops] ${why} names "${crop}", whose sheet was never loaded`);
+                return null;
+            }
+            const key = `${crop}_stages`;
+            if (!this.textures.exists(key)) {
+                const img = this.textures.get(`${crop}_src`).getSourceImage();
+                // Sliced at a FIXED frame width, not width/stages: sheets no
+                // longer all hold the same number of frames, so the count is
+                // read off the image instead of assumed.
+                this.textures.addSpriteSheet(key, img,
+                    { frameWidth: TM.CROP_FRAME_W || 128, frameHeight: img.height });
+            }
+            return {
+                crop, key,
+                lay: this._cropLayout(crop, key),
+                sc:  g.tile / this.textures.getFrame(key, 0).width,   // 128 -> one cell
+            };
+        };
+        const art = new Map();
+        for (const [mk, crop] of grows.byMarker) {
+            const a = build(crop, `marker ${mk}`);
+            if (a) art.set(mk, a);
         }
-        const lay = this._cropLayout(crop, key);
-        const sc    = g.tile / this.textures.getFrame(key, 0).width;   // 128 → one cell
+        // THE ONE-CROP LEVEL: every marker painted grows this, whatever number
+        // it carries. A map drawn with 1, 2 and 3 before the level was given a
+        // crop per marker still comes up as a full field of one thing.
+        const every = grows.any ? build(grows.any, 'this level') : null;
+        if (!art.size && !every) return;
+        // Anything painted that this level does not name. Only possible once a
+        // level HAS named markers — said once each, because a silently bare
+        // patch in the middle of a field reads as a map bug.
+        const unknown = new Set();
         // Origin is the stem base, not the frame bottom — the art hangs a
         // shadow ellipse below the stem, and it is the stem that must land on
         // the cell centre.
@@ -3741,7 +4094,23 @@ console.log(
         // (trees, rocks, buildings) are kept clear.
         for (let r = 0; r < g.rows; r++) {
             for (let c = 0; c < g.cols; c++) {
-                if (!g.cropsData[r * g.cols + c]) continue;      // not a crop cell
+                const gid = g.cropsData[r * g.cols + c];
+                if (!gid) continue;                             // not a crop cell
+                // WHICH MARKER, counted from 1 — the number painted in Tiled.
+                // A map with no marker tileset can only mean marker 1.
+                const mk = g.markerBase !== null && gid >= g.markerBase
+                         ? gid - g.markerBase + 1 : 1;
+                const a  = art.get(mk) || every;
+                if (!a) {
+                    if (!unknown.has(mk)) {
+                        unknown.add(mk);
+                        console.warn(`[crops] marker ${mk} is painted on ` +
+                            `${(this._levelDef(this.endless ? this.endless.segIndex : 0) || {}).FILE}` +
+                            ` but the level names no crop for it — those cells stay bare`);
+                    }
+                    continue;
+                }
+                const crop = a.crop, key = a.key, lay = a.lay, sc = a.sc;
                 // nearest canal cell (Manhattan) — decided once, cached.
                 let best = null, bd = Infinity;
                 for (const cc of canal) {
@@ -4156,7 +4525,7 @@ console.log(
         //
         // They copy the map's TOP row of main tiles, so the channel carries on
         // in whatever shape the level ended with.
-        const over = Math.ceil((CONFIG.ROAD.TUNNEL.OVERRUN_TILES || 0));
+        const over = Math.ceil(this._overrunTiles());
         for (let k = 1; k <= over; k++) {
             const r = -k;
             for (const c of [g.mainLeftCol, g.mainRightCol]) {
@@ -4876,7 +5245,7 @@ console.log(
         // on `len`, so the overrun neither floods nor costs anything.
         const tile   = (this.tileGrid && this.tileGrid.tile)
                      || r.canalW / (CONFIG.ROAD.TILEMAP.MAIN_TILES || 2);
-        const digLen = len + (TN.OVERRUN_TILES || 0) * tile;
+        const digLen = len + this._overrunTiles() * tile;
 
         // The soil strip is CHANNEL-sized: what the machine leaves behind is
         // exactly as wide as the finished canal.
@@ -5450,7 +5819,7 @@ console.log(
         // the normalisation covered and inflated every level's opening figure by
         // that half row — 124 where the economy says 118. Only the LOOP BOUND
         // needs rounding, to visit the part-row at the end.
-        const over   = CONFIG.ROAD.TUNNEL.OVERRUN_TILES || 0;
+        const over   = this._overrunTiles();
         const atRow  = (tn.progressPx || 0) / g.tile;
         const digEnd = g.rows + over;
         let sum = 0;
@@ -5510,6 +5879,42 @@ console.log(
         }
     }
 
+    // ── The dig regime: TUNNEL.LEVEL_MODE ────────────────────────────────────
+    // Three things that only make sense together, so they are read through
+    // three accessors off one switch rather than set in three config blocks:
+    // the water waiting, the walls that hold it, and the belt clearance the
+    // walls need. See TUNNEL.LEVEL_MODE for what each mode is.
+    _damMode() {
+        return (CONFIG.ROAD.TUNNEL || {}).LEVEL_MODE === 'DAM';
+    }
+
+    // Is the water held back until the dig finishes?
+    _waterHeld() {
+        return this._damMode();
+    }
+
+    // Are the boundary wall and the mid-level dams in play? Under FOLLOW they
+    // never are — there is nothing being held for them to hold.
+    _blocksOn() {
+        return this._damMode() &&
+               ((CONFIG.ROAD.TILEMAP.BLOCK || {}).ENABLED !== false);
+    }
+
+    // How far past a level's last row the blade runs, in tiles.
+    //
+    // This is BELT CLEARANCE for the wall, which is why FOLLOW has none: with
+    // no wall to place, driving the belt out of the level buys nothing but a
+    // dead stretch where the water has finished and the machine is still going.
+    //
+    // Read through here and never straight off OVERRUN_TILES: the overrun is
+    // spent in five places — the finish line, the dry cells built above the map,
+    // the next level's starting position, its cost span and the work budget —
+    // and they must agree or a machine is credited with ground it never cut, or
+    // charged for ground it never turns.
+    _overrunTiles() {
+        return this._damMode() ? (CONFIG.ROAD.TUNNEL.OVERRUN_TILES || 0) : 0;
+    }
+
     // What this level's ground costs to cut, in work per tile.
     //
     // Derived, never authored: the level's total cost divided among its rows,
@@ -5546,7 +5951,7 @@ console.log(
         // unchanged — the economy sets what a level is worth, not how far the
         // machine travels — so the same total spreads over the longer span and
         // its ground comes out correspondingly softer.
-        const over  = CONFIG.ROAD.TUNNEL.OVERRUN_TILES || 0;
+        const over  = this._overrunTiles();
         const start = (tn && tn.digStart) || 0;
         const span  = Math.max(1e-6, g.rows + over - start);
         // Clamped, not rejected. The row the machine STANDS IN at the start of a
@@ -5775,19 +6180,30 @@ console.log(
     // passes the full length); by default it's the blade's position less LAG.
     _advanceWater(tn, dt, time, limit) {
         const WA  = CONFIG.ROAD.WATER;
-        // AFTER_DIG holds the water back until the trench is finished, so the
+        // DAM MODE holds the water back until the trench is finished, so the
         // level is cut dry and then flooded in one run from the mouth.
         // `flooding` is set at breakthrough and is the only thing that lifts the
         // hold. Everything downstream — branches, crops, ponds, foam, the bank
         // streaks — keys off the waterline, so freezing it here is all it takes.
-        if (WA.AFTER_DIG && !tn.flooding) {
+        if (this._waterHeld() && !tn.flooding) {
             // A MID-LEVEL DAM is standing: the hold is partial, not total. The
             // water is let up to the wall and stops there, so everything that
             // branches off below it fills while the machine works on above.
             if (!(tn.releaseTo > tn.wet)) return;
             limit = tn.releaseTo;
         }
-        const lag = tn.bladeLen * (WA.LAG !== undefined ? WA.LAG : 1);
+        let lag = tn.bladeLen * (WA.LAG !== undefined ? WA.LAG : 1);
+        // THE LAST TILES OF THE LEVEL. The hold-back is there because the soil
+        // under the blade is uncut; approaching the far edge that stops being
+        // true, because the blade stops there and the trench behind it is
+        // finished. So it unwinds to nothing over the final stretch and the
+        // water arrives at the edge with the machine rather than behind it.
+        const gTile = ((tn.flood && tn.flood.g) || this.tileGrid || {}).tile || 0;
+        const close = (WA.CLOSE_TILES !== undefined ? WA.CLOSE_TILES : 0) * gTile;
+        if (close > 0 && lag > 0) {
+            const toEnd = tn.len - tn.progressPx;
+            if (toEnd < close) lag *= Math.max(0, toEnd / close);
+        }
         const target = limit !== undefined
             ? limit
             : Math.max(0, tn.progressPx - lag);
@@ -6096,6 +6512,9 @@ console.log(
             // filled. Until this moment the finished-looking farm below is still
             // the one being completed, and it stays lit however far ahead the
             // machine has got.
+            // HIS FIELD IS IN, and he says so — before the light moves on, so
+            // the farm is still the lit one while he jumps in it.
+            this._cheerFarmer(seg);
             this._focusDim(nextSeg);
             // The field is in, so what it grew joins the roster. Fired here and
             // not at breakthrough: this is the moment the farm is actually
@@ -6108,10 +6527,37 @@ console.log(
             // counter moved on when the machine did, several seconds ago, so
             // asking the game "what is this level" answers with the one being
             // dug now.
+            // WHAT THIS LEVEL EARNED YOU: its own crop, or its herd if it was a
+            // ranch. The icon flies out of the field it grew in — an icon that
+            // simply appears has no cause, and the flight is what ties the slot
+            // to the farm you just watered.
+            //
+            // Launched from a plant near the MIDDLE of the field rather than the
+            // first one built, which would always be a corner.
+            //
+            // Read off the FINISHED segment, never _cropForLevel(): the level
+            // counter moved on when the machine did, several seconds ago, so
+            // asking the game "what is this level" answers with the one being
+            // dug now.
             const def  = seg ? this._levelDef(seg.levelIndex || 0) : null;
             const herd = def && def.RANCH && def.RANCH.SPECIES;
-            const crop = seg && seg.crops && seg.crops[0] && seg.crops[0].crop;
-            if (herd || crop) this._fillRosterSlot(herd || crop);
+            const list = (seg && seg.crops) || [];
+            // THE LEVEL'S OWN CROP, not whatever happened to be planted first.
+            // A mixed field carries the crops of the levels before it too, and
+            // scanning from the top-left would hand the slot to the oldest of
+            // them — the one already sitting in an earlier slot.
+            const name = herd || this._cropForLevel(seg ? seg.levelIndex || 0 : 0);
+            // ...and it flies from a plant OF THAT CROP, so what leaves the
+            // field is the thing the icon shows. Middle of that crop's patch
+            // rather than its first cell, which would always be a corner.
+            const own  = herd ? list : list.filter((cr) => cr.crop === name);
+            const from = own.length ? own : list;
+            const src  = from[Math.floor(from.length / 2)];
+            if (name) {
+                const s = src && src.sprite;
+                this._fillRosterSlot(name,
+                    s && s.scene ? this._worldToScreen(s.x, s.y) : null);
+            }
             // Tick the job off, and only then release whatever was waiting.
             this._completeTask(() => {
                 E.held = false;
@@ -6322,7 +6768,7 @@ console.log(
         // past the boundary), so it stands exactly where that one parked rather
         // than dropping back to this level's floor.
         const tile = this.tileGrid ? this.tileGrid.tile : 0;
-        const over = CONFIG.ROAD.TUNNEL.OVERRUN_TILES || 0;
+        const over = this._overrunTiles();
         next.tunnel.progressPx = Math.min(next.tunnel.len, over * tile);
         // Those tiles were cut by the level below and paid for at ITS rate,
         // so this level's own cost spreads over what is left of its span.
@@ -6333,6 +6779,9 @@ console.log(
         // rig while the field below comes in keeps it dormant, and _finishStretch
         // re-arms it when that field is done.
         next.tunnel.ready = !(CONFIG.ROAD.ENDLESS || {}).HOLD_MACHINE_FOR_CROPS;
+        // The roster names the block being worked, so it turns over here — after
+        // the finished field's icon has landed, not while it is still in flight.
+        this._setRosterLabel(next.levelIndex || 0);
         // Where the outgoing rig actually stands, and where the incoming one is
         // about to. These must be the same point: the new level's floor IS the
         // old level's top, and the new tunnel is seeded with exactly the overrun

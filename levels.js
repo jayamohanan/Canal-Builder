@@ -19,7 +19,26 @@
 // Now one line is one level and they cannot come apart.
 //
 //   FILE   path to the Tiled .tmj — field layout, canals, crop cells, props
-//   CROP   which sheet grows here; a name in CROP_LIBRARY below
+//   CROPS  what each MARKER on the map's crops layer grows:
+//
+//            CROPS: { 1: 'tomato', 2: 'potato' }
+//
+//          The key is the marker's number in markers.tsx, counted from 1 — the
+//          same number you paint with in Tiled. A cell painted with marker 2
+//          grows what 2 names here; a marker the level does not name grows
+//          nothing and says so in the console.
+//
+//          This is how a level holds MORE THAN ONE crop: the field is mixed by
+//          painting, and which patch is which is decided here rather than in
+//          the map. The HIGHEST marker a level names is treated as its own
+//          crop — the one it adds to what came before — so that is what flies
+//          to the roster when it is finished.
+//   CROP   ONE crop, grown by EVERY marker the map paints — 1, 2, 3, whatever
+//          is there. Not shorthand for marker 1: a map already drawn with
+//          several markers would then come up with most of its field bare for
+//          saying nothing wrong. So a level names markers only when it wants
+//          variety, and until it does, whatever is painted grows its crop.
+//          Ignored when CROPS is present.
 //   RANCH  optional: makes this level an animal farm. Two kinds:
 //
 //            { SPECIES: 'pig', COUNT: 8 }   scattered — eight of them, put
@@ -56,9 +75,12 @@ const LEVEL_DATA = {
 
 
 
-        { FILE: 'level_maps/level_01.tmj', CROP: 'tomato' },
-        { FILE: 'level_maps/level_02.tmj', CROP: 'potato' },
-        { FILE: 'level_maps/level_03.tmj', CROP: 'egg-plant' },
+        // Levels 1-3 paint markers 1, 1-2 and 1-2-3 — each field carries what
+        // the ones before it grew, plus its own. The last one named is the new
+        // one, and the one that reaches the roster.
+        { FILE: 'level_maps/level_01.tmj', CROPS: { 1: 'tomato' } },
+        { FILE: 'level_maps/level_02.tmj', CROPS: { 1: 'tomato', 2: 'potato' } },
+        { FILE: 'level_maps/level_03.tmj', CROPS: { 1: 'tomato', 2: 'potato', 3: 'egg-plant' } },
         { FILE: 'level_maps/level_04.tmj', CROP: 'green-beans' },
         { FILE: 'level_maps/level_05.tmj', CROP: 'melon' },
 
@@ -137,9 +159,10 @@ const LEVEL_DATA = {
 // anything, and a missing crop in particular fails as a silently bare field.
 for (let i = 0; i < LEVEL_DATA.LEVELS.length; i++) {
     const lv = LEVEL_DATA.LEVELS[i];
-    if (!lv.FILE || !lv.CROP) {
+    const grows = lv.CROPS ? Object.keys(lv.CROPS).length : (lv.CROP ? 1 : 0);
+    if (!lv.FILE || !grows) {
         console.error(`[levels] entry ${i + 1} is incomplete — ` +
-            `map=${lv.FILE || '(none)'} crop=${lv.CROP || '(none)'}. ` +
-            `A level needs both.`);
+            `map=${lv.FILE || '(none)'} crops=${grows || '(none)'}. ` +
+            `A level needs a map and at least one crop.`);
     }
 }
