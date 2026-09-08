@@ -168,12 +168,28 @@ var CONFIG = {
         ENABLED: true,
         SLOTS:   5,          // per block — the unlock ladder runs in fives
         SIZE:    46,         // slot side, px at design scale
-        GAP:     8,
+        GAP:     0,          // none — the slots meet, so the row reads as ONE
+                             // strip of cells rather than five loose buttons.
+                             // Their strokes fall on the same line at each seam,
+                             // which is what draws the divider between them
         Y:       14,         // down from the top of the farm half
-        EMPTY_COLOR: 0x000000,
-        EMPTY_ALPHA: 0.22,   // a hollow for the icon to drop into
-        FULL_COLOR:  0x000000,
-        FULL_ALPHA:  0.30,
+        // Pale, so a dark icon reads against it — the farm behind is earth and
+        // foliage, and a light panel separates the roster from it without a
+        // border round the whole thing.
+        // Solid, not translucent — the farm scrolls under this strip, and a
+        // see-through panel means moving crops and canals read through the
+        // slots. An icon has to sit on something still.
+        //
+        // Waiting and filled differ by SHADE now rather than by opacity: the
+        // empty slot is a duller cream, the filled one near-white, so a slot
+        // with something in it still looks occupied.
+        EMPTY_COLOR: 0xd9d1bf,
+        EMPTY_ALPHA: 1,
+        FULL_COLOR:  0xfffdf6,
+        FULL_ALPHA:  1,
+        STROKE_COLOR: 0x5c4a33,
+        STROKE_ALPHA: 0.85,
+        STROKE_W:     2,
         ICON_FRAC:   0.78,   // icon size inside its slot
 
         // ── The icon sheets ─────────────────────────────────────────────
@@ -1269,7 +1285,15 @@ var CONFIG = {
                 COLOR:      '#ffffff',
                 STROKE:     '#1d2b16',
                 STROKE_W:   5,
-                DEPTH:   3.2,       // over the machine and its spoil
+                // ABOVE EVERYTHING IN THE WORLD, the dim included. It is a
+                // readout, not a thing in the field: a number the player has to
+                // be able to read at any moment, so nothing may pass in front of
+                // it and no shade may fall on it.
+                //
+                // It was 3.2 — "over the machine and its spoil" — which was true
+                // until the actor band moved from 3 to 4 to lift animals over
+                // the main canal. Crops have been drawn across it since.
+                DEPTH:   4.6,
             },
 
             BLOCK: {
@@ -2450,6 +2474,20 @@ var CONFIG = {
                                    // still placed, but there is nothing being
                                    // held for them to hold. Set BLOCK.ENABLED
                                    // false to take them off screen as well.
+            // HOW SOLID THE CANAL'S WATER IS. The water tile is a layer of its
+            // own over the dry cut, so lowering this lets the trench show
+            // through and the channel reads shallow rather than filled.
+            //
+            // Free: alpha is a per-vertex value in the same batch, so a
+            // see-through tile costs exactly what an opaque one does.
+            //
+            // Two things to weigh. What shows through is CHURNED SOIL, not a
+            // riverbed — too low and it reads as a failure to draw rather than
+            // as shallow water. And FLOW_UV is already laid over this at its own
+            // alpha, so thinning both stacks two partial layers and the motion
+            // muddies rather than deepens.
+            CANAL_ALPHA: 0.8,
+
             COLOR:      0x2f8fd0,  // the canal surface
             EDGE_COLOR: 0x7fd4f0,  // brighter shallows along each bank — a lit
                                    // rim that separates water from the earth wall

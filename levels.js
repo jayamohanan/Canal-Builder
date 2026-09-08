@@ -53,17 +53,22 @@ const LEVEL_DATA = {
     // Adding a level: one line. Reordering: move the line, and its crop travels
     // with it.
     LEVELS: [
-                { FILE: 'level_maps/level_11.tmj', CROP: 'corn', RANCH: { SPECIES: 'cow',} },
 
+
+
+        { FILE: 'level_maps/level_01.tmj', CROP: 'tomato' },
+        { FILE: 'level_maps/level_02.tmj', CROP: 'potato' },
+        { FILE: 'level_maps/level_03.tmj', CROP: 'egg-plant' },
+        { FILE: 'level_maps/level_04.tmj', CROP: 'green-beans' },
+        { FILE: 'level_maps/level_05.tmj', CROP: 'melon' },
+
+
+        { FILE: 'level_maps/level_11.tmj', CROP: 'corn', RANCH: { SPECIES: 'cow',} },
         { FILE: 'level_maps/level_10.tmj', CROP: 'corn', RANCH: { SPECIES: 'pig', COUNT: 8 } },
         { FILE: 'level_maps/level_08.tmj', CROP: 'corn' },
         { FILE: 'level_maps/level_07.tmj', CROP: 'tomato' },
         { FILE: 'level_maps/level_06.tmj', CROP: 'carrot' },
-        { FILE: 'level_maps/level_01.tmj', CROP: 'mango' },
-        { FILE: 'level_maps/level_02.tmj', CROP: 'green-beans' },
-        { FILE: 'level_maps/level_03.tmj', CROP: 'corn' },
-        { FILE: 'level_maps/level_04.tmj', CROP: 'hops' },
-        { FILE: 'level_maps/level_05.tmj', CROP: 'egg-plant' },
+        
         // An animal farm — nothing to draw on the map, just:
         //   { FILE: '…', CROP: 'grass', RANCH: { SPECIES: 'cow', COUNT: 8 } },
         // Unused sheets, ready to pair: melon, potato, grape.

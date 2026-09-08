@@ -2211,9 +2211,16 @@ console.log(
         for (let i = 0; i < n; i++) {
             const x = x0 + i * (size + gap);
             const box = this._addB(this.add.rectangle(x, y, size, size,
-                    R.EMPTY_COLOR !== undefined ? R.EMPTY_COLOR : 0x000000,
-                    R.EMPTY_ALPHA !== undefined ? R.EMPTY_ALPHA : 0.22)
+                    R.EMPTY_COLOR !== undefined ? R.EMPTY_COLOR : 0xf4efe3,
+                    R.EMPTY_ALPHA !== undefined ? R.EMPTY_ALPHA : 0.45)
                 .setScrollFactor(0).setDepth(depth), null);
+            // Drawn centred on the edge, so at GAP 0 two neighbours put their
+            // strokes on exactly the same line — one divider, not a double one.
+            if (R.STROKE_W > 0) {
+                box.setStrokeStyle(R.STROKE_W * s,
+                    R.STROKE_COLOR !== undefined ? R.STROKE_COLOR : 0x5c4a33,
+                    R.STROKE_ALPHA !== undefined ? R.STROKE_ALPHA : 0.85);
+            }
             this.roster.slots.push({ box, x, y, icon: null });
         }
     }
@@ -2239,8 +2246,8 @@ console.log(
         const sheet = at === undefined ? null : (R.SHEETS || [])[Math.floor(at / per)];
 
         const slot = ro.slots[ro.filled++];
-        slot.box.setFillStyle(R.FULL_COLOR !== undefined ? R.FULL_COLOR : 0x000000,
-                              R.FULL_ALPHA !== undefined ? R.FULL_ALPHA : 0.30);
+        slot.box.setFillStyle(R.FULL_COLOR !== undefined ? R.FULL_COLOR : 0xfffdf6,
+                              R.FULL_ALPHA !== undefined ? R.FULL_ALPHA : 0.82);
         if (!sheet || !this.textures.exists(sheet)) return;
 
         const fit = ro.size * (R.ICON_FRAC !== undefined ? R.ICON_FRAC : 0.78);
@@ -4079,14 +4086,20 @@ console.log(
         // `plus` is FLOW_OFFSET for the water-filled twin, which sits that many
         // frames on in the SAME sheet — so it is added to the local frame, not to
         // the gid, and works whichever sheet the tile came from.
+        // `plus` is the FLOW_OFFSET, so a sprite that has one is the WATER twin
+        // rather than the dry cut — which is exactly the pair the alpha applies
+        // to. The trench underneath always stays solid.
+        const wAlpha = CONFIG.ROAD.WATER.CANAL_ALPHA;
         const sprite = (gid, c, r, depth, plus) => {
             const t = this._tileOf(gid);
             if (!t) return null;
-            return this._addB(this.add.image(
+            const spr = this._addB(this.add.image(
                     g.left + c * g.tile, gTop + r * g.tile,
                     t.key, t.frame + (plus || 0))
                 .setOrigin(0, 0).setDisplaySize(g.tile + 1, g.tile + 1)   // +1px overlap
                 .setDepth(depth).setVisible(false), seg);
+            if (plus && wAlpha !== undefined) spr.setAlpha(wAlpha);
+            return spr;
         };
 
         for (let r = 0; r < g.rows; r++) {
