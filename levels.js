@@ -78,18 +78,18 @@ const LEVEL_DATA = {
         // Levels 1-3 paint markers 1, 1-2 and 1-2-3 — each field carries what
         // the ones before it grew, plus its own. The last one named is the new
         // one, and the one that reaches the roster.
-        { FILE: 'level_maps/level_01.tmj', CROPS: { 1: 'tomato' } },
-        { FILE: 'level_maps/level_02.tmj', CROPS: { 1: 'tomato', 2: 'potato' } },
-        { FILE: 'level_maps/level_03.tmj', CROPS: { 1: 'tomato', 2: 'potato', 3: 'egg-plant' } },
-        { FILE: 'level_maps/level_04.tmj', CROP: 'green-beans' },
-        { FILE: 'level_maps/level_05.tmj', CROP: 'melon' },
+        { FILE: 'maps/levels/level_01.tmj', CROPS: { 1: 'tomato' } },
+        { FILE: 'maps/levels/level_02.tmj', CROPS: { 1: 'tomato', 2: 'potato' } },
+        { FILE: 'maps/levels/level_03.tmj', CROPS: { 1: 'tomato', 2: 'potato', 3: 'egg-plant' } },
+        { FILE: 'maps/levels/level_04.tmj', CROP: 'green-beans' },
+        { FILE: 'maps/levels/level_05.tmj', CROP: 'melon' },
 
 
-        { FILE: 'level_maps/level_11.tmj', CROP: 'corn', RANCH: { SPECIES: 'cow',} },
-        { FILE: 'level_maps/level_10.tmj', CROP: 'corn', RANCH: { SPECIES: 'pig', COUNT: 8 } },
-        { FILE: 'level_maps/level_08.tmj', CROP: 'corn' },
-        { FILE: 'level_maps/level_07.tmj', CROP: 'tomato' },
-        { FILE: 'level_maps/level_06.tmj', CROP: 'carrot' },
+        { FILE: 'maps/levels/level_11.tmj', CROP: 'corn', RANCH: { SPECIES: 'cow',} },
+        { FILE: 'maps/levels/level_10.tmj', CROP: 'corn', RANCH: { SPECIES: 'pig', COUNT: 8 } },
+        { FILE: 'maps/levels/level_08.tmj', CROP: 'corn' },
+        { FILE: 'maps/levels/level_07.tmj', CROP: 'tomato' },
+        { FILE: 'maps/levels/level_06.tmj', CROP: 'carrot' },
         
         // An animal farm — nothing to draw on the map, just:
         //   { FILE: '…', CROP: 'grass', RANCH: { SPECIES: 'cow', COUNT: 8 } },

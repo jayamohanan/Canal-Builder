@@ -1034,6 +1034,38 @@ var CONFIG = {
                 COLOR:   0x0a1a10,   // a cold green-black, so dimmed fields read
                                      // as being in shade rather than greyed out
                 FADE_MS: 420,        // handover cross-fade
+
+                // ── WHERE THE SHADE STOPS ───────────────────────────────
+                // A level's band is not the same thing as a level's contents.
+                // Everything standing ON the boundary at its foot belongs, in
+                // whole or in part, to the level BELOW — which is the lit one:
+                //
+                //   the fence      drawn on this level's first row, but shared
+                //                  with the farm under it
+                //   crops          the top row's plants grow past their tile,
+                //                  and at stage 5 stand a third taller again
+                //   the farmer     nearly two tiles of him over one tile of feet
+                //   the tally      sits above the boundary on purpose, so it is
+                //                  outside the field it counts
+                //
+                // Shading to the band's own bottom edge cut every one of them in
+                // half: a lit farm with a dark line across its top row. So the
+                // shade stops short, and the strip it leaves is not this level's
+                // ground being spared — it is the level below's things being let
+                // alone.
+                //
+                // Tall enough for the tallest of them. The farmer is the tallest
+                // at SIZE 1.9 with his feet 0.85 down the sprite, so he reaches
+                // ~1.6 tiles above the row he stands in.
+                //
+                // ONLY THE ONE BOUNDARY. This is spared at the foot of the level
+                // DIRECTLY ABOVE the lit one, and nowhere else. Sparing it on
+                // every band would put a bright line at each level's foot all
+                // the way up the screen, and the shade would read as three
+                // separate panels instead of one unlit world with a farm cut out
+                // of it. Every other boundary is a dimmed level meeting a dimmed
+                // level, where there is nothing to spare and nothing to see.
+                BOTTOM_TILES: 1.7,
                 // ABOVE EVERYTHING IN THE WORLD, actors included. The shade
                 // falls on the whole farm — its crops, its animals, its farmer —
                 // or the field dims while the things living in it stay lit,
@@ -1276,9 +1308,14 @@ var CONFIG = {
                 // Once the machine is working the level above it, its own fence
                 // is behind the action and only in the way — so it goes
                 // see-through and stays that way.
-                FADED_ALPHA: 0.45,   // 1 = solid, 0 = invisible. At 0.3 the poles
-                                    // are a ghost — you read the trench and the
-                                    // water through them
+                FADED_ALPHA: 0.1,   // 1 = solid, 0 = invisible. Nearly gone: the
+                                    // fence stands on the boundary at the foot
+                                    // of the lit farm, right across its bottom
+                                    // row of crops, and once the level above it
+                                    // is being dug it has no job left but to
+                                    // obstruct that row. A trace is kept rather
+                                    // than none at all, so the boundary is still
+                                    // legible as a line between two farms
                 FADE_MS:     300,
                 DEPTH_BIAS: 0,      // none needed. Depth comes from world Y, and
                                     // the fence stands on the boundary line, so
@@ -1386,8 +1423,13 @@ var CONFIG = {
                     // for the next as it ripens, reads as pacing rather than as
                     // working. He gathers a handful in one round instead.
                     //
-                    // Whatever is already within REACH still comes off — this
-                    // decides when he MOVES, not what he may take.
+                    // It gates the PICKING as well as the walking. In-reach was
+                    // exempt at first, on the grounds that this decides when he
+                    // moves and not what he may take — but a farmer standing
+                    // beside the first plant to ripen then took it the instant
+                    // it bore, and the batch meant nothing to whoever happened
+                    // to be in the right place. The round starts when the field
+                    // is ready for one.
                     //
                     // The tail of the field is exempt. Once fewer than this are
                     // outstanding there will never be a batch, and holding out
@@ -1791,6 +1833,92 @@ var CONFIG = {
                     // neighbours). Everything outside both stays dry ground.
                     CANAL_RING: 1,            // banks: the ditch's own margin
                     CROP_RING:  1,            // the ground each plant is watered on
+                },
+            },
+
+            // ── THE LEVEL'S TALLY ───────────────────────────────────────────
+            // What this farm is FOR, said in the farm itself: one cell per crop
+            // it grows, its icon, and how many are still standing. Each produce
+            // gathered flies here and knocks the number down — the Candy Crush
+            // target counter, in world space.
+            //
+            // It is the same object as the roster strip at the top of the screen
+            // and answers a different question. The roster is the RUN: what you
+            // have restored so far, one slot a level, and it stays. This is the
+            // LEVEL: what is left to do here, and it goes when the level does.
+            //
+            // ON THE BOUNDARY ABOVE THE FIELD, over the fence — outside the farm
+            // it counts, so it never sits on the crops it is about. Left-aligned,
+            // because the right of that line is where the machine climbs out.
+            GOALS: {
+                ENABLED:   true,
+                SIZE:      1.05,     // cell side, in tiles
+                GAP:       0.08,     // between cells, in tiles
+                MARGIN:    0.5,      // from the map's left edge, in tiles
+                LIFT:      0.35,     // clear of the boundary line, in tiles
+                COLOR:      0xfffdf6, ALPHA: 1,
+                DONE_COLOR: 0xc9d8b6,          // when its last one is in
+                STROKE_COLOR: 0x5c4a33, STROKE_ALPHA: 0.85, STROKE_W: 2,
+                RADIUS:    0.18,     // corner rounding, as a share of the side
+                ICON_FRAC: 0.62,     // icon size inside the cell
+                ICON_Y:   -0.10,     // ...nudged up, to leave room for the count
+                COUNT_SIZE: 15,      // px @ design scale
+                COUNT_COLOR: '#3a2c1c',
+                COUNT_Y:   0.30,     // below the icon, in cell heights
+                DEPTH:     4.2,      // over the fence and the actors, under the
+                                     // dim — a dimmed level's tally should dim
+                                     // with it
+                // The produce's flight, after it has risen off the plant.
+                FLY_MS:    620,
+                FLY_ARC:   0.28,     // bow, as a share of the distance
+                FLY_TO:    0.55,     // the size it shrinks to, against the cell
+                POP:       1.22,     // the cell's kick as one lands
+                POP_MS:    180,
+
+                // ── DONE ────────────────────────────────────────────────
+                // At zero the count goes and a tick takes its place. "0" is a
+                // number the player still has to read and compare; a tick is a
+                // state they can see without counting.
+                //
+                // ART, now that there is some. It was two drawn strokes while
+                // there was no file for it; a drawing beats a construction —
+                // it can have weight, a shadow, a shape that is not two
+                // rectangles — and it costs one small texture.
+                //
+                // FIT, NOT STRETCH. The art is 64x48, so it is not square and a
+                // square box would squash it. SIZE is the share of the cell it
+                // may occupy, and the wider side takes that, the other following
+                // the art's own aspect.
+                TICK: {
+                    FILE:   'graphics/ui/checkmark.png',
+                    SIZE:    0.79,     // the tick's width, as a share of the cell
+                    Y:      -0.04,     // nudge, in cell heights
+                    POP_MS:  260,      // it swells in over the icon
+                },
+                FADE_MS:   420,      // when the level is done and it goes
+
+                // ── THE LEVEL'S NUMBER ──────────────────────────────────
+                // How far you have come, which nothing else on screen says. The
+                // roster gives position WITHIN a block — five slots, filling —
+                // and the block name says what the block is; neither counts.
+                //
+                // DIGITS ALONE, no "Level". A numeral reads the same in every
+                // language the game will ever ship in, and the word in front of
+                // it would be the first English on screen.
+                //
+                // At the FAR END of the same boundary line the tally sits on:
+                // the counts are left-aligned there and the rest of the line is
+                // empty, so the two share a rule without crowding, and both
+                // belong to the farm rather than to the screen. It comes up and
+                // goes with the light, like the tally, so only ever one shows.
+                NUMBER: {
+                    ENABLED: true,
+                    SIZE:    26,        // px @ design scale
+                    COLOR:  '#ffffff',
+                    STROKE: '#2b2013',
+                    STROKE_W: 4,
+                    MARGIN:  0.6,       // from the map's right edge, in tiles
+                    ALPHA:   0.9,
                 },
             },
 
@@ -2409,6 +2537,56 @@ var CONFIG = {
             // Rows past the end of the list are left exactly as the sprite was
             // drawn, so the open water is fully solid.
             ROW_ALPHA: [0.8, 0.85, 0.9, 0.95],
+
+            // ── LILIES ON THE LAKE ──────────────────────────────────────
+            // COMPOSED, not scattered. The canal's lilies (ROAD.LILY) are
+            // placed by rule as the water reaches each stretch, which suits a
+            // ditch — one pad here, a clump there, nobody looking. The lake is
+            // the opening shot and holds still, so its pads are arranged in
+            // Tiled and read back exactly as drawn: clusters, a flower on a
+            // particular pad, clear water where the canal mouth opens. None of
+            // that is expressible as a scatter rule.
+            //
+            // The map carries everything. Each object's SIZE is its scale (a
+            // 180px object off a 128px tile is 1.4x, authored by dragging), and
+            // the LAYER ORDER is the draw order — pads under flowers — so
+            // neither needs a number here.
+            LILIES: {
+                ENABLED: true,
+                MAP:     'maps/lily/lily.tmj',
+                SHEET:   'graphics/tilesheets/lily.webp',
+                FRAME:   128,        // one cell of the sheet, 3 across
+                DEPTH:   3.13,       // over the lake's water (3.11)
+                LAYER_STEP: 0.005,   // each object layer above the one before
+
+                // ── THE SWELL ───────────────────────────────────────────
+                // Water is never still, and a pond of pads holding position
+                // exactly is the one thing that says "picture" rather than
+                // "lake". They rock about where they were placed — never away
+                // from it: the whole travel is AMP of a tile, about four pixels,
+                // which is a nudge and not a drift.
+                //
+                // ALL AS ONE. Every pad and every flower takes the same offset
+                // on the same frame — it is the whole surface lifting, not each
+                // lily bobbing on its own errand. It also holds a flower and the
+                // pad beneath it exactly together, which nothing else has to
+                // arrange: they are separate objects that simply never move
+                // apart.
+                //
+                // TWO RHYTHMS is what keeps that from being a metronome. At HZ
+                // alone the motion is a pure sine and the eye has the loop in
+                // about four seconds; a second, quieter one at an unrelated rate
+                // makes the swing wander and the pair only realign every seven.
+                SWAY: {
+                    ENABLED: true,
+                    HZ:      0.26,     // the slow swell
+                    HZ2:     0.41,     // the second rhythm over it
+                    MIX:     0.28,     // how much of the motion is the second one
+                    DIR_DEG: 14,       // which way the water is moving
+                    AMP:     0.09,     // travel, in tiles — a nudge, not a drift
+                    TILT:    1.7,      // degrees of roll at the extremes
+                },
+            },
         },
 
         // ── The channel ───────────────────────────────────────────────────
@@ -2819,6 +2997,26 @@ var CONFIG = {
             // there is nothing for it to climb out of view.
             HOLD_MACHINE_FOR_CROPS: true,   // the rig waits for its field
             HOLD_CAMERA_FOR_CROPS:  true,   // and the view stays on it
+
+            // ── MOVING ON ───────────────────────────────────────────────
+            // When the farm is finished — gathered, tallied, its icon in the
+            // roster — the camera climbs and settles the NEXT level in the
+            // middle of the screen before the machine is let go.
+            //
+            // It happens while the rig is still parked, which is what makes it
+            // possible at all: the camera may normally never outrun the machine,
+            // because a camera climbing faster than the rig drags the world down
+            // and reads as the dig reversing. With nothing moving there is
+            // nothing to contradict, so this is the one glide the camera gets.
+            //
+            // The pan is also the punctuation. One farm ends, the view moves to
+            // the next, and only then does the digging start again — instead of
+            // the machine setting off while the eye is still on the old field.
+            FOCUS_NEXT:  true,
+            FOCUS_LERP:  1.8,      // how hard it eases onto the new field
+            FOCUS_NEAR:  6,        // px from centred that counts as arrived
+            FOCUS_MAX_MS: 2500,    // ...and a ceiling, so a pan that cannot
+                                   // reach its mark can never hold the handover
             HOLD_EDGE:   0.08,     // ...unless the machine is about to leave.
                                    // The hold is SOFT: the camera stays on the
                                    // finished field for as long as it can, then

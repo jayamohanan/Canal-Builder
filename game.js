@@ -417,6 +417,18 @@ class GameScene extends Phaser.Scene {
                 this.load.image(`lily_${i}`, `graphics/lily/lily${i}.png`);
             }
         }
+        // The LAKE's lilies are a different thing: one composed layout, read
+        // out of its own Tiled map. The sheet is sliced into frames because the
+        // map addresses them by gid.
+        // The tally's tick.
+        const TK = (((CONFIG.ROAD || {}).TILEMAP || {}).GOALS || {}).TICK || {};
+        if (TK.FILE) this.load.image('tick', TK.FILE);
+        const LL = ((CONFIG.ROAD || {}).LAKE || {}).LILIES || {};
+        if (LL.ENABLED !== false && LL.SHEET && LL.MAP) {
+            this.load.spritesheet('lily_sheet', LL.SHEET,
+                { frameWidth: LL.FRAME || 128, frameHeight: LL.FRAME || 128 });
+            this.load.json('lily_map', LL.MAP);
+        }
 
         // Tile map: the level layout (.tmj) plus one image per tile type.
         // The .tmj only carries the grid + tile names; the PNGs live here.
@@ -1674,11 +1686,24 @@ console.log(
         // crop records have to exist before it runs.
         this._buildCrops(seg, band);
         this._buildWetGround(seg);
+        this._buildGoals(seg, band);
+        // The FIRST level is built already lit — _focusDim ran before its tally
+        // existed, so nothing would ever raise it.
+        if (this._dimmedSeg === seg) this._showGoals(seg, true);
         this._buildFarmer(seg, gTop);
         this._buildFence(seg, gTop);
         this._buildProps(seg, gTop);
         this._buildAnimals(seg, gTop);
+        // The band's middle, for the camera to settle on when this level is
+        // finished. Recorded here because this is where the band's top and
+        // height are both in hand.
+        seg.midY = gTop + g.h / 2;
         this._buildDim(seg, gTop, g.h);
+        // AFTER its own shade exists. A level built directly above the lit one
+        // is the one that has to make room for it, and it did not exist when the
+        // light last moved — so the gap is cut now rather than waiting for a
+        // handover that has already happened.
+        this._shapeDims(this._dimmedSeg);
         this._buildPonds(seg, band);
     }
 
@@ -2048,6 +2073,108 @@ console.log(
             // Open water below, thickening away from the shore.
             for (let r = 1; r < rows; r++) lay(c, r, water, dW, shallow(r));
         }
+        this._buildLakeLilies(seg, top);
+    }
+
+    // Lay the lake's lilies out of maps/lily/lily.tmj.
+    //
+    // The map is the same 22 x 7 as the lake and its objects are TILE objects,
+    // which carry three things this needs and would otherwise have to be
+    // configured: which frame (`gid`), how big it was dragged out (`width` and
+    // `height`, so 180 off a 128 tile is 1.4x), and — by the layer it sits on —
+    // what draws over what.
+    //
+    // Tiled anchors a tile object at its BOTTOM-LEFT corner and rotates about
+    // that same corner, where Phaser positions and rotates about the centre. So
+    // the anchor is walked to the centre THROUGH the rotation, not before it: at
+    // any non-zero angle the two disagree, and a pad turned 30 degrees would sit
+    // most of a tile away from where it was drawn.
+    _buildLakeLilies(seg, top) {
+        const LL = (CONFIG.ROAD.LAKE || {}).LILIES || {};
+        if (LL.ENABLED === false) return;
+        const map = this.cache.json.get('lily_map');
+        const g = this.tileGrid;
+        if (!map || !g || !this.textures.exists('lily_sheet')) return;
+
+        // Map pixels to world pixels. The map is authored at its own tile size
+        // and the game's is whatever the stage worked out, so everything —
+        // position and size alike — rides this one ratio.
+        const k = g.tile / (map.tilewidth || LL.FRAME || 128);
+        // The gid a frame 0 would have in THIS map, read from the map itself:
+        // firstgid moves the moment another tileset is added ahead of it.
+        const first = (map.tilesets && map.tilesets[0] && map.tilesets[0].firstgid) || 1;
+        let depth = LL.DEPTH !== undefined ? LL.DEPTH : 3.13;
+
+        for (const layer of map.layers || []) {
+            if (layer.type !== 'objectgroup') continue;
+            for (const o of layer.objects || []) {
+                if (!o.gid) continue;                  // not a tile object
+                const rot = (o.rotation || 0) * Math.PI / 180;
+                const ox  = (o.width || 0) / 2, oy = -(o.height || 0) / 2;
+                const cos = Math.cos(rot), sin = Math.sin(rot);
+                const spr = this._addB(this.add.image(
+                        g.left + (o.x + ox * cos - oy * sin) * k,
+                        top    + (o.y + ox * sin + oy * cos) * k,
+                        'lily_sheet', o.gid - first)
+                    .setDisplaySize((o.width || 0) * k, (o.height || 0) * k)
+                    .setDepth(depth), seg);
+                if (rot) spr.setAngle(o.rotation);
+                // Its RESTING place. The swell moves it about this and always
+                // returns to it, so the map's composition is never lost.
+                (seg.lakeLilies || (seg.lakeLilies = [])).push({
+                    spr, x0: spr.x, y0: spr.y, a0: o.rotation || 0,
+                });
+            }
+            // THE LAYER ORDER IS THE DRAW ORDER — pads below, flowers above —
+            // so a third layer added in Tiled needs nothing here.
+            depth += LL.LAYER_STEP !== undefined ? LL.LAYER_STEP : 0.005;
+        }
+    }
+
+    // Rock the lake's lilies: the whole surface lifting as one.
+    //
+    // Every lily is moved about its OWN placed position and never away from it —
+    // the travel is AMP of a tile, a few pixels — so the arrangement drawn in
+    // Tiled still reads exactly as drawn.
+    //
+    // ONE OFFSET, SHARED. Pads and flowers alike take the same displacement on
+    // the same frame, which is what makes it water moving rather than each lily
+    // bobbing on its own errand. It also holds a flower and the pad under it
+    // exactly together, with neither knowing the other exists.
+    //
+    // No per-lily state and no tweens: the offset is a pure function of the
+    // clock, computed ONCE a frame, so a hundred more pads cost a hundred adds.
+    _updateLakeLilies(time) {
+        const LL = (CONFIG.ROAD.LAKE || {}).LILIES || {}, S = LL.SWAY || {};
+        if (S.ENABLED === false) return;
+        const tile = this.tileGrid ? this.tileGrid.tile : 0;
+        if (!tile) return;
+        const t   = time / 1000;
+        const w1  = 2 * Math.PI * (S.HZ  !== undefined ? S.HZ  : 0.26);
+        const w2  = 2 * Math.PI * (S.HZ2 !== undefined ? S.HZ2 : 0.41);
+        const mix = S.MIX !== undefined ? S.MIX : 0.28;
+        const dir = (S.DIR_DEG !== undefined ? S.DIR_DEG : 14) * Math.PI / 180;
+        const amp = (S.AMP !== undefined ? S.AMP : 0.09) * tile;
+        const dx  = Math.cos(dir) * amp, dy = Math.sin(dir) * amp;
+        const tilt = S.TILT !== undefined ? S.TILT : 1.7;
+
+        // THE SWING, once for the whole pond. Two sines at unrelated rates, so
+        // the amplitude wanders and the motion never settles into a pulse the
+        // eye can predict.
+        const s = (1 - mix) * Math.sin(w1 * t) + mix * Math.sin(w2 * t + 1.3);
+        const ox = dx * s, oy = dy * s, oa = tilt * s;
+
+        for (const seg of this.segments) {
+            const list = seg.lakeLilies;
+            if (!list) continue;
+            for (const l of list) {
+                const spr = l.spr;
+                if (!spr || !spr.scene) continue;
+                spr.x = l.x0 + ox;
+                spr.y = l.y0 + oy;
+                if (tilt) spr.setAngle(l.a0 + oa);
+            }
+        }
     }
 
     // The wall across the main canal at the level's far edge.
@@ -2377,9 +2504,14 @@ console.log(
     // filled it. Icons come only from the UI sheets: art drawn AT icon size,
     // which world art cut down never is. A tomato drawn to read at 128px on a
     // plant does not survive being shrunk into a 40px slot.
-    _fillRosterSlot(name, from) {
+    // `done` is called when the icon has ARRIVED and settled — every exit takes
+    // it, including the ones that never animate. The level is not finished until
+    // its slot is filled, so a path that quietly returned without calling back
+    // would strand the whole handover.
+    _fillRosterSlot(name, from, done) {
         const R = CONFIG.ROSTER || {}, ro = this.roster;
-        if (R.ENABLED === false || !ro || ro.filled >= ro.slots.length) return;
+        const end = () => { if (done) done(); };
+        if (R.ENABLED === false || !ro || ro.filled >= ro.slots.length) { end(); return; }
 
         const at = (R.ICONS || {})[name];
         if (at === undefined) {
@@ -2393,7 +2525,7 @@ console.log(
 
         const slot = ro.slots[ro.filled++];
         this._paintSlot(slot, true);
-        if (!sheet || !this.textures.exists(sheet)) return;
+        if (!sheet || !this.textures.exists(sheet)) { end(); return; }
 
         const fit = ro.size * (R.ICON_FRAC !== undefined ? R.ICON_FRAC : 0.78);
         // The frame number says both WHICH SHEET and which cell of it, so adding
@@ -2451,7 +2583,7 @@ console.log(
                     const k = big + (1 - big) * t;      // produce -> icon
                     spr.setScale(sx * k, sy * k);
                 },
-                onComplete: () => spr.setPosition(x1, y1).setScale(sx, sy),
+                onComplete: () => { spr.setPosition(x1, y1).setScale(sx, sy); end(); },
             });
             return;
         }
@@ -2461,8 +2593,8 @@ console.log(
         if (ms > 0) {
             spr.setScale(sx * 1.6, sy * 1.6).setAlpha(0);
             this.tweens.add({ targets: spr, scaleX: sx, scaleY: sy, alpha: 1,
-                duration: ms, ease: 'Back.easeOut' });
-        }
+                duration: ms, ease: 'Back.easeOut', onComplete: end });
+        } else end();
     }
 
     // Where a world point sits for a PINNED object on the same camera.
@@ -2866,11 +2998,48 @@ console.log(
     _buildDim(seg, gTop, h) {
         const D = CONFIG.ROAD.TILEMAP.DIM || {};
         if (D.ENABLED === false || !(D.ALPHA > 0)) return;
+        // FULL BAND. The shade is one continuous unlit world with a single farm
+        // cut out of it, so every band covers itself edge to edge and meets its
+        // neighbours with no seam. Only ONE boundary is ever spared, and which
+        // one depends on where the light is — so that is decided in _shapeDims
+        // and not here.
+        seg.dimTop  = gTop;
+        seg.dimFull = h;
         seg.dim = this._addB(this.add.rectangle(0, gTop, this.scale.width, h,
                 D.COLOR !== undefined ? D.COLOR : 0x0a1a10)
             .setOrigin(0, 0)
             .setDepth(D.DEPTH !== undefined ? D.DEPTH : 3.5)
             .setAlpha(D.ALPHA), seg);
+    }
+
+    // Cut the one gap the shade needs, at the foot of the level directly above
+    // the lit one.
+    //
+    // Everything standing on THAT boundary belongs, wholly or partly, to the lit
+    // farm: the fence it shares, its top row's crops, its farmer, its tally —
+    // all taller than the tile they stand in, all reaching up into the band
+    // above. Shading to the edge cut a dark line across the lit farm's top row.
+    //
+    // Nowhere else. Every other boundary is a dimmed level meeting a dimmed
+    // level, and a gap there would read as three shaded panels rather than one
+    // shadow with a hole in it.
+    _shapeDims(lit) {
+        const D = CONFIG.ROAD.TILEMAP.DIM || {};
+        const tile = (this.tileGrid && this.tileGrid.tile) || 0;
+        const i = lit ? this.segments.indexOf(lit) : -1;
+        const above = i >= 0 ? this.segments[i + 1] : null;
+        for (const s of this.segments) {
+            const o = s && s.dim;
+            if (!o || !o.scene || !s.dimFull) continue;
+            // Capped at half the band, or a short level would be handed a
+            // negative height and shade nothing at all.
+            const keep = s === above
+                ? Math.min(s.dimFull * 0.5,
+                    (D.BOTTOM_TILES !== undefined ? D.BOTTOM_TILES : 1.7) * tile)
+                : 0;
+            const want = s.dimFull - keep;
+            if (Math.abs(o.height - want) > 0.5) o.setSize(this.scale.width, want);
+        }
     }
 
     // Clear the shade off the farm being dug and put it back over the one just
@@ -2888,8 +3057,40 @@ console.log(
             else this.tweens.add({ targets: o, alpha: to, duration: ms, ease: 'Sine.easeOut' });
         };
         if (this._dimmedSeg && this._dimmedSeg !== seg) set(this._dimmedSeg, a);
+        const was = this._dimmedSeg;
         this._dimmedSeg = seg;
         set(seg, 0);
+        // THE TALLY BELONGS TO THE LIT LEVEL. It asks "what is left to do here",
+        // and only one farm at a time is here — several stacked up the screen,
+        // each with its own row of counts, would read as a scoreboard for the
+        // run rather than as this field's job.
+        if (was && was !== seg) this._showGoals(was, false);
+        this._showGoals(seg, true);
+        this._shapeDims(seg);
+    }
+
+    // Fade a level's tally in or out with the light on that level.
+    _showGoals(seg, on) {
+        const G = CONFIG.ROAD.TILEMAP.GOALS || {};
+        if (!seg) return;
+        const ms = G.FADE_MS !== undefined ? G.FADE_MS : 420;
+        const lab = seg.goalLabel;
+        if (lab && lab.scene) {
+            this.tweens.killTweensOf(lab);
+            const to = on ? (lab._a !== undefined ? lab._a : 0.9) : 0;
+            if (ms <= 0) lab.setAlpha(to);
+            else this.tweens.add({ targets: lab, alpha: to, duration: ms, ease: 'Sine.easeOut' });
+        }
+        if (!seg.goals) return;
+        for (const cell of seg.goals.values()) {
+            for (const o of [cell.box, cell.icon, cell.text, cell.tick]) {
+                if (!o || !o.scene) continue;
+                this.tweens.killTweensOf(o);
+                if (ms <= 0) { o.setAlpha(on ? 1 : 0); continue; }
+                this.tweens.add({ targets: o, alpha: on ? 1 : 0,
+                    duration: ms, ease: 'Sine.easeOut' });
+            }
+        }
     }
 
     // Scatter a ranch's herd across the level.
@@ -3589,6 +3790,252 @@ console.log(
         return cr.lay.fruit !== null || cr.lay.harvest !== null;
     }
 
+    // Where an icon for `name` lives on the UI sheets — one table for the roster
+    // strip and the level tally alike, so a crop drawn once is drawn everywhere.
+    _iconOf(name) {
+        const R = CONFIG.ROSTER || {};
+        const at = (R.ICONS || {})[name];
+        if (at === undefined) return null;
+        const per = Math.max(1, R.PER_SHEET || 10);
+        const sheet = (R.SHEETS || [])[Math.floor(at / per)];
+        if (!sheet || !this.textures.exists(sheet)) return null;
+        return { sheet, frame: at % per };
+    }
+
+    // THE LEVEL'S TALLY: one cell per crop, its icon, and how many are left.
+    //
+    // Built on the boundary ABOVE the field — the line this farm shares with the
+    // next one, where the fence stands — so it is outside the ground it counts
+    // and never sits over a plant. Left-aligned, because the right of that line
+    // is where the machine climbs out.
+    _buildGoals(seg, band) {
+        const TM = CONFIG.ROAD.TILEMAP, G = TM.GOALS || {};
+        if (G.ENABLED === false) return;
+        const g = this.tileGrid;
+        if (!g) return;
+
+        const s0   = this.layoutConfig.scale;
+        const size0 = (G.SIZE !== undefined ? G.SIZE : 1.05) * g.tile;
+        const yLine = band.bandTop - size0 / 2
+                    - (G.LIFT !== undefined ? G.LIFT : 0.35) * g.tile;
+
+        // THE LEVEL'S NUMBER, at the far end of the same line — and built before
+        // the counts, because a level with nothing to gather still has a place
+        // in the run. It shares the tally's fade, so it is written here rather
+        // than anywhere else.
+        const N = G.NUMBER || {};
+        if (N.ENABLED !== false) {
+            seg.goalLabel = this._addB(this.add.text(
+                    g.left + g.cols * g.tile - (N.MARGIN !== undefined ? N.MARGIN : 0.6) * g.tile,
+                    yLine, String((seg.levelIndex || 0) + 1), {
+                fontSize: Math.max(9, Math.round((N.SIZE || 26) * s0)) + 'px',
+                fontFamily: CONFIG.FONT_FAMILY,
+                fontStyle: CONFIG.FONT_WEIGHT,
+                color: N.COLOR || '#ffffff',
+                stroke: N.STROKE || '#2b2013',
+                strokeThickness: Math.max(1, Math.round((N.STROKE_W || 4) * s0)),
+            }).setOrigin(1, 0.5)
+              .setDepth((G.DEPTH !== undefined ? G.DEPTH : 4.2) + 0.002)
+              .setAlpha(0), seg);
+            seg.goalLabel._a = N.ALPHA !== undefined ? N.ALPHA : 0.9;
+        }
+        if (!seg.crops || !seg.crops.length) return;
+
+        // HOW MANY OF EACH.
+        const counts = new Map();
+        for (const cr of seg.crops) {
+            if (!this._cropWillBear(cr)) continue;   // nothing to gather, nothing to count
+            counts.set(cr.crop, (counts.get(cr.crop) || 0) + 1);
+        }
+        if (!counts.size) return;
+
+        // IN MARKER ORDER, left to right: 1, then 2, then 3. The cells were
+        // falling out in the order the crops happened to be MET, scanning the
+        // map from its top-left corner — so which crop led depended on where its
+        // topmost plant sat, and a level could reorder itself for no reason the
+        // player could see. The marker is the level's own numbering and it is
+        // also the order the crops were introduced, so it is the one to show.
+        //
+        // A crop named by several markers takes its lowest; one the level never
+        // names (the single-crop CROP form) sorts last, which is where the only
+        // entry ends up anyway.
+        const grows = this._levelCrops(this.endless ? this.endless.segIndex : 0);
+        const mark = new Map();
+        for (const [mk, crop] of grows.byMarker) {
+            if (!mark.has(crop) || mk < mark.get(crop)) mark.set(crop, mk);
+        }
+        const order = [...counts].sort((a, b) => {
+            const ma = mark.has(a[0]) ? mark.get(a[0]) : Infinity;
+            const mb = mark.has(b[0]) ? mark.get(b[0]) : Infinity;
+            return ma - mb;
+        });
+
+        const s    = this.layoutConfig.scale;
+        const size = (G.SIZE !== undefined ? G.SIZE : 1.05) * g.tile;
+        const gap  = (G.GAP  !== undefined ? G.GAP  : 0.08) * g.tile;
+        const rad  = Math.min(size / 2, (G.RADIUS !== undefined ? G.RADIUS : 0.18) * size);
+        // The boundary line itself, then lifted clear of it so the cells sit ON
+        // the fence rather than behind it.
+        const y0 = band.bandTop - size / 2 - (G.LIFT !== undefined ? G.LIFT : 0.35) * g.tile;
+        let x = g.left + (G.MARGIN !== undefined ? G.MARGIN : 0.5) * g.tile + size / 2;
+        const depth = G.DEPTH !== undefined ? G.DEPTH : 4.2;
+        const cells = seg.goals = new Map();
+
+        for (const [crop, n] of order) {
+            const box = this._addB(this.add.graphics({ x, y: y0 }).setDepth(depth), seg);
+            box._bs = { x: 1, y: 1 };
+            const cell = { box, x, y: y0, size, rad, left: n, total: n, icon: null, text: null };
+            this._paintGoal(cell, false);
+
+            const ic = this._iconOf(crop);
+            if (ic) {
+                const fit = size * (G.ICON_FRAC !== undefined ? G.ICON_FRAC : 0.62);
+                cell.icon = this._addB(this.add.image(
+                        x, y0 + (G.ICON_Y !== undefined ? G.ICON_Y : -0.1) * size,
+                        ic.sheet, ic.frame)
+                    .setDisplaySize(fit, fit).setDepth(depth + 0.001), seg);
+                // Its RESTING scale, whatever setDisplaySize worked out — the
+                // kick has to return here and not to 1.
+                cell.icon._bs = { x: cell.icon.scaleX, y: cell.icon.scaleY };
+            } else {
+                console.warn(`[goals] "${crop}" has no icon in ROSTER.ICONS — its cell will be blank`);
+            }
+            cell.text = this._addB(this.add.text(
+                    x, y0 + (G.COUNT_Y !== undefined ? G.COUNT_Y : 0.3) * size, String(n), {
+                fontSize: Math.max(8, Math.round((G.COUNT_SIZE || 15) * s)) + 'px',
+                fontFamily: CONFIG.FONT_FAMILY,
+                fontStyle: CONFIG.FONT_WEIGHT,
+                color: G.COUNT_COLOR || '#3a2c1c',
+            }).setOrigin(0.5, 0.5).setDepth(depth + 0.002), seg);
+            cell.text._bs = { x: 1, y: 1 };
+
+            // BUILT DARK. Levels are made several ahead of the machine, so a
+            // tally that showed on creation would have three farms' worth of
+            // counts up the screen before the player reached the first. It comes
+            // up with the light, in _focusDim.
+            for (const o of [cell.box, cell.icon, cell.text]) if (o) o.setAlpha(0);
+            cells.set(crop, cell);
+            x += size + gap;
+        }
+    }
+
+    // Draw one tally cell. A rounded box, redrawn rather than recoloured for the
+    // reason the roster's are: a rounded box is a path, not a fill property.
+    _paintGoal(cell, done) {
+        const G = CONFIG.ROAD.TILEMAP.GOALS || {};
+        const gfx = cell && cell.box;
+        if (!gfx || !gfx.scene) return;
+        const h = cell.size / 2;
+        gfx.clear();
+        gfx.fillStyle(done ? (G.DONE_COLOR !== undefined ? G.DONE_COLOR : 0xc9d8b6)
+                           : (G.COLOR      !== undefined ? G.COLOR      : 0xfffdf6),
+                      G.ALPHA !== undefined ? G.ALPHA : 1);
+        gfx.fillRoundedRect(-h, -h, cell.size, cell.size, cell.rad);
+        if (G.STROKE_W > 0) {
+            gfx.lineStyle(G.STROKE_W * this.layoutConfig.scale,
+                G.STROKE_COLOR !== undefined ? G.STROKE_COLOR : 0x5c4a33,
+                G.STROKE_ALPHA !== undefined ? G.STROKE_ALPHA : 0.85);
+            gfx.strokeRoundedRect(-h, -h, cell.size, cell.size, cell.rad);
+        }
+    }
+
+    // One produce has arrived: knock the number down.
+    _scoreGoal(seg, crop) {
+        const G = CONFIG.ROAD.TILEMAP.GOALS || {};
+        const cell = seg && seg.goals && seg.goals.get(crop);
+        if (!cell || !cell.box || !cell.box.scene) return;
+        cell.left = Math.max(0, cell.left - 1);
+        if (cell.text && cell.text.scene) cell.text.setText(String(cell.left));
+        if (!cell.left) {
+            this._paintGoal(cell, true);
+            // THE COUNT GOES, THE TICK ARRIVES. "0" is a number still to be read
+            // and compared; a tick is a state, seen without counting.
+            if (cell.text && cell.text.scene) { cell.text.destroy(); cell.text = null; }
+            this._drawTick(seg, cell);
+        }
+        // A KICK ON ARRIVAL. The number changing is easy to miss on a cell an
+        // inch across; the cell moving is not.
+        const pop = G.POP !== undefined ? G.POP : 1.22;
+        const ms  = G.POP_MS !== undefined ? G.POP_MS : 180;
+        // The tick is deliberately NOT in this list — it is arriving on its own
+        // curve this same frame, and two tweens on one scale fight.
+        //
+        // EACH KICKS FROM ITS OWN SIZE. The icon is sized with setDisplaySize,
+        // so its scale is a fraction — 0.67 here, bringing a 48px frame down to
+        // a 32px cell. Snapping it to 1 first, as the box and the count can be,
+        // blew it up to the full frame and the yoyo returned it there: one
+        // produce landed and the icon stayed half again too big for the rest of
+        // the level.
+        for (const o of [cell.box, cell.icon, cell.text]) {
+            if (!o || !o.scene) continue;
+            const b = o._bs || { x: 1, y: 1 };
+            this.tweens.killTweensOf(o);
+            o.setScale(b.x, b.y);
+            this.tweens.add({ targets: o, scaleX: b.x * pop, scaleY: b.y * pop,
+                duration: ms, yoyo: true, ease: 'Sine.easeOut' });
+        }
+    }
+
+    // The tick over a finished cell.
+    //
+    // FITTED TO THE CELL, not stretched into it: the art is 64x48, so asking for
+    // a square would squash it a third. SIZE is how much of the cell's width it
+    // takes and the height follows the art's own aspect, which also means a
+    // redrawn tick of any proportion drops in without a number changing.
+    //
+    // It swells in from nothing rather than appearing — a tick that is simply
+    // there reads as the cell having been rebuilt, not as something completed.
+    _drawTick(seg, cell) {
+        const G = CONFIG.ROAD.TILEMAP.GOALS || {}, T = G.TICK || {};
+        if (!cell || !cell.box || !cell.box.scene || cell.tick) return;
+        if (!this.textures.exists('tick')) return;
+        const S   = cell.size;
+        const src = this.textures.get('tick').getSourceImage();
+        const w   = (T.SIZE !== undefined ? T.SIZE : 0.66) * S;
+        const h   = w * (src.height / src.width);
+        const spr = this._addB(this.add.image(
+                cell.x, cell.y + (T.Y !== undefined ? T.Y : -0.04) * S, 'tick')
+            .setDisplaySize(w, h)
+            .setDepth(cell.box.depth + 0.003), seg);
+        // Its resting scale, for the same reason the icon keeps one: setDisplaySize
+        // leaves a fraction, and anything that animates it has to return there.
+        spr._bs = { x: spr.scaleX, y: spr.scaleY };
+        cell.tick = spr;
+        const ms = T.POP_MS !== undefined ? T.POP_MS : 260;
+        spr.setScale(spr._bs.x * 0.2, spr._bs.y * 0.2);
+        // The tick is the last beat of the harvest, not an afterthought to it:
+        // the level stays open until it has played.
+        this._holdField(seg, 1);
+        this.tweens.add({ targets: spr, scaleX: spr._bs.x, scaleY: spr._bs.y,
+            duration: ms, ease: 'Back.easeOut',
+            onComplete: () => this._holdField(seg, -1) });
+    }
+
+    // The level is over: its tally goes with it. It answers "what is left to do
+    // HERE", and there is nothing left and no here.
+    _hideGoals(seg) {
+        const G = CONFIG.ROAD.TILEMAP.GOALS || {};
+        if (!seg) return;
+        const ms = G.FADE_MS !== undefined ? G.FADE_MS : 420;
+        if (seg.goalLabel && seg.goalLabel.scene) {
+            const lab = seg.goalLabel;
+            seg.goalLabel = null;
+            this.tweens.killTweensOf(lab);
+            this.tweens.add({ targets: lab, alpha: 0, duration: ms, ease: 'Sine.easeIn',
+                onComplete: () => lab.destroy() });
+        }
+        if (!seg.goals) return;
+        for (const cell of seg.goals.values()) {
+            for (const o of [cell.box, cell.icon, cell.text, cell.tick]) {
+                if (!o || !o.scene) continue;
+                this.tweens.killTweensOf(o);
+                this.tweens.add({ targets: o, alpha: 0, duration: ms, ease: 'Sine.easeIn',
+                    onComplete: () => o.destroy() });
+            }
+        }
+        seg.goals = null;
+    }
+
     // Take one fruit off its plant.
     //
     // The fruit is already its own sprite over the plant — that is what the
@@ -3631,16 +4078,70 @@ console.log(
         const side = (this._cellHash(cr.col, cr.row, 10) - 0.5) * 2 *
                      (H.DRIFT !== undefined ? H.DRIFT : 0.18) * tile;
         const pop = H.POP !== undefined ? H.POP : 1.25;
+        const cell = seg && seg.goals && seg.goals.get(cr.crop);
+        // FROM HERE UNTIL IT IS COUNTED. The plant is already empty, so nothing
+        // else can tell the level this produce is still on its way.
+        this._holdField(seg, 1);
         this.tweens.add({
             targets: fr,
             x: fr.x + side,
             y: fr.y - (H.RISE !== undefined ? H.RISE : 0.55) * tile,
             scaleX: fr.scaleX * pop, scaleY: fr.scaleY * pop,
-            alpha: 0,
+            // IT ONLY FADES IF IT IS GOING NOWHERE. With a tally to fly to, the
+            // rise is the first half of one move and the produce has to still be
+            // there for the second.
+            alpha: cell ? 1 : 0,
             duration: H.MS !== undefined ? H.MS : 520, ease: H.EASE || 'Sine.easeOut',
-            onComplete: () => { fr.destroy(); },
+            onComplete: () => {
+                if (cell) this._flyToGoal(seg, cr.crop, fr, cell);
+                // Nowhere to go: it has faded out, and it is done with.
+                else { fr.destroy(); this._holdField(seg, -1); }
+            },
         });
         return true;
+    }
+
+    // ...and on to the cell that is counting it.
+    //
+    // A bow rather than a straight line: the cells sit on the boundary above the
+    // field and a ruled diagonal across the crop reads as a UI element being
+    // moved, where an arc reads as something thrown.
+    _flyToGoal(seg, crop, fr, cell) {
+        const G = CONFIG.ROAD.TILEMAP.GOALS || {};
+        if (!fr || !fr.scene) { this._holdField(seg, -1); return; }
+        if (!cell.box || !cell.box.scene) {
+            fr.destroy(); this._holdField(seg, -1); return;
+        }
+        const x0 = fr.x, y0 = fr.y, x1 = cell.x, y1 = cell.y;
+        const arc = G.FLY_ARC !== undefined ? G.FLY_ARC : 0.28;
+        const cx  = (x0 + x1) / 2;
+        const cy  = Math.min(y0, y1) - Math.hypot(x1 - x0, y1 - y0) * arc;
+        // Down to the size it would be IN the cell, so it arrives as the thing
+        // the icon already shows rather than shrinking after it lands.
+        const to  = cell.size * (G.FLY_TO !== undefined ? G.FLY_TO : 0.55);
+        const s0x = fr.scaleX, s0y = fr.scaleY;
+        const s1  = to / Math.max(1, fr.width);
+        const p = { t: 0 };
+        this.tweens.add({
+            targets: p, t: 1,
+            duration: G.FLY_MS !== undefined ? G.FLY_MS : 620, ease: 'Sine.easeInOut',
+            onUpdate: () => {
+                if (!fr.scene) return;
+                const t = p.t, u = 1 - t;
+                fr.x = u * u * x0 + 2 * u * t * cx + t * t * x1;
+                fr.y = u * u * y0 + 2 * u * t * cy + t * t * y1;
+                fr.setScale(s0x + (s1 - s0x) * t, s0y + (s1 - s0y) * t);
+            },
+            onComplete: () => {
+                fr.destroy();
+                // SCORED FIRST, released second. Scoring a cell to zero starts
+                // the tick, which takes a hold of its own — taking this one off
+                // beforehand would let the count reach nothing for an instant
+                // and the level could slip out between the two.
+                this._scoreGoal(seg, crop);
+                this._holdField(seg, -1);
+            },
+        });
     }
 
     // WHERE THE MAIN CANAL CAN BE CROSSED — the row of the nearest bridge over
@@ -3895,9 +4396,21 @@ console.log(
         // standing on: he can reach it without crossing anything.
         const sideOf = (x) => this._farmerBand(g, Math.floor((x - g.left) / tile)) || side;
 
-        let left = 0,                 // fruit standing on plants — holds the run open
-            owed = 0, owedHere = 0,   // ...plus the plants yet to bear one
-            near = null, nd = Infinity, far = null, fd = Infinity;
+        // LOOK BEFORE TOUCHING ANYTHING. The batch has to be decided over the
+        // whole field first, because taking what is in reach is part of the
+        // round and not an exception to it — standing beside the first plant to
+        // ripen, he would otherwise pick it the instant it bore and the batch
+        // would never mean anything to a farmer who happened to be in the right
+        // place.
+        // COUNTED PER SIDE, because the two sides are two jobs. The canal is
+        // not a line on a field he can step over: getting to the other half
+        // costs a walk to the bridge and a walk back, so what is waiting over
+        // there has no bearing on whether it is worth crossing this half.
+        //
+        // Counted BOTH ways, not just his own — the far side's batch is what
+        // decides whether crossing is worth it yet.
+        let owedHere = 0, owedFar = 0;   // standing fruit, plus plants yet to bear
+        const ready = [];                // ...of which these are pickable now
         for (const cr of seg.crops) {
             const fr = this._cropYield(cr);
             if (!fr) {
@@ -3905,39 +4418,35 @@ console.log(
                 // side. Without it he would call his side finished, cross for a
                 // ripe one, and have to come back for the plant behind him.
                 if (this._cropWillBear(cr)) {
-                    owed++;
-                    if (sideOf(cr.sprite.x) === side) owedHere++;
+                    if (sideOf(cr.sprite.x) === side) owedHere++; else owedFar++;
                 }
                 continue;
             }
-            const d = Math.hypot(fr.x - spr.x, fr.y - spr.y);
-            // IN REACH IS ALWAYS FREE. Batching decides when he sets OFF, never
-            // whether he takes what he is already standing next to.
-            if (d <= reach) { this._pickFruit(seg, cr); continue; }
-            left++; owed++;
-            if (sideOf(fr.x) === side) {
-                owedHere++;
-                if (d < nd) { nd = d; near = cr; }
-            } else if (d < fd) { fd = d; far = cr; }
+            const mine = sideOf(fr.x) === side;
+            if (mine) owedHere++; else owedFar++;
+            ready.push({ cr, mine, d: Math.hypot(fr.x - spr.x, fr.y - spr.y) });
         }
+        const left = ready.length;    // holds the run open
+        let readyHere = 0, readyFar = 0;
+        for (const it of ready) { if (it.mine) readyHere++; else readyFar++; }
 
-        // HIS OWN SIDE FIRST, and not merely nearest-first: he crosses only when
-        // there is nothing left over here AT ALL — no ripe fruit and no plant
-        // still to bear one. Crossing for whatever happens to be closest would
-        // have him over the bridge and back for a plant that was always going to
-        // ripen behind him, and the crossing is the one move that costs
-        // something to watch.
-        if (!near && !owedHere) { near = far; nd = fd; }
-
-        // A WALK IS WORTH MAKING FOR A HANDFUL, not for one. He waits until
-        // BATCH are ready and then clears them in one round, rather than setting
-        // out afresh for each fruit as it ripens — that reads as pacing.
+        // A ROUND IS WORTH MAKING FOR A HANDFUL, not for one. He waits until
+        // BATCH are standing and then clears them together, rather than starting
+        // afresh on each fruit as it ripens — that reads as pacing.
         //
-        // The exception is the tail of the field: once fewer than BATCH are
-        // outstanding at all, there will never be a batch, and holding out for
-        // one would leave the last few hanging and the level unable to end.
+        // PER SIDE. A half with only three plants in it would otherwise wait
+        // forever on a fourth that was never coming, or wait on the other half's
+        // crop ripening — which it cannot use, since it would have to cross to
+        // reach it and cross back. Each half is judged on what it holds.
+        //
+        // The tail exemption is per side too: once a half has fewer than BATCH
+        // outstanding at all, no batch will form there, so he takes what there
+        // is. That is what clears the last three of a field, and it is also what
+        // stops a short side stranding the level.
         const batch = HV.BATCH !== undefined ? HV.BATCH : 4;
-        if (near && left < batch && owed >= batch) near = null;
+        const goHere = readyHere > 0 && (readyHere >= batch || owedHere < batch);
+        const goFar  = readyFar  > 0 && (readyFar  >= batch || owedFar  < batch);
+        const go = goHere || goFar;
 
         // 2. NOTHING RIPE RIGHT NOW. He starts on the first fruit of the field
         //    and works as it comes, so he catches up with the crop and then has
@@ -3957,9 +4466,41 @@ console.log(
             return;
         }
 
-        // 2b. NOTHING TO SET OUT FOR — too few fruit to be worth the walk, or
-        //     the only one left is across the bridge and this side is not
-        //     finished. He waits where he is.
+        // 2a. TOO FEW TO BOTHER WITH YET. He stands where he is — including
+        //     beside a ripe plant, which is the point: the round starts when the
+        //     field is ready for one, not when he happens to be next to
+        //     something.
+        if (!go) {
+            f.walking = false;
+            this._farmerStride(f, 0);
+            return;
+        }
+
+        // THE ROUND IS ON — but only for the side whose round it is. A fruit on
+        // a half that is still waiting for its batch is not his yet, even if he
+        // happens to be standing beside it mid-crossing.
+        let near = null, nd = Infinity, far = null, fd = Infinity;
+        for (const it of ready) {
+            if (!(it.mine ? goHere : goFar)) continue;
+            if (it.d <= reach) {
+                if (this._pickFruit(seg, it.cr) && it.mine) owedHere--;
+                continue;
+            }
+            if (it.mine) { if (it.d < nd) { nd = it.d; near = it.cr; } }
+            else if (it.d < fd) { fd = it.d; far = it.cr; }
+        }
+
+        // HIS OWN SIDE FIRST, and not merely nearest-first: he crosses only when
+        // there is nothing left over here AT ALL — no standing fruit and no
+        // plant still to bear one. Crossing for whatever happens to be closest
+        // would have him over the bridge and back for a plant that was always
+        // going to ripen behind him, and the crossing is the one move that costs
+        // something to watch.
+        if (!near && !owedHere) { near = far; nd = fd; }
+
+        // 2b. NOTHING TO SET OUT FOR — everything ready was in reach and has
+        //     just been taken, or the only one left is across the bridge and
+        //     this side is not finished. He waits where he is.
         if (!near) {
             f.walking = false;
             this._farmerStride(f, 0);
@@ -5294,10 +5835,25 @@ console.log(
     // still fading out has already left its plant and does not count — it is
     // picked, just not yet gone.
     _fieldPicked(seg) {
+        // NOT MERELY OFF THE PLANTS — DELIVERED. `busy` counts what this field
+        // has in the air: produce risen but not yet landed in its tally cell,
+        // and a cell's tick still swelling in.
+        //
+        // Without it the level unlocked the moment the last fruit detached,
+        // with that fruit still crossing the screen and the tick it was going to
+        // trigger never seen — the light moved on and the tally faded out from
+        // under it. The last one has to arrive and be counted.
+        if (seg && seg.busy) return false;
         for (const cr of (seg && seg.crops) || []) {
             if (this._cropYield(cr)) return false;
         }
         return true;
+    }
+
+    // Hold the level open while something it started is still playing, or let it
+    // go. Every +1 owns exactly one -1, on the tween that finishes the thing.
+    _holdField(seg, n) {
+        if (seg) seg.busy = Math.max(0, (seg.busy || 0) + n);
     }
 
     // Lay the shimmer streaks on a cell that has just finished filling. One
@@ -7236,6 +7792,8 @@ console.log(
             // moment the finished-looking farm below is still the one being
             // completed, and it stays lit however far ahead the machine has got.
             this._focusDim(nextSeg);
+            // The level's tally has nothing left to count.
+            this._hideGoals(seg);
             // The field is in, so what it grew joins the roster. Fired here and
             // not at breakthrough: this is the moment the farm is actually
             // restored, which is what the slot is a record of.
@@ -7273,17 +7831,36 @@ console.log(
             const own  = herd ? list : list.filter((cr) => cr.crop === name);
             const from = own.length ? own : list;
             const src  = from[Math.floor(from.length / 2)];
+            // THE LAST THING THAT HAS TO LAND. Everything else is already in —
+            // the field grown, gathered, tallied and ticked — and this icon
+            // crossing the screen is the last piece of the level still moving.
+            // The job is not ticked off, and the view does not move on, until it
+            // is home: the camera used to set off while the icon was still in
+            // flight, leaving it to fly across a shot that was already panning.
+            const finish = () => {
+                // Tick the job off, move the view on to the next farm, and only
+                // then release whatever was waiting. The pan is the punctuation
+                // between two levels: it happens with the rig parked, so the
+                // camera is free to climb at its own pace for once.
+                this._completeTask(() => {
+                    // THE FARM IS DONE WITH. Only now does its top fence go
+                    // see-through — it stood solid through the whole beat, which
+                    // is what the beat is for, and gives way just as the view
+                    // leaves for the next field.
+                    this._focusFence(nextSeg);
+                    this._panToLevel(nextSeg, () => {
+                        E.held = false;
+                        E.camHold = false;
+                        E.focusY  = undefined;
+                        if (next) next.ready = true;
+                    });
+                });
+            };
             if (name) {
                 const s = src && src.sprite;
                 this._fillRosterSlot(name,
-                    s && s.scene ? this._worldToScreen(s.x, s.y) : null);
-            }
-            // Tick the job off, and only then release whatever was waiting.
-            this._completeTask(() => {
-                E.held = false;
-                E.camHold = false;
-                if (next) next.ready = true;
-            });
+                    s && s.scene ? this._worldToScreen(s.x, s.y) : null, finish);
+            } else finish();
         };
         wait();
     }
@@ -7518,9 +8095,13 @@ console.log(
         }
         this._showBore(next);
         this._placeBore(next.tunnel);
-        // The rig is now cutting THIS level, so the fence at its foot is behind
-        // the work — and the one it just left goes solid again.
-        this._focusFence(next);
+        // THE FENCE IS NOT TOUCHED HERE. The handover happens at the START of
+        // the completion beat — the rig is handed on the moment the water
+        // reaches the boundary — and fading the fence then washed it out while
+        // the farm below was still being watched: its crops topping out, its
+        // farmer gathering, its tally emptying, all behind a fence that had
+        // already given up. It is faded at the END of the beat instead, in
+        // _finishStretch, as the camera moves off.
         // The LIGHT does not move here. The rig leaving a farm is not the farm
         // being finished — its water is still spreading and its crops are still
         // coming up. _finishStretch hands the light on when that is actually
@@ -7557,10 +8138,22 @@ console.log(
         // anything to catch up on.
         const edge = E.camHold ? (C.HOLD_EDGE !== undefined ? C.HOLD_EDGE : 0.08)
                                : frac;
-        const want = cutY - view * edge;
+        const rigWant = cutY - view * edge;
+        // PANNING ON TO THE NEXT FARM. Its middle, on the middle of the screen —
+        // and the machine keeps a veto, because its demand is a CEILING on
+        // scrollY (it must not climb out of the top of the frame). The smaller
+        // of the two wins, so the soft HOLD_EDGE rule still gives way exactly as
+        // before if the rig is somewhere the pan would strand it.
+        const panning = E.focusY !== undefined;
+        const want = panning ? Math.min(E.focusY - view / 2, rigWant) : rigWant;
+        // STILL UPWARD ONLY. The camera climbs and never retreats: dropping back
+        // drags the world up the screen and reads as the dig losing ground. A
+        // pan that would need to go down is already close enough — see _panToLevel.
         if (want < this.camB.scrollY) {
             const dt = dtMs / 1000;
-            const k  = 1 - Math.exp(-dt * (C.FOLLOW_LERP || 2.2));
+            const k  = 1 - Math.exp(-dt * (panning
+                        ? (C.FOCUS_LERP !== undefined ? C.FOCUS_LERP : 1.8)
+                        : (C.FOLLOW_LERP || 2.2)));
             let move = (want - this.camB.scrollY) * k;          // negative: upward
             // NEVER OUTRUN THE MACHINE. The camera moving up drags the world down
             // the screen, so any moment it travels faster than the rig, the rig
@@ -7571,11 +8164,49 @@ console.log(
             const tile = (tn.flood && tn.flood.g) ? tn.flood.g.tile : 0;
             const rig  = Math.abs(tn.travel || 0) * tile;        // px/sec
             const cap  = rig * (C.CATCHUP !== undefined ? C.CATCHUP : 1.15) * dt;
-            if (cap > 0 && -move > cap) move = -cap;
+            // Only ever caps the CLIMB. Settling down onto a finished field has
+            // no machine to outrun — the rig is parked — and the ease alone is
+            // what makes it gentle.
+            if (move < 0 && cap > 0 && -move > cap) move = -cap;
             this.camB.scrollY += move;
         }
+        if (panning) this._checkPan(want, dtMs);
         this._fillViewport();
         this._reapSegments();
+    }
+
+    // Climb until the given level sits in the middle of the screen, then do
+    // whatever comes next.
+    //
+    // The camera never travels DOWN, so a level already at or above centre
+    // needs no pan at all and the handover happens on the spot. Everything else
+    // is one eased climb with the rig parked.
+    _panToLevel(seg, done) {
+        const C = CONFIG.ROAD.ENDLESS || {}, E = this.endless;
+        if (C.FOCUS_NEXT === false || !E || !this.camB || !seg || seg.midY === undefined) {
+            done(); return;
+        }
+        if (seg.midY - this.camB.height / 2 >= this.camB.scrollY) { done(); return; }
+        E.focusY  = seg.midY;
+        E.panDone = done;
+        E.panT    = 0;
+    }
+
+    // Is the pan there yet? Called with the target the camera is actually
+    // working to, which may be the machine's ceiling rather than the level's
+    // middle — a pan that cannot reach its mark must still finish.
+    _checkPan(want, dtMs) {
+        const C = CONFIG.ROAD.ENDLESS || {}, E = this.endless;
+        if (!E || E.focusY === undefined || !E.panDone) return;
+        E.panT = (E.panT || 0) + (dtMs || 16);
+        const near = C.FOCUS_NEAR !== undefined ? C.FOCUS_NEAR : 6;
+        const cap  = C.FOCUS_MAX_MS !== undefined ? C.FOCUS_MAX_MS : 2500;
+        if (Math.abs(this.camB.scrollY - want) > near * this.layoutConfig.scale
+                && E.panT < cap) return;
+        const done = E.panDone;
+        E.panDone = null;
+        E.focusY  = undefined;
+        done();
     }
 
     // Release levels that have scrolled clear below the camera. They are kept
@@ -9035,6 +9666,7 @@ console.log(
         this._updateWetGround(delta || 16);
         this._updateBareGround(delta || 16);
         this._updateFarmers(delta || 16);
+        this._updateLakeLilies(time);
         this._updateProps(delta || 16);
         this._updateSway(delta || 16);
         this._updateGraze(delta || 16);
