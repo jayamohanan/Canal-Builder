@@ -866,10 +866,12 @@ console.log(
             // the same text-then-bolt pair, just centred somewhere else.
             const rateX = vert ? slotX + ssz / 2 + casePad + labelW / 2 : slotX;
             const rateY = vert ? slotYi : slotYi - ssz / 2 - casePad - chargeGap;
+            const SR = CONFIG.PLATFORM.SLOT_RATE || {};
             const chargeRateText = this.add.text(rateX - 2, rateY, '', {
                 fontSize, fontFamily: CONFIG.FONT_FAMILY,
-                color: '#000000', fontStyle: CONFIG.FONT_WEIGHT,
-                stroke: '#FFFFFF', strokeThickness: 3,
+                color: SR.COLOR || '#ffffff', fontStyle: CONFIG.FONT_WEIGHT,
+                stroke: SR.STROKE || '#3a2a00',
+                strokeThickness: Math.max(1, Math.round((SR.STROKE_W !== undefined ? SR.STROKE_W : 3) * scale)),
             }).setOrigin(1, 0.5).setDepth(5).setVisible(false);
 
             const chargeRateBolt = this.add.image(rateX + 2, rateY, 'bolt')
@@ -1513,11 +1515,18 @@ console.log(
         // Tile-map mode: draw the authored grid and stop. No procedural land,
         // no dug canal, no auger — just the level's tiles.
         if (this.tileGrid) {
-            this._buildTileBand(seg, floorY);
-            // createTunnel points this.tunnel at whatever it just made. That is
-            // right for the FIRST level and wrong for every level built ahead of
-            // the machine, so control is handed straight back to the live one.
+            // WHICH LEVEL THIS IS, BEFORE ANYTHING IS BUILT. Everything the band
+            // puts up may want to know — the tally writes the level's name from
+            // it — and setting it after the build meant every one of them read
+            // undefined and fell back to 0. The tally said "Level 1" on every
+            // farm in the run.
             seg.levelIndex = idx;
+            this._buildTileBand(seg, floorY);
+            // The TUNNEL's copy has to wait: createTunnel makes it during the
+            // build above, so there is nothing to write to until now. It also
+            // points this.tunnel at whatever it just made — right for the FIRST
+            // level and wrong for every level built ahead of the machine, so
+            // control is handed straight back to the live one.
             if (seg.tunnel) seg.tunnel.levelIndex = idx;
             if (!this.active) { this.active = seg; this._focusDim(seg); }
             else { this.tunnel = this.active.tunnel; this._retireBore(seg); }
@@ -3819,22 +3828,27 @@ console.log(
         const yLine = band.bandTop - size0 / 2
                     - (G.LIFT !== undefined ? G.LIFT : 0.35) * g.tile;
 
-        // THE LEVEL'S NUMBER, at the far end of the same line — and built before
-        // the counts, because a level with nothing to gather still has a place
-        // in the run. It shares the tally's fade, so it is written here rather
-        // than anywhere else.
+        // THE LEVEL'S NAME, over the tally's left-hand end — built before the
+        // counts, because a level with nothing to gather still has a place in
+        // the run. It shares the tally's fade, so it is written here rather than
+        // anywhere else.
+        //
+        // Anchored by its BOTTOM-LEFT to the cells' top-left corner, so it sits
+        // on them however tall the type is and however many cells there are.
         const N = G.NUMBER || {};
         if (N.ENABLED !== false) {
             seg.goalLabel = this._addB(this.add.text(
-                    g.left + g.cols * g.tile - (N.MARGIN !== undefined ? N.MARGIN : 0.6) * g.tile,
-                    yLine, String((seg.levelIndex || 0) + 1), {
+                    g.left + (G.MARGIN !== undefined ? G.MARGIN : 0.5) * g.tile,
+                    yLine - size0 / 2 - (N.GAP !== undefined ? N.GAP : 0.12) * g.tile,
+                    (N.PREFIX !== undefined ? N.PREFIX : 'Level ') +
+                    ((seg.levelIndex || 0) + 1), {
                 fontSize: Math.max(9, Math.round((N.SIZE || 26) * s0)) + 'px',
                 fontFamily: CONFIG.FONT_FAMILY,
                 fontStyle: CONFIG.FONT_WEIGHT,
                 color: N.COLOR || '#ffffff',
                 stroke: N.STROKE || '#2b2013',
                 strokeThickness: Math.max(1, Math.round((N.STROKE_W || 4) * s0)),
-            }).setOrigin(1, 0.5)
+            }).setOrigin(0, 1)
               .setDepth((G.DEPTH !== undefined ? G.DEPTH : 4.2) + 0.002)
               .setAlpha(0), seg);
             seg.goalLabel._a = N.ALPHA !== undefined ? N.ALPHA : 0.9;
@@ -4402,21 +4416,19 @@ console.log(
         // ripen, he would otherwise pick it the instant it bore and the batch
         // would never mean anything to a farmer who happened to be in the right
         // place.
-        // COUNTED PER SIDE, because the two sides are two jobs. The canal is
-        // not a line on a field he can step over: getting to the other half
-        // costs a walk to the bridge and a walk back, so what is waiting over
-        // there has no bearing on whether it is worth crossing this half.
+        // WHAT IS STANDING, and how long the oldest of it has stood.
         //
-        // Counted BOTH ways, not just his own — the far side's batch is what
-        // decides whether crossing is worth it yet.
+        // owedHere/owedFar carry the plants yet to bear as well, because those
+        // decide when a SIDE is finished — without them he would call his half
+        // done, cross, and have to come back for a plant that was always going
+        // to ripen behind him.
+        const now = this.time.now;
         let owedHere = 0, owedFar = 0;   // standing fruit, plus plants yet to bear
-        const ready = [];                // ...of which these are pickable now
+        let oldest = 0;                  // ms the longest-standing has waited
+        const ready = [];                // ...what can be taken now
         for (const cr of seg.crops) {
             const fr = this._cropYield(cr);
             if (!fr) {
-                // A PLANT THAT HAS NOT BORNE YET still counts as work on that
-                // side. Without it he would call his side finished, cross for a
-                // ripe one, and have to come back for the plant behind him.
                 if (this._cropWillBear(cr)) {
                     if (sideOf(cr.sprite.x) === side) owedHere++; else owedFar++;
                 }
@@ -4424,29 +4436,34 @@ console.log(
             }
             const mine = sideOf(fr.x) === side;
             if (mine) owedHere++; else owedFar++;
+            const age = now - (cr.readyAt || now);
+            if (age > oldest) oldest = age;
             ready.push({ cr, mine, d: Math.hypot(fr.x - spr.x, fr.y - spr.y) });
         }
         const left = ready.length;    // holds the run open
-        let readyHere = 0, readyFar = 0;
-        for (const it of ready) { if (it.mine) readyHere++; else readyFar++; }
 
-        // A ROUND IS WORTH MAKING FOR A HANDFUL, not for one. He waits until
-        // BATCH are standing and then clears them together, rather than starting
-        // afresh on each fruit as it ripens — that reads as pacing.
+        // NOTHING RIPE STANDS LONGER THAN MAX_HOLD. The moment the oldest crosses
+        // it, the round is on — and it is on for EVERYTHING ripe, both sides,
+        // however recently it bore. One clock, one decision.
         //
-        // PER SIDE. A half with only three plants in it would otherwise wait
-        // forever on a fourth that was never coming, or wait on the other half's
-        // crop ripening — which it cannot use, since it would have to cross to
-        // reach it and cross back. Each half is judged on what it holds.
+        // This replaced a count: wait until four are ready. A count has to be
+        // rescued from itself — a half with three plants would wait forever on a
+        // fourth that was never coming, so it needed a per-side tally and a tail
+        // exemption and a rule for the far side, and each of those was a way for
+        // the field to stall. A clock cannot stall, because time arrives on its
+        // own. All of that is gone.
         //
-        // The tail exemption is per side too: once a half has fewer than BATCH
-        // outstanding at all, no batch will form there, so he takes what there
-        // is. That is what clears the last three of a field, and it is also what
-        // stops a short side stranding the level.
-        const batch = HV.BATCH !== undefined ? HV.BATCH : 4;
-        const goHere = readyHere > 0 && (readyHere >= batch || owedHere < batch);
-        const goFar  = readyFar  > 0 && (readyFar  >= batch || owedFar  < batch);
-        const go = goHere || goFar;
+        // Anything ripening DURING a round joins it immediately: `ready` is
+        // rebuilt every frame and the round is already on, so there is no list
+        // to add to.
+        //
+        // THE LAST OF THE FIELD DOES NOT WAIT. When nothing is still to ripen,
+        // the hold is buying nothing — there is no one else coming to join them,
+        // and every second of it is a farmer standing beside the final fruit of
+        // his farm with the level held open behind him.
+        const hold = HV.MAX_HOLD_MS !== undefined ? HV.MAX_HOLD_MS : 5000;
+        const more = (owedHere + owedFar) - left;   // plants yet to bear
+        const go = left > 0 && (oldest >= hold || more === 0);
 
         // 2. NOTHING RIPE RIGHT NOW. He starts on the first fruit of the field
         //    and works as it comes, so he catches up with the crop and then has
@@ -4476,12 +4493,10 @@ console.log(
             return;
         }
 
-        // THE ROUND IS ON — but only for the side whose round it is. A fruit on
-        // a half that is still waiting for its batch is not his yet, even if he
-        // happens to be standing beside it mid-crossing.
+        // THE ROUND IS ON, for everything ripe on either side. Nearest first,
+        // and his own half before the other — see below.
         let near = null, nd = Infinity, far = null, fd = Infinity;
         for (const it of ready) {
-            if (!(it.mine ? goHere : goFar)) continue;
             if (it.d <= reach) {
                 if (this._pickFruit(seg, it.cr) && it.mine) owedHere--;
                 continue;
@@ -4490,13 +4505,23 @@ console.log(
             else if (it.d < fd) { fd = it.d; far = it.cr; }
         }
 
-        // HIS OWN SIDE FIRST, and not merely nearest-first: he crosses only when
-        // there is nothing left over here AT ALL — no standing fruit and no
-        // plant still to bear one. Crossing for whatever happens to be closest
-        // would have him over the bridge and back for a plant that was always
-        // going to ripen behind him, and the crossing is the one move that costs
-        // something to watch.
-        if (!near && !owedHere) { near = far; nd = fd; }
+        // HIS OWN SIDE FIRST — but only over what is RIPE there, not over what
+        // might be one day.
+        //
+        // This used to refuse to cross while his half held any plant still to
+        // bear, on the reasoning that crossing and coming back is the expensive
+        // move. On a field whose patches ripen in turn that was a deadlock: the
+        // right-hand patch stood picked-ready while the left still had a third
+        // patch coming, so he waited on his own side for a crop that was not his
+        // problem, and the right-hand fruit sat far past the five seconds
+        // nothing is supposed to stand for.
+        //
+        // The clock is what decides that a round happens at all; where the fruit
+        // is cannot be allowed to overrule it. So: nearest ripe on this side,
+        // and if there is none, the nearest ripe anywhere. A crossing once begun
+        // is seen through (f.crossTo), which is what stops him dithering at the
+        // bridge when his own side ripens behind him.
+        if (!near) { near = far; nd = fd; }
 
         // 2b. NOTHING TO SET OUT FOR — everything ready was in reach and has
         //     just been taken, or the only one left is across the bridge and
@@ -5595,6 +5620,11 @@ console.log(
                     }
                     if (st >= stages) {
                         cr.done = true;
+                        // WHEN ITS YIELD CAME UP — the clock the harvest runs
+                        // on. Set here rather than where the fruit sprite is
+                        // made, because a root never makes one and is ready at
+                        // exactly this moment too.
+                        cr.readyAt = this.time.now;
                         // THE FIRST GROWN PLANT PUTS HIM TO WORK. Keyed to the
                         // stage and not to a fruit appearing, or a field of
                         // roots — which never draw one — would never start a
@@ -6649,7 +6679,17 @@ console.log(
                 color: PL.COLOR || '#ffffff', fontStyle: CONFIG.FONT_WEIGHT,
                 stroke: PL.STROKE || '#1d2b16',
                 strokeThickness: Math.max(1, Math.round((PL.STROKE_W || 5) * sL)),
-            }).setOrigin(1, 0.5).setDepth(PL.DEPTH !== undefined ? PL.DEPTH : 3.2), seg);
+            }).setOrigin(1, 0.5)
+              // BORN DARK. Each level builds its own readout, and a fresh one at
+              // full alpha shows its opening figure for as long as the fade
+              // takes to pull it down — so handing the rig to an unlit level
+              // flashed that level's full price across the screen before hiding
+              // it. It comes up only when its own farm takes the light.
+              .setAlpha(PL.ONLY_WHEN_LIT !== false ? 0 : 1)
+              .setDepth(PL.DEPTH !== undefined ? PL.DEPTH : 3.2), seg);
+            // ...and it knows it is dark, so the first lit-check does not tween
+            // from nothing to nothing.
+            this.tunnel.labelLit = PL.ONLY_WHEN_LIT === false;
         }
         // Built after the object exists: a dam is positioned against the dig's
         // own length and its flood grid, both of which are on the tunnel.
@@ -7089,12 +7129,20 @@ console.log(
             if (dropped) {
                 this._showWorkDrop(tn, drop);
                 const P = CONFIG.PLATFORM;
-                this.tweens.killTweensOf(tn.workLabel);
+                // STOP ONLY THE PREVIOUS PULSE, never every tween on the label.
+                // killTweensOf takes ALL of them, and the label also carries the
+                // fade that brings it in when its level takes the light — so a
+                // battery tick landing during that fade killed it wherever it had
+                // reached and left the readout permanently half-lit. The pulse
+                // is the only tween this beat owns, so it is the only one it
+                // may stop.
+                if (tn.pulseTw) tn.pulseTw.stop();
                 tn.workLabel.setScale(1);
-                this.tweens.add({
+                tn.pulseTw = this.tweens.add({
                     targets: tn.workLabel, scale: 1.16,
                     duration: P.BATTERY_PULSE_DURATION,
                     yoyo: true, ease: 'Sine.easeInOut',
+                    onComplete: () => { tn.pulseTw = null; },
                 });
             }
         }
@@ -7111,9 +7159,14 @@ console.log(
         const PL = CONFIG.ROAD.TILEMAP.POWER_LABEL || {}, D = PL.DROP || {};
         if (D.ENABLED === false || !(drop > 0) || !tn.workLabel || !tn.workLabel.scene) return;
         const lab = tn.workLabel;
-        // Not while the readout itself is hidden — before the dig starts, and
-        // after breakthrough. A figure flying off nothing explains nothing.
-        if (!lab.visible) return;
+        // Not while the readout itself is hidden — before the dig starts, after
+        // breakthrough, or while its level is in shade. A figure flying off
+        // nothing explains nothing, and one flying off a shaded field is exactly
+        // the attention this is kept away from.
+        if (!lab.visible || lab.alpha < 0.5) return;
+        // ...nor over the arrival ramp, which is already showing a falling
+        // number for a different reason. Two of them at once reads as one.
+        if (tn.catchUp) return;
         const s    = this.layoutConfig.scale;
         const tile = (tn.flood && tn.flood.g) ? tn.flood.g.tile
                    : (this.tileGrid ? this.tileGrid.tile : 40);
@@ -7385,7 +7438,13 @@ console.log(
         // batteries delivered; where the machine is capped and some power is
         // going to waste, this still reaches zero at the moment the dig ends,
         // which a readout claiming to be the job left has to do.
-        if (tn.workLeft === undefined) tn.workLeft = this._digWorkRemaining(tn);
+        if (tn.workLeft === undefined) {
+            tn.workLeft = this._digWorkRemaining(tn);
+            // WHAT THE WHOLE LEVEL COSTS, kept — the first value is the total by
+            // definition, and there is nowhere else it survives once the digging
+            // starts eating it.
+            tn.workTotal = tn.workLeft;
+        }
         tn.workLeft = Math.max(0, tn.workLeft - hard * (step / gTile));
 
         // The face climbs from the mouth the machine started at.
@@ -7422,10 +7481,49 @@ console.log(
             // frame; the DISPLAY only steps once a second, on the battery tick,
             // so the number lands as one visible hit rather than blurring.
             if (tn.workShown === undefined) tn.workShown = tn.workLeft;
+            // ARRIVING AT THE FULL PRICE. While the catch-up runs, the display
+            // is a ramp from what the level cost to what is left of it, rather
+            // than the once-a-second figure — so the player reads the level's
+            // price first and watches the digging already done come off it.
+            //
+            // Recomputed every frame against the LIVE workLeft, not against a
+            // value captured when the ramp began: the rig is still cutting
+            // through it, and a ramp to a stale target would land on a number
+            // that was already wrong.
+            let shown = tn.workShown;
+            if (tn.catchUp) {
+                const total = tn.workTotal !== undefined ? tn.workTotal : tn.workLeft;
+                shown = total + (tn.workLeft - total) * tn.catchUp.t;
+            }
             tn.workLabel.setVisible(true)
-                .setText(this._bigNum(tn.workShown))
+                .setText(this._bigNum(shown))
                 .setPosition(b.x - b.rigW * (0.5 + (PL.X !== undefined ? PL.X : 0.4)),
                              faceY + (PL.Y || 0) * gTile);
+            // SHOWN ONLY WHILE ITS OWN LEVEL IS LIT. Faded, not blinked, and on
+            // the dim's timing so the number arrives with the light.
+            //
+            // Alpha rather than visibility, because the battery tick's pulse is
+            // a tween on this same object: killing tweens to swap visibility
+            // would kill that too, where a second tween on a different property
+            // simply runs alongside it.
+            if (PL.ONLY_WHEN_LIT !== false) {
+                const lit = (tn.flood && tn.flood.seg) === this._dimmedSeg;
+                if (tn.labelLit !== lit) {
+                    tn.labelLit = lit;
+                    const D = CONFIG.ROAD.TILEMAP.DIM || {};
+                    this.tweens.add({ targets: tn.workLabel, alpha: lit ? 1 : 0,
+                        duration: D.FADE_MS !== undefined ? D.FADE_MS : 420,
+                        ease: 'Sine.easeOut' });
+                    // COMING INTO THE LIGHT: show the price, then spend it down.
+                    const ms = PL.CATCHUP_MS !== undefined ? PL.CATCHUP_MS : 1100;
+                    if (lit && ms > 0 && tn.workTotal > tn.workLeft) {
+                        tn.catchUp = { t: 0 };
+                        this.tweens.add({ targets: tn.catchUp, t: 1, duration: ms,
+                            ease: 'Cubic.easeOut',
+                            onComplete: () => { tn.catchUp = null; } });
+                    }
+                }
+            }
         }
         // The soil strip in the wake is no longer shown — the ditch sprite is
         // what gets uncovered as the grass recedes. (The cut sprite is kept only
@@ -7453,6 +7551,16 @@ console.log(
         // `flooding` is set at breakthrough and is the only thing that lifts the
         // hold. Everything downstream — branches, crops, ponds, foam, the bank
         // streaks — keys off the waterline, so freezing it here is all it takes.
+        // THE LEVEL BELOW IS STILL BEING WATCHED. A tunnel's water is dammed
+        // until the farm under it has finished — otherwise the machine, which no
+        // longer waits for anything, would water the next field while the player
+        // is still watching the last one come in: two farms filling, two sets of
+        // crops growing, the farmer of one gathering while the other is sown.
+        //
+        // Only the WATER is held. The blade digs on, so the charge the player
+        // feeds is never spent on waiting — it buys a canal that floods the
+        // moment the field below is done.
+        if (tn.waterHold) return;
         if (this._waterHeld() && !tn.flooding) {
             // A MID-LEVEL DAM is standing: the hold is partial, not total. The
             // water is let up to the wall and stops there, so everything that
@@ -7771,6 +7879,9 @@ console.log(
         const next = nextSeg && nextSeg.tunnel;
         // Hold the MACHINE, the CAMERA, or neither, while this field comes in.
         if (C.HOLD_MACHINE_FOR_CROPS && next) next.ready = false;
+        // camHold no longer decides anything about the view — the camera is the
+        // level's, always — but it is still the flag other things read to know a
+        // field is being completed.
         if (C.HOLD_CAMERA_FOR_CROPS) E.camHold = true;
         E.held = true;
         const wait = () => {
@@ -7851,8 +7962,15 @@ console.log(
                     this._panToLevel(nextSeg, () => {
                         E.held = false;
                         E.camHold = false;
-                        E.focusY  = undefined;
-                        if (next) next.ready = true;
+                        if (next) {
+                            next.ready = true;
+                            // AND ITS WATER IS LET GO. The farm below is
+                            // finished and the view is on this one, so the canal
+                            // the machine has been cutting all this time floods
+                            // at last — it may be most of a level long by now,
+                            // which is the reward for the charge that dug it.
+                            next.waterHold = false;
+                        }
                     });
                 });
             };
@@ -8076,6 +8194,12 @@ console.log(
         // rig while the field below comes in keeps it dormant, and _finishStretch
         // re-arms it when that field is done.
         next.tunnel.ready = !(CONFIG.ROAD.ENDLESS || {}).HOLD_MACHINE_FOR_CROPS;
+        // ITS WATER IS DAMMED UNTIL THE FARM BELOW IS IN. The handover happens
+        // the moment the water reaches the boundary, which is the START of the
+        // level below's completion — its crops have not grown, its farmer has
+        // not gathered, its icon has not flown. Let this level fill now and the
+        // two farms would come in on top of each other.
+        next.tunnel.waterHold = (CONFIG.ROAD.ENDLESS || {}).QUEUE_WATER !== false;
         // The roster names the block being worked, so it turns over here — after
         // the finished field's icon has landed, not while it is still in flight.
         this._setRosterLabel(next.levelIndex || 0);
@@ -8123,54 +8247,43 @@ console.log(
     _followMachine(dtMs) {
         const E = this.endless;
         if (!E || !this.camB) return;
-        const tn = this.tunnel;
-        if (!tn) return;
         const C = CONFIG.ROAD.ENDLESS || {};
         const view = this.camB.height;
-        const frac = C.FOLLOW_TOP !== undefined ? C.FOLLOW_TOP : 0.34;
-        const cutY = tn.entryY - tn.progressPx;            // the machine's cut line
-        // Highest the machine may sit before the camera answers.
-        // While a finished field is coming in the camera stays on it and lets the
-        // machine carry on above — but only until the rig nears the top edge.
-        // A camera that falls a long way behind has to sprint to catch up, and a
-        // camera sprinting upward drags the world down the screen, which the eye
-        // reads as the machine reversing. Giving way early means there is never
-        // anything to catch up on.
-        const edge = E.camHold ? (C.HOLD_EDGE !== undefined ? C.HOLD_EDGE : 0.08)
-                               : frac;
-        const rigWant = cutY - view * edge;
-        // PANNING ON TO THE NEXT FARM. Its middle, on the middle of the screen —
-        // and the machine keeps a veto, because its demand is a CEILING on
-        // scrollY (it must not climb out of the top of the frame). The smaller
-        // of the two wins, so the soft HOLD_EDGE rule still gives way exactly as
-        // before if the rig is somewhere the pan would strand it.
-        const panning = E.focusY !== undefined;
-        const want = panning ? Math.min(E.focusY - view / 2, rigWant) : rigWant;
-        // STILL UPWARD ONLY. The camera climbs and never retreats: dropping back
-        // drags the world up the screen and reads as the dig losing ground. A
-        // pan that would need to go down is already close enough — see _panToLevel.
-        if (want < this.camB.scrollY) {
+
+        // THE CAMERA BELONGS TO THE LEVEL, NOT THE MACHINE.
+        //
+        // It sits on the farm being completed, centred, and does not move until
+        // that farm is done — then it settles on the next one. The rig may run
+        // clean off the top of the frame while it does, and that is the point:
+        // holding the machine to keep it in shot was spending the player's
+        // charge on waiting, and charge is the one thing they actually supply.
+        //
+        // What used to be here chased the cut line and kept it FOLLOW_TOP down
+        // the screen, with a hold that gave way as soon as the rig neared the
+        // edge. All of that existed to keep the machine framed; nothing does
+        // now, so the framing rules, the catch-up cap and the never-retreat rule
+        // go with it. The camera moves in exactly one circumstance — a level
+        // finished — and it is the only thing that moves it.
+        // NOTHING TO LOOK AT YET IS NOT THE SAME AS LEVEL 1. The opening shot
+        // is framed at boot to hold the lake AND the first farm, and centring
+        // level 1 would pull the view down onto the lake's empty bottom — there
+        // is no far bank down there, only water running off the screen. So the
+        // camera has no subject until the first level finishes, and simply keeps
+        // the framing it was given.
+        const seg = E.camSeg;
+        if (!seg || seg.midY === undefined) { this._fillViewport(); this._reapSegments(); return; }
+        const want = seg.midY - view / 2;
+        const gap  = want - this.camB.scrollY;
+        // UPWARD ONLY, always. The world is built upward and the run only ever
+        // climbs; a camera that dropped back would drag the world up the screen
+        // and read as losing ground. A target below where it already sits is
+        // simply already satisfied.
+        if (gap < -0.05) {
             const dt = dtMs / 1000;
-            const k  = 1 - Math.exp(-dt * (panning
-                        ? (C.FOCUS_LERP !== undefined ? C.FOCUS_LERP : 1.8)
-                        : (C.FOLLOW_LERP || 2.2)));
-            let move = (want - this.camB.scrollY) * k;          // negative: upward
-            // NEVER OUTRUN THE MACHINE. The camera moving up drags the world down
-            // the screen, so any moment it travels faster than the rig, the rig
-            // looks like it is reversing. Capping it just above the machine's own
-            // pace means framing is reclaimed gradually and nothing ever appears
-            // to lose ground — which matters most right after a hold, where a
-            // quarter of a screen has to be won back.
-            const tile = (tn.flood && tn.flood.g) ? tn.flood.g.tile : 0;
-            const rig  = Math.abs(tn.travel || 0) * tile;        // px/sec
-            const cap  = rig * (C.CATCHUP !== undefined ? C.CATCHUP : 1.15) * dt;
-            // Only ever caps the CLIMB. Settling down onto a finished field has
-            // no machine to outrun — the rig is parked — and the ease alone is
-            // what makes it gentle.
-            if (move < 0 && cap > 0 && -move > cap) move = -cap;
-            this.camB.scrollY += move;
+            const k  = 1 - Math.exp(-dt * (C.FOCUS_LERP !== undefined ? C.FOCUS_LERP : 1.8));
+            this.camB.scrollY += gap * k;
         }
-        if (panning) this._checkPan(want, dtMs);
+        this._checkPan(dtMs);
         this._fillViewport();
         this._reapSegments();
     }
@@ -8186,8 +8299,17 @@ console.log(
         if (C.FOCUS_NEXT === false || !E || !this.camB || !seg || seg.midY === undefined) {
             done(); return;
         }
-        if (seg.midY - this.camB.height / 2 >= this.camB.scrollY) { done(); return; }
-        E.focusY  = seg.midY;
+        // THE CAMERA'S SUBJECT, from here on. It is the only thing that moves
+        // the view, and it changes exactly once a level.
+        const had = E.camSeg;
+        E.camSeg = seg;
+        // ALREADY THERE. Either it was the subject anyway, or its middle is at
+        // or below the current view — which the upward-only rule means is as
+        // close as the camera will ever get. Waiting would just burn the pan's
+        // timeout before the handover.
+        if (had === seg || seg.midY - this.camB.height / 2 >= this.camB.scrollY) {
+            done(); return;
+        }
         E.panDone = done;
         E.panT    = 0;
     }
@@ -8195,17 +8317,17 @@ console.log(
     // Is the pan there yet? Called with the target the camera is actually
     // working to, which may be the machine's ceiling rather than the level's
     // middle — a pan that cannot reach its mark must still finish.
-    _checkPan(want, dtMs) {
+    _checkPan(dtMs) {
         const C = CONFIG.ROAD.ENDLESS || {}, E = this.endless;
-        if (!E || E.focusY === undefined || !E.panDone) return;
+        if (!E || !E.panDone || !E.camSeg || E.camSeg.midY === undefined) return;
         E.panT = (E.panT || 0) + (dtMs || 16);
+        const want = E.camSeg.midY - this.camB.height / 2;
         const near = C.FOCUS_NEAR !== undefined ? C.FOCUS_NEAR : 6;
         const cap  = C.FOCUS_MAX_MS !== undefined ? C.FOCUS_MAX_MS : 2500;
         if (Math.abs(this.camB.scrollY - want) > near * this.layoutConfig.scale
                 && E.panT < cap) return;
         const done = E.panDone;
         E.panDone = null;
-        E.focusY  = undefined;
         done();
     }
 

@@ -537,12 +537,21 @@ var CONFIG = {
             ENABLED: true,
             GAP:     14,        // out from the case's terminal (px @ design)
             SIZE:    30,        // font size @ design scale
-            COLOR:      '#ffe07a',
+            COLOR:      '#ffffff',
             STROKE:     '#3a2a00',
             STROKE_W:   4,
             PULSE:   1.18,      // grows this much on each battery tick, in step
                                 // with the individual battery icons — the whole
                                 // supply chain flashing on the same beat
+        },
+        // The rate on each slot. Was black type on a white outline — the one
+        // place in the game that ran that way round — which put it at odds with
+        // the sum beside it and with every other readout. White on dark, like
+        // the rest.
+        SLOT_RATE: {
+            COLOR:    '#ffffff',
+            STROKE:   '#3a2a00',
+            STROKE_W: 3,
         },
         SLOT_LABEL_W: 46,              // width reserved for a charge-rate label
                                        // (px @ design). PORTRAIT ONLY: the
@@ -1054,9 +1063,11 @@ var CONFIG = {
                 // ground being spared — it is the level below's things being let
                 // alone.
                 //
-                // Tall enough for the tallest of them. The farmer is the tallest
-                // at SIZE 1.9 with his feet 0.85 down the sprite, so he reaches
-                // ~1.6 tiles above the row he stands in.
+                // Tall enough for the tallest of them. That is now the TALLY,
+                // not the farmer: its cells sit LIFT (0.35) above the line and
+                // stand SIZE (1.05) tall, with the level's name and its own gap
+                // over that again — a shade past two tiles. The farmer's 1.6 is
+                // second.
                 //
                 // ONLY THE ONE BOUNDARY. This is spared at the foot of the level
                 // DIRECTLY ABOVE the lit one, and nowhere else. Sparing it on
@@ -1065,7 +1076,7 @@ var CONFIG = {
                 // separate panels instead of one unlit world with a farm cut out
                 // of it. Every other boundary is a dimmed level meeting a dimmed
                 // level, where there is nothing to spare and nothing to see.
-                BOTTOM_TILES: 1.7,
+                BOTTOM_TILES: 2.2,
                 // ABOVE EVERYTHING IN THE WORLD, actors included. The shade
                 // falls on the whole farm — its crops, its animals, its farmer —
                 // or the field dims while the things living in it stay lit,
@@ -1418,24 +1429,29 @@ var CONFIG = {
                 // being picked.
                 HARVEST: {
                     ENABLED:  true,
-                    // HOW MANY RIPE FRUIT ARE WORTH SETTING OUT FOR. Below this
-                    // he waits: a walk across the field for one fruit, then back
-                    // for the next as it ripens, reads as pacing rather than as
-                    // working. He gathers a handful in one round instead.
+                    // HOW LONG RIPE FRUIT MAY STAND. The moment the oldest
+                    // crosses this, the round is on — and it is on for
+                    // everything ripe, both sides, however recently it bore.
                     //
-                    // It gates the PICKING as well as the walking. In-reach was
-                    // exempt at first, on the grounds that this decides when he
-                    // moves and not what he may take — but a farmer standing
-                    // beside the first plant to ripen then took it the instant
-                    // it bore, and the batch meant nothing to whoever happened
-                    // to be in the right place. The round starts when the field
-                    // is ready for one.
+                    // A CLOCK, NOT A COUNT. This was "wait until four are ready",
+                    // and a count has to be rescued from itself at every turn: a
+                    // half with three plants waits forever on a fourth that is
+                    // never coming, so it needed a per-side tally, and a tail
+                    // exemption, and a rule for the far side — each one a way for
+                    // the field to stall and the level to hang. Time arrives on
+                    // its own and none of that is needed.
                     //
-                    // The tail of the field is exempt. Once fewer than this are
-                    // outstanding there will never be a batch, and holding out
-                    // for one would strand the last few and leave the level
-                    // unable to end.
-                    BATCH:    4,
+                    // It gates the PICKING as well as the walking, in-reach
+                    // included. Otherwise a farmer who happened to be standing
+                    // beside the first plant to ripen took it the instant it
+                    // bore, and the rule meant nothing to whoever was in the
+                    // right place.
+                    //
+                    // The one exemption is the end of the field: with nothing
+                    // still to ripen the hold buys nothing, so the last of the
+                    // crop is taken at once rather than holding the level open
+                    // for five more seconds.
+                    MAX_HOLD_MS: 5000,
                     REACH:    1.15,   // tiles — what comes off in passing
                     SPEED_MUL: 2.4,   // faster than his wander; he has a job on
                     // A crossing that has not finished in this long is not
@@ -1576,6 +1592,26 @@ var CONFIG = {
                 // until the actor band moved from 3 to 4 to lift animals over
                 // the main canal. Crops have been drawn across it since.
                 DEPTH:   4.6,
+
+                // ONLY ON THE LIT FARM. The rig no longer waits for a field to
+                // come in, so it spends most of its time cutting the level
+                // ABOVE the one being watched — and a number ticking down in a
+                // shaded field pulls the eye off the farm the beat belongs to.
+                // Worse, it is the only thing on screen that moves during the
+                // completion, so it wins.
+                //
+                // It fades rather than blinks, on the dim's own timing, so the
+                // readout arrives with the light on its level.
+                ONLY_WHEN_LIT: true,
+
+                // AND IT ARRIVES AT THE LEVEL'S FULL PRICE, then runs down to
+                // what is actually left. By the time a farm takes the light the
+                // rig has usually been cutting it for a while unseen — the
+                // readout would otherwise fade in at 1600 for a level that costs
+                // 2000, and 1600 means nothing on its own. Showing 2000 first
+                // and running it down says both things at once: what this level
+                // is worth, and how much of it is already done.
+                CATCHUP_MS: 1100,
 
                 // ── THE HIT, spelled out ────────────────────────────────
                 // The number drops once a second and the label pulses, but the
@@ -1856,7 +1892,7 @@ var CONFIG = {
                 GAP:       0.08,     // between cells, in tiles
                 MARGIN:    0.5,      // from the map's left edge, in tiles
                 LIFT:      0.35,     // clear of the boundary line, in tiles
-                COLOR:      0xfffdf6, ALPHA: 1,
+                COLOR:      0xfffdf6, ALPHA: 0.9,
                 DONE_COLOR: 0xc9d8b6,          // when its last one is in
                 STROKE_COLOR: 0x5c4a33, STROKE_ALPHA: 0.85, STROKE_W: 2,
                 RADIUS:    0.18,     // corner rounding, as a share of the side
@@ -1902,23 +1938,23 @@ var CONFIG = {
                 // roster gives position WITHIN a block — five slots, filling —
                 // and the block name says what the block is; neither counts.
                 //
-                // DIGITS ALONE, no "Level". A numeral reads the same in every
-                // language the game will ever ship in, and the word in front of
-                // it would be the first English on screen.
+                // ABOVE THE TALLY, on its left, over the same left margin the
+                // cells start from — so the name of the thing sits over the
+                // thing, and the two read as one block belonging to this farm
+                // rather than as two marks at opposite ends of a line.
                 //
-                // At the FAR END of the same boundary line the tally sits on:
-                // the counts are left-aligned there and the rest of the line is
-                // empty, so the two share a rule without crowding, and both
-                // belong to the farm rather than to the screen. It comes up and
-                // goes with the light, like the tally, so only ever one shows.
+                // It comes up and goes with the light, like the tally, so only
+                // ever one is on screen.
                 NUMBER: {
                     ENABLED: true,
-                    SIZE:    26,        // px @ design scale
+                    PREFIX: 'Level ',   // the word, in one place — empty it and
+                                        // a bare numeral is left
+                    SIZE:    15,        // px @ design scale
                     COLOR:  '#ffffff',
                     STROKE: '#2b2013',
                     STROKE_W: 4,
-                    MARGIN:  0.6,       // from the map's right edge, in tiles
-                    ALPHA:   0.9,
+                    GAP:     0.12,      // above the cells, in tiles
+                    ALPHA:   0.95,
                 },
             },
 
@@ -1943,11 +1979,10 @@ var CONFIG = {
             CROP_HARVEST: {
                 ENABLED:   true,
                 // A fruit is not picked the instant it appears — but nothing
-                // here enforces that any more. FARMER.HARVEST.BATCH does it by
-                // itself: he waits until a handful are ready before setting out,
-                // so fruit stands on the plant for as long as it takes the rest
-                // of the batch to arrive. A timer on top of that was two rules
-                // holding the same door shut.
+                // here enforces that any more. FARMER.HARVEST.MAX_HOLD_MS does
+                // it from the other end: a fruit stands until the oldest on the
+                // farm has waited its five seconds, which is the same delay
+                // expressed once, in the place that decides when he works.
                 RISE:      1.2,        // how far it lifts, in tiles. Well clear
                                        // of the plant it came off: at half a
                                        // tile the yield fades out still level
@@ -2985,18 +3020,27 @@ var CONFIG = {
             // a second the machine covers 18 tiles in that time against 6.7
             // tiles of headroom. It leaves the view after under four seconds.
             //
-            // THE MACHINE HOLDS, because under LEVEL_MODE 'FOLLOW' it has no
-            // reason not to. The blade and the water now arrive at the boundary
-            // together and the level is finished; digging on from there would be
-            // cutting the NEXT level while this one's field is still coming in,
-            // and the completion beat — the branches filling, the crops topping
-            // out, the light moving on, the icon flying to the roster — would be
-            // playing behind a machine that had already left it.
+            // THE MACHINE DOES NOT WAIT. It was held so the completion beat
+            // would not play behind a rig that had already left — but holding it
+            // spends the player's charge on standing still, and charge is the
+            // one thing they actually supply. Now it digs on, off the top of the
+            // frame if the batteries keep coming.
             //
-            // The camera hold below then costs nothing: with the rig parked
-            // there is nothing for it to climb out of view.
-            HOLD_MACHINE_FOR_CROPS: true,   // the rig waits for its field
-            HOLD_CAMERA_FOR_CROPS:  true,   // and the view stays on it
+            // WHAT WAITS INSTEAD IS THE WATER (QUEUE_WATER below). That was the
+            // real reason to hold the rig: dry cut hurts nothing, but water
+            // reaching the next field starts its crops, and two farms coming in
+            // at once means watching neither. So the blade runs free and the
+            // canal behind it stays dry until the farm below is finished.
+            //
+            // The camera does not follow the machine at all any more — see
+            // _followMachine — so neither of these decides framing.
+            HOLD_MACHINE_FOR_CROPS: false,  // the rig digs on
+            HOLD_CAMERA_FOR_CROPS:  true,   // (the view is the level's regardless)
+
+            // Each level's water is dammed until the level below it has finished
+            // being watched. Off, the canals fill as they are cut and farms
+            // complete on top of one another.
+            QUEUE_WATER: true,
 
             // ── MOVING ON ───────────────────────────────────────────────
             // When the farm is finished — gathered, tallied, its icon in the
