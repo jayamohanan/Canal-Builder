@@ -260,12 +260,24 @@ class GameScene extends Phaser.Scene {
             // between the battery and the panel, and their width is reserved
             // here rather than discovered later.
             const labelW = (P.SLOT_LABEL_W || 46) * scale;
+            // The break between the grid and the battery, a share of a cell.
+            const panelGap = (P.PORTRAIT_PANEL_GAP !== undefined
+                                ? P.PORTRAIT_PANEL_GAP : 0.25) * cellSize;
             slotSize     = Math.max(8, Math.min(cellSize,
-                                    margin - designEdgePad * scale - caseW - labelW));
-            // Hard against the left edge, so every px the panel does not want is
-            // left on the label side rather than split uselessly in two.
+                                    margin - panelGap - caseW - labelW));
+            // AGAINST THE PANEL, not against the screen. The battery belongs to
+            // the grid it feeds, so it stands beside it and the labels take the
+            // slack out at the edge — the other way round left it marooned on
+            // the rim with a strip of nothing between it and the game.
+            //
+            // The width it needs is the same either way, so nothing above
+            // changes: the margin still has to hold the edge gap, the battery
+            // and the labels, only in a different order.
             slotRowCenterY = panelCenterY;
-            slotCenterX    = partA.x + designEdgePad * scale + (slotSize + caseW) / 2;
+            const onRight  = (P.PORTRAIT_SIDE || 'right') !== 'left';
+            const dir      = onRight ? 1 : -1;
+            const panelEdge = partA.x + (partA.width + dir * panW) / 2;
+            slotCenterX    = panelEdge + dir * (panelGap + (slotSize + caseW) / 2);
         } else {
             const designRowTop = 6 + designSlotLabel + designCasePad;      // under the label
             const designRowBot = designPanelCY - designPanH / 2 - 8 - designCasePad;
@@ -324,7 +336,8 @@ class GameScene extends Phaser.Scene {
                 // the sprite is placed at yOff and the text at yOff + tOff.
                 tOff: Math.round(textC - battC),
                 text: Math.max(8, Math.round(textH /
-                        (MB.LINE !== undefined ? MB.LINE : 1.28))) + 'px',
+                        (MB.LINE !== undefined ? MB.LINE : 1.28) *
+                        (MB.TEXT_SCALE !== undefined ? MB.TEXT_SCALE : 1))) + 'px',
             };
         };
         // TWO BOXES, NOT ONE. A grid cell and a charging slot are the same size
@@ -840,15 +853,35 @@ console.log(
             const TC = P.TOTAL_CHARGE || {};
             if (TC.ENABLED !== false) {
                 const gap = sp(TC.GAP || 14);
+                // OFF THE TERMINAL END, both ways round. Landscape puts it past
+                // the node to the east; portrait now puts it ABOVE the cap
+                // rather than under the battery's foot — the terminal is the end
+                // the charge comes out of, and a figure hanging below the case
+                // read as a caption for the thing rather than as its output.
                 this.totalChargeText = this.add.text(
                     vert ? left + w / 2 : left + w + sp(CS.NODE_GAP || 0) + nodeL + gap,
-                    vert ? top + h + gap : top + h / 2, '', {
+                    vert ? top - sp(CS.NODE_GAP || 0) - nodeL - gap : top + h / 2, '', {
                         fontSize: Math.max(9, Math.round((TC.SIZE || 30) * scale)) + 'px',
                         fontFamily: CONFIG.FONT_FAMILY,
                         color: TC.COLOR || '#ffe07a', fontStyle: CONFIG.FONT_WEIGHT,
                         stroke: TC.STROKE || '#3a2a00',
                         strokeThickness: Math.max(1, Math.round((TC.STROKE_W || 4) * scale)),
-                    }).setOrigin(vert ? 0.5 : 0, vert ? 0 : 0.5).setDepth(5);
+                    // Anchored by its BOTTOM in portrait, so the gap is measured
+                    // from the cap to the type and does not change with the
+                    // figure's height.
+                    }).setOrigin(vert ? 0.5 : 0, vert ? 1 : 0.5).setDepth(5);
+                // ...and the icon that names it, laid out beside the figure in
+                // _placeTotalCharge — which has to run again on every change,
+                // because the pair is centred as a group and the figure's width
+                // moves with the number.
+                if (TC.BOLT !== false) {
+                    this.totalChargeBolt = this.add.image(0, 0, 'bolt')
+                        .setDisplaySize(sp(TC.BOLT_SIZE || 26), sp(TC.BOLT_SIZE || 26))
+                        .setOrigin(0, 0.5).setDepth(5).setVisible(false)
+                        .setTint(0xFFFF00);
+                    this.totalChargeVert = vert;
+                }
+                this._placeTotalCharge();
             }
 
             // ── The machine, ghosted inside the battery ───────────────────────
@@ -922,20 +955,36 @@ console.log(
             // its cell; portrait cannot — above is the next cell — so it goes
             // beside, in the strip the layout reserved for it. Either way it is
             // the same text-then-bolt pair, just centred somewhere else.
-            const rateX = vert ? slotX + ssz / 2 + casePad + labelW / 2 : slotX;
+            // ...on the OUTER side of the battery, away from the grid. The
+            // battery hugs the panel, so the strip left over is the one between
+            // it and the screen edge, and that is where the labels go.
+            const outward = (P.PORTRAIT_SIDE || 'right') !== 'left' ? 1 : -1;
+            const rateX = vert ? slotX + outward * (ssz / 2 + casePad + labelW / 2) : slotX;
             const rateY = vert ? slotYi : slotYi - ssz / 2 - casePad - chargeGap;
             const SR = CONFIG.PLATFORM.SLOT_RATE || {};
-            const chargeRateText = this.add.text(rateX - 2, rateY, '', {
+            // WITH NO BOLT, THE NUMBER TAKES THE WHOLE STRIP. The pair used to
+            // straddle rateX — figure right-aligned to its left, icon left-
+            // aligned to its right — so dropping the icon and leaving the text
+            // where it was would park every number in the left half of a strip
+            // reserved for both.
+            const solo = SR.BOLT === false;
+            const chargeRateText = this.add.text(solo ? rateX : rateX - 2, rateY, '', {
                 fontSize, fontFamily: CONFIG.FONT_FAMILY,
                 color: SR.COLOR || '#ffffff', fontStyle: CONFIG.FONT_WEIGHT,
                 stroke: SR.STROKE || '#3a2a00',
                 strokeThickness: Math.max(1, Math.round((SR.STROKE_W !== undefined ? SR.STROKE_W : 3) * scale)),
-            }).setOrigin(1, 0.5).setDepth(5).setVisible(false);
+            }).setOrigin(solo ? 0.5 : 1, 0.5).setDepth(5).setVisible(false);
 
-            const chargeRateBolt = this.add.image(rateX + 2, rateY, 'bolt')
-                .setDisplaySize(boltSize, boltSize)
-                .setOrigin(0, 0.5).setDepth(5).setVisible(false)
-                .setTint(0xFFFF00);
+            // AN INERT STAND-IN when the per-slot bolt is off. Ten places tell
+            // this object to show or hide as batteries come and go; giving them
+            // something that answers and draws nothing keeps every one of them
+            // correct without a null check apiece.
+            const chargeRateBolt = SR.BOLT === false
+                ? { setVisible() { return this; } }
+                : this.add.image(rateX + 2, rateY, 'bolt')
+                    .setDisplaySize(boltSize, boltSize)
+                    .setOrigin(0, 0.5).setDepth(5).setVisible(false)
+                    .setTint(0xFFFF00);
 
             this.platforms.push({
                 index: i,
@@ -1792,11 +1841,10 @@ console.log(
         // height are both in hand.
         seg.midY = gTop + g.h / 2;
         this._buildDim(seg, gTop, g.h);
-        // AFTER its own shade exists. A level built directly above the lit one
-        // is the one that has to make room for it, and it did not exist when the
-        // light last moved — so the gap is cut now rather than waiting for a
-        // handover that has already happened.
-        this._shapeDims(this._dimmedSeg);
+        // This level's fence stands at the top of the one below it, so if THAT
+        // is the lit farm the fence has to be raised — and it did not exist when
+        // the light last moved.
+        this._focusFenceDepth(this._dimmedSeg);
         this._buildPonds(seg, band);
     }
 
@@ -3091,48 +3139,29 @@ console.log(
     _buildDim(seg, gTop, h) {
         const D = CONFIG.ROAD.TILEMAP.DIM || {};
         if (D.ENABLED === false || !(D.ALPHA > 0)) return;
-        // FULL BAND. The shade is one continuous unlit world with a single farm
-        // cut out of it, so every band covers itself edge to edge and meets its
-        // neighbours with no seam. Only ONE boundary is ever spared, and which
-        // one depends on where the light is — so that is decided in _shapeDims
-        // and not here.
+        // THE WHOLE BAND, edge to edge, with no gap cut anywhere: the shade is
+        // one continuous unlit world with a single farm taken out of it.
+        //
+        // AT THE DEPTH OF ITS OWN FLOOR. Actors sort by world Y and Y grows
+        // downward, so everything rooted inside this band sorts UNDER this and
+        // everything rooted at or below its floor sorts OVER it — the shared
+        // fence on the boundary, and the level below's top-row crops, farmer and
+        // tally, all of which stand taller than the tile they occupy and reach
+        // up into this band. That is the same distinction the old 2.2-tile gap
+        // was approximating, stated exactly and costing no ground.
+        //
+        // Floored at DEPTH, because a band high in the world derives a figure
+        // that would fall below the canal band (which tops out at 3.15) and the
+        // shade would slide under the ditch it is meant to darken.
+        const floorD = Math.max(D.DEPTH !== undefined ? D.DEPTH : 3.5,
+                                this._yDepth(gTop + h) - 0.0001);
         seg.dimTop  = gTop;
         seg.dimFull = h;
         seg.dim = this._addB(this.add.rectangle(0, gTop, this.scale.width, h,
                 D.COLOR !== undefined ? D.COLOR : 0x0a1a10)
             .setOrigin(0, 0)
-            .setDepth(D.DEPTH !== undefined ? D.DEPTH : 3.5)
+            .setDepth(floorD)
             .setAlpha(D.ALPHA), seg);
-    }
-
-    // Cut the one gap the shade needs, at the foot of the level directly above
-    // the lit one.
-    //
-    // Everything standing on THAT boundary belongs, wholly or partly, to the lit
-    // farm: the fence it shares, its top row's crops, its farmer, its tally —
-    // all taller than the tile they stand in, all reaching up into the band
-    // above. Shading to the edge cut a dark line across the lit farm's top row.
-    //
-    // Nowhere else. Every other boundary is a dimmed level meeting a dimmed
-    // level, and a gap there would read as three shaded panels rather than one
-    // shadow with a hole in it.
-    _shapeDims(lit) {
-        const D = CONFIG.ROAD.TILEMAP.DIM || {};
-        const tile = (this.tileGrid && this.tileGrid.tile) || 0;
-        const i = lit ? this.segments.indexOf(lit) : -1;
-        const above = i >= 0 ? this.segments[i + 1] : null;
-        for (const s of this.segments) {
-            const o = s && s.dim;
-            if (!o || !o.scene || !s.dimFull) continue;
-            // Capped at half the band, or a short level would be handed a
-            // negative height and shade nothing at all.
-            const keep = s === above
-                ? Math.min(s.dimFull * 0.5,
-                    (D.BOTTOM_TILES !== undefined ? D.BOTTOM_TILES : 1.7) * tile)
-                : 0;
-            const want = s.dimFull - keep;
-            if (Math.abs(o.height - want) > 0.5) o.setSize(this.scale.width, want);
-        }
     }
 
     // Clear the shade off the farm being dug and put it back over the one just
@@ -3159,7 +3188,36 @@ console.log(
         // run rather than as this field's job.
         if (was && was !== seg) this._showGoals(was, false);
         this._showGoals(seg, true);
-        this._shapeDims(seg);
+        this._focusFenceDepth(seg);
+    }
+
+    // Lift the lit level's own top fence over the shade above it, and drop the
+    // last one back under.
+    //
+    // A fence stands on a boundary, which is exactly where a band's shade sorts,
+    // so which side of it a fence falls on is a choice rather than a
+    // consequence. Only ONE of them should be over: the one at the top of the
+    // farm being watched, which is the fence that farm shares with the level
+    // above. Every other fence belongs to a boundary nobody is looking at and
+    // should shade with the field around it.
+    //
+    // The fence in question belongs to the segment ABOVE the lit one — a level's
+    // fence is drawn at its own floor.
+    _focusFenceDepth(lit) {
+        const F = CONFIG.ROAD.TILEMAP.FENCE || {};
+        const base  = F.DEPTH_BIAS  !== undefined ? F.DEPTH_BIAS  : 0;
+        const shade = F.SHADE_BIAS  !== undefined ? F.SHADE_BIAS  : 0.0002;
+        const set = (s, over) => {
+            for (const o of ((s && s.fences) || [])) {
+                if (!o || !o.scene || o.fy === undefined) continue;
+                o.setDepth(this._yDepth(o.fy, base + (over ? shade : -shade)));
+            }
+        };
+        const i = lit ? this.segments.indexOf(lit) : -1;
+        const above = i >= 0 ? this.segments[i + 1] : null;
+        if (this._raisedFence && this._raisedFence !== above) set(this._raisedFence, false);
+        this._raisedFence = above;
+        set(above, true);
     }
 
     // Fade a level's tally in or out with the light on that level.
@@ -3568,8 +3626,12 @@ console.log(
                 // `0 || 0.0008` is 0.0008 — which put the fence 0.8 of a tile
                 // in front of itself and let it cover a tree rooted half a tile
                 // below it.
-                .setDepth(this._yDepth(y,
-                    F.DEPTH_BIAS !== undefined ? F.DEPTH_BIAS : 0)), seg));
+                // Under its own band's shade until it is the lit level's — see
+                // _focusFenceDepth. `fy` is kept so that switch can recompute
+                // the depth without knowing how the fence was placed.
+                .setDepth(this._yDepth(y, (F.DEPTH_BIAS !== undefined ? F.DEPTH_BIAS : 0)
+                        - (F.SHADE_BIAS !== undefined ? F.SHADE_BIAS : 0.0002))), seg));
+            runs[runs.length - 1].fy = y;
         };
         put(p1, p1 - g.left, 1);      // runs LEFT from the gap, right edge touching it
         put(p2, right - p2, 0);       // runs RIGHT from the gap, left edge touching it
@@ -3911,6 +3973,15 @@ console.log(
         const size0 = (G.SIZE !== undefined ? G.SIZE : 1.05) * g.tile;
         const yLine = band.bandTop - size0 / 2
                     - (G.LIFT !== undefined ? G.LIFT : 0.35) * g.tile;
+        // SORTED WITH THE BOUNDARY IT STANDS ON, not on a flat number. The tally
+        // is drawn in the band ABOVE its own farm, and that band's shade sits at
+        // the depth of its floor — which is this very line. A fixed depth would
+        // be either under every shade or over every one of them.
+        //
+        // Declared here, before the level's NAME uses it: the name is built
+        // first, so that a level with nothing to count still gets one.
+        const depth = Math.max(G.DEPTH !== undefined ? G.DEPTH : 4.2,
+                               this._yDepth(band.bandTop) + 0.003);
 
         // THE LEVEL'S NAME, over the tally's left-hand end — built before the
         // counts, because a level with nothing to gather still has a place in
@@ -3933,7 +4004,7 @@ console.log(
                 stroke: N.STROKE || '#2b2013',
                 strokeThickness: Math.max(1, Math.round((N.STROKE_W || 4) * s0)),
             }).setOrigin(0, 1)
-              .setDepth((G.DEPTH !== undefined ? G.DEPTH : 4.2) + 0.002)
+              .setDepth(depth + 0.002)
               .setAlpha(0), seg);
             seg.goalLabel._a = N.ALPHA !== undefined ? N.ALPHA : 0.9;
         }
@@ -3976,7 +4047,6 @@ console.log(
         // the fence rather than behind it.
         const y0 = band.bandTop - size / 2 - (G.LIFT !== undefined ? G.LIFT : 0.35) * g.tile;
         let x = g.left + (G.MARGIN !== undefined ? G.MARGIN : 0.5) * g.tile + size / 2;
-        const depth = G.DEPTH !== undefined ? G.DEPTH : 4.2;
         const cells = seg.goals = new Map();
 
         for (const [crop, n] of order) {
@@ -8711,11 +8781,39 @@ console.log(
 
     // The slots' combined rate. Refreshed whenever a slot changes and on every
     // charge tick, so it can never drift from what the machine is really drawing.
+    // Lay the sum and its icon out as one group: [figure][gap][bolt].
+    //
+    // Re-run on every change, because the figure's width moves with the number
+    // and the group is anchored as a whole — centred over the battery in
+    // portrait, run off the terminal in landscape. The text keeps its own origin
+    // and is nudged instead, so nothing has to know which orientation it is in
+    // twice over.
+    _placeTotalCharge() {
+        const t = this.totalChargeText, b = this.totalChargeBolt;
+        if (!t) return;
+        if (!b) { t.x = t._x0 !== undefined ? t._x0 : t.x; return; }
+        if (t._x0 === undefined) t._x0 = t.x;      // where the figure sits alone
+        const TC = CONFIG.PLATFORM.TOTAL_CHARGE || {};
+        const gap = (TC.BOLT_GAP !== undefined ? TC.BOLT_GAP : 4) * this.layoutConfig.scale;
+        const run = t.displayWidth + gap + b.displayWidth;
+        if (this.totalChargeVert) {
+            // Centred on the battery: the pair straddles the anchor, so the
+            // figure starts half the run to its left.
+            t.x = t._x0 - run / 2 + t.displayWidth / 2;
+            b.setPosition(t.x + t.displayWidth / 2 + gap, t.y - t.displayHeight / 2);
+        } else {
+            t.x = t._x0;
+            b.setPosition(t.x + t.displayWidth + gap, t.y);
+        }
+        b.setVisible(t.visible);
+    }
+
     _refreshTotalCharge(pulse) {
         const t = this.totalChargeText;
         if (!t) return;
         const total = this._slotPower();
         t.setText(total > 0 ? this._bigNum(total) : '').setVisible(total > 0);
+        this._placeTotalCharge();
         const TC = CONFIG.PLATFORM.TOTAL_CHARGE || {};
         if (!pulse || total <= 0 || !(TC.PULSE > 1)) return;
         // Same beat as the individual icons — the whole supply chain flashing

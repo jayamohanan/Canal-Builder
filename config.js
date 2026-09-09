@@ -467,6 +467,11 @@ var CONFIG = {
                                 // is measured with its ascenders and descenders,
                                 // so asking for a 20px line means asking for
                                 // about 16px of type
+            TEXT_SCALE: 0.9,    // ...and then this much of that. LINE is the
+                                // arithmetic — what fits — and this is taste:
+                                // the label filling its slot exactly reads as
+                                // shouting next to the battery. Kept apart so
+                                // neither has to pretend to be the other
         },
         DRAGGABLE_BG_COLOR: "#FFFFFF",
         DRAGGABLE_BG_ALPHA: 0,
@@ -575,11 +580,18 @@ var CONFIG = {
         // fast the ground gives way.
         TOTAL_CHARGE: {
             ENABLED: true,
-            GAP:     14,        // out from the case's terminal (px @ design)
+            GAP:     6,         // out from the case's terminal (px @ design).
+                                // Measured from the CAP, not the case, so the
+                                // node's own length already sits between the two
+                                // — 14 left the figure adrift above the battery
+                                // rather than reading as belonging to it
             SIZE:    30,        // font size @ design scale
             COLOR:      '#ffffff',
             STROKE:     '#3a2a00',
             STROKE_W:   4,
+            BOLT:     true,     // the charge icon, beside the sum
+            BOLT_SIZE: 26,      // px @ design scale
+            BOLT_GAP:  4,       // between the figure and the icon
             PULSE:   1.18,      // grows this much on each battery tick, in step
                                 // with the individual battery icons — the whole
                                 // supply chain flashing on the same beat
@@ -592,6 +604,12 @@ var CONFIG = {
             COLOR:    '#ffffff',
             STROKE:   '#3a2a00',
             STROKE_W: 3,
+            // NO BOLT ON EACH SLOT. Three of them beside three numbers said the
+            // same word three times, and the icon is not what distinguishes one
+            // battery's rate from another's — the number is. It belongs on the
+            // SUM instead, where it names the figure that matters and appears
+            // once.
+            BOLT: false,
         },
         SLOT_LABEL_W: 46,              // width reserved for a charge-rate label
                                        // (px @ design). PORTRAIT ONLY: the
@@ -602,6 +620,20 @@ var CONFIG = {
                                        // the grid panel. Raising this makes the
                                        // portrait slots smaller, not the margin
                                        // wider: the margin is fixed by the panel
+        // WHICH MARGIN THE BATTERY STANDS IN, portrait only. The panel is
+        // square-ish and the half is full width, so there is dead space on both
+        // sides; this picks one. The charge-rate labels follow it — they always
+        // sit between the battery and the panel, never out at the screen edge
+        // where there is no room for them.
+        PORTRAIT_SIDE: 'right',        // 'right' | 'left'
+        // The gap between the panel and the battery, as a fraction of a CELL —
+        // so it reads as a proper break at any size, the way the gaps inside the
+        // grid do. A design-px figure would shrink against the cell on the very
+        // phones where the margin is tightest.
+        //
+        // It comes straight out of the slot: the margin holds this gap, the
+        // battery and the labels, and only the battery can give.
+        PORTRAIT_PANEL_GAP: 0.25,      // of a cell
         SLOT_ROW_EDGE_PAD: 12,         // least margin each side of the battery,
                                        // which is centred on the half (px @ design)
 
@@ -1106,48 +1138,48 @@ var CONFIG = {
                                      // as being in shade rather than greyed out
                 FADE_MS: 420,        // handover cross-fade
 
-                // ── WHERE THE SHADE STOPS ───────────────────────────────
-                // A level's band is not the same thing as a level's contents.
-                // Everything standing ON the boundary at its foot belongs, in
-                // whole or in part, to the level BELOW — which is the lit one:
+                // ── WHAT THE SHADE COVERS ───────────────────────────────
+                // THE WHOLE BAND, edge to edge — and it sorts by DEPTH rather
+                // than being cut short.
                 //
-                //   the fence      drawn on this level's first row, but shared
-                //                  with the farm under it
-                //   crops          the top row's plants grow past their tile,
-                //                  and at stage 5 stand a third taller again
-                //   the farmer     nearly two tiles of him over one tile of feet
-                //   the tally      sits above the boundary on purpose, so it is
-                //                  outside the field it counts
+                // The problem it solves: everything standing on the boundary at
+                // a band's foot belongs to the level BELOW — the shared fence,
+                // that level's top-row crops, its farmer, its tally — and all of
+                // them are taller than the tile they stand in, so they reach up
+                // into this band and were being shaded with it.
                 //
-                // Shading to the band's own bottom edge cut every one of them in
-                // half: a lit farm with a dark line across its top row. So the
-                // shade stops short, and the strip it leaves is not this level's
-                // ground being spared — it is the level below's things being let
-                // alone.
+                // Stopping the rectangle short of the boundary fixed that but
+                // cost the bottom two rows of every shaded level, which is a lot
+                // of unshaded farm on a short one.
                 //
-                // Tall enough for the tallest of them. That is now the TALLY,
-                // not the farmer: its cells sit LIFT (0.35) above the line and
-                // stand SIZE (1.05) tall, with the level's name and its own gap
-                // over that again — a shade past two tiles. The farmer's 1.6 is
-                // second.
+                // So the shade sits at the depth of its own band's FLOOR
+                // instead. Actors sort by world Y, and Y grows downward, so
+                // anything rooted inside the band sorts under the shade and
+                // anything rooted at or below its floor sorts over it — which is
+                // precisely the difference between "this level's" and "the level
+                // below's", stated exactly rather than approximated by a margin.
                 //
-                // ONLY THE ONE BOUNDARY. This is spared at the foot of the level
-                // DIRECTLY ABOVE the lit one, and nowhere else. Sparing it on
-                // every band would put a bright line at each level's foot all
-                // the way up the screen, and the shade would read as three
-                // separate panels instead of one unlit world with a farm cut out
-                // of it. Every other boundary is a dimmed level meeting a dimmed
-                // level, where there is nothing to spare and nothing to see.
-                BOTTOM_TILES: 2.2,
+                // DEPTH below is the FLOOR under that: the shade must still
+                // clear every ground item (the canal band tops out at 3.15), so
+                // a band drawn near the top of the world takes this instead of
+                // its own smaller figure.
                 // ABOVE EVERYTHING IN THE WORLD, actors included. The shade
                 // falls on the whole farm — its crops, its animals, its farmer —
                 // or the field dims while the things living in it stay lit,
                 // which reads as a bug rather than as distance.
                 //
-                // 4.5 clears the actor band, which sorts from 4 (see _yDepth)
-                // and rises by thousandths. Ground art is all below 3.2. The UI
-                // is on its own camera and is not affected by this at all.
-                DEPTH:   4.5,
+                // A FLOOR, NOT THE DEPTH. Each band's shade takes the depth of
+                // its own floor (see _buildDim), which is what separates "this
+                // level's things" from "the level below's" exactly. That figure
+                // sorts from 4 at the world's foot and falls by a thousandth a
+                // tile as the run climbs, so this is the point below which it
+                // may not go: 3.5 still clears every ground item, the highest
+                // being the main bridge at 3.15.
+                //
+                // It was 4.5 — above the whole actor band — back when the shade
+                // was a flat depth for every level and the sparing was done by
+                // cutting the rectangle short instead.
+                DEPTH:   3.5,
             },
 
             // ── Animal farms ────────────────────────────────────────────────
@@ -1390,6 +1422,15 @@ var CONFIG = {
                                     // than none at all, so the boundary is still
                                     // legible as a line between two farms
                 FADE_MS:     300,
+                // UNDER ITS OWN BAND'S SHADE, by a hair — the shades now sort by
+                // the depth of their band's floor, and a fence stands exactly on
+                // one of those lines. Left at zero it tied with the shade and
+                // won, which meant EVERY boundary's fence stayed lit: level 1
+                // in focus, and the fence between 2 and 3 was bright too.
+                //
+                // Only the fence at the lit level's own top is raised over its
+                // shade, by _focusDim. This is the figure the rest sit at.
+                SHADE_BIAS: 0.0002,
                 DEPTH_BIAS: 0,      // none needed. Depth comes from world Y, and
                                     // the fence stands on the boundary line, so
                                     // a crop rooted below it is already nearer
