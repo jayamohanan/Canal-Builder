@@ -447,7 +447,10 @@ var CONFIG = {
         // offsets already put them in.
         MOBILE: {
             ENABLED:    true,
-            PAD:        2,      // top and bottom of the cell, px @ design scale
+            PAD:        4,      // top and bottom of the cell, px @ design scale.
+                                // The battery takes the whole remainder, so its
+                                // edge lands exactly on this line — at 2 it read
+                                // as touching the cell
             GAP:        1,      // between the label and the battery
             TEXT_SHARE: 0.24,   // the label's share of the padded height
             LINE:       1.28,   // font size vs the line box it has to fit — type
@@ -992,6 +995,28 @@ var CONFIG = {
                                     // 2 rather than 1: the tiles are rotated and
                                     // drawn at a non-integer scale, so one pixel
                                     // of headroom is not quite enough.
+            // ── A NARROWER FIELD ON PHONES (a trial) ────────────────────
+            // The tile is the farm's width over the map's column count, so
+            // dropping two columns makes every tile 10% wider and 21% bigger by
+            // area — art, crops, the machine and the canal all with it.
+            //
+            // Rather than re-authoring eleven maps to find out whether that
+            // reads better on a phone, the OUTER COLUMNS ARE SIMPLY IGNORED:
+            // the map is read as if it were COLS wide, trimming evenly from
+            // each side, and everything downstream sees a narrower grid and
+            // never knows. Rows are untouched.
+            //
+            // The canal does not move. It centres on floor(cols/2) and the trim
+            // takes one column off each side, so both shift by one together and
+            // land on the same tiles they always did.
+            //
+            // PORTRAIT ONLY, and a trial: if 20 is the answer, the maps should
+            // be authored at 20 and this should go, because a map whose edge
+            // columns are silently discarded is a trap for whoever paints one.
+            MOBILE_TRIM: {
+                ENABLED: true,
+                COLS:    20,        // what a phone reads the map as
+            },
             MAIN_TILES: 2,          // the main canal is this many tiles wide
 
             // ── What the ground costs ───────────────────────────────────────

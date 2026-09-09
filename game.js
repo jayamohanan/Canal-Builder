@@ -302,30 +302,51 @@ class GameScene extends Phaser.Scene {
         // only input: pad it, give the label its share, and the battery takes
         // everything else.
         const MB = CONFIG.CELL.MOBILE || {};
-        let batteryDisplaySize, batteryYOffset, levelTextYOffset, levelTextSize;
-        if (isP && MB.ENABLED !== false) {
-            const pad   = (MB.PAD !== undefined ? MB.PAD : 2) * scale;
+        // FITTED TO THE BOX IT IS DRAWN IN. Pad it, give the label its share,
+        // and the battery takes the rest — returned as offsets from the box's
+        // CENTRE, which is what the drawing code works in.
+        const fitBox = (box) => {
+            const pad   = (MB.PAD !== undefined ? MB.PAD : 4) * scale;
             const gap   = (MB.GAP !== undefined ? MB.GAP : 1) * scale;
-            const inner = Math.max(8, cellSize - 2 * pad);
+            const inner = Math.max(8, box - 2 * pad);
             const textH = inner * (MB.TEXT_SHARE !== undefined ? MB.TEXT_SHARE : 0.24);
             const batt  = Math.max(4, inner - textH - gap);
-            // Laid out from the padded TOP down, then expressed as offsets from
-            // the cell's centre — which is what the drawing code works in.
             const top   = -inner / 2;
             const textC = top + textH / 2;
             const battC = top + textH + gap + batt / 2;
-            batteryDisplaySize = Math.round(batt);
-            batteryYOffset     = Math.round(battC);
-            // The label's offset is measured from the BATTERY, not the cell:
-            // the sprite is placed at yOff and the text at yOff + tOff.
-            levelTextYOffset   = Math.round(textC - battC);
-            levelTextSize      = Math.max(8, Math.round(textH /
-                                    (MB.LINE !== undefined ? MB.LINE : 1.28))) + 'px';
+            return {
+                size: Math.round(batt),
+                yOff: Math.round(battC),
+                // The label's offset is measured from the BATTERY, not the box:
+                // the sprite is placed at yOff and the text at yOff + tOff.
+                tOff: Math.round(textC - battC),
+                text: Math.max(8, Math.round(textH /
+                        (MB.LINE !== undefined ? MB.LINE : 1.28))) + 'px',
+            };
+        };
+        // TWO BOXES, NOT ONE. A grid cell and a charging slot are the same size
+        // in landscape, and in PORTRAIT they are not: the slot is squeezed by
+        // the case and the rate label beside it, so it is capped at a cell and
+        // is usually well under one. Sizing both from the cell overflowed the
+        // slots — the battery ran clean past the bottom edge, which is what
+        // looked like the padding not being applied at all.
+        let batteryDisplaySize, batteryYOffset, levelTextYOffset, levelTextSize;
+        let slotBatterySize, slotBatteryYOffset, slotLevelTextYOffset, slotLevelTextSize;
+        if (isP && MB.ENABLED !== false) {
+            const cf = fitBox(cellSize), sf = fitBox(slotSize);
+            batteryDisplaySize = cf.size; batteryYOffset = cf.yOff;
+            levelTextYOffset   = cf.tOff; levelTextSize  = cf.text;
+            slotBatterySize    = sf.size; slotBatteryYOffset   = sf.yOff;
+            slotLevelTextYOffset = sf.tOff; slotLevelTextSize  = sf.text;
         } else {
             batteryDisplaySize = Math.round(CONFIG.CELL.BATTERY_DISPLAY_SIZE * scale);
             batteryYOffset     = Math.round(CONFIG.CELL.BATTERY_Y_OFFSET     * scale);
             levelTextYOffset   = Math.round(CONFIG.CELL.LEVEL_TEXT_Y_OFFSET  * scale);
             levelTextSize      = Math.max(8, Math.round(11 * scale)) + 'px';
+            slotBatterySize      = batteryDisplaySize;
+            slotBatteryYOffset   = batteryYOffset;
+            slotLevelTextYOffset = levelTextYOffset;
+            slotLevelTextSize    = levelTextSize;
         }
 
         // Spawn button interior (coin value text, coin icon, battery icon)
@@ -363,6 +384,7 @@ class GameScene extends Phaser.Scene {
             panelCenterY, buttonCenterY, coinCenterY, slotRowCenterY, slotSize, slotCenterX,
             // Battery / cell content
             batteryDisplaySize, batteryYOffset, levelTextYOffset, levelTextSize,
+            slotBatterySize, slotBatteryYOffset, slotLevelTextYOffset, slotLevelTextSize,
             // Spawn button contents
             spawnCoinTextSize, spawnCoinTextX, spawnCoinIconX, spawnCoinIconSize,
             spawnBattIconX, spawnBattIconSize,
@@ -605,6 +627,10 @@ console.log(
         this.CELL_SIZE          = L.cellSize;
         this.CELL_GAP           = L.cellGap;
         this.batteryDisplaySize = L.batteryDisplaySize;
+        this.slotBatterySize      = L.slotBatterySize;
+        this.slotBatteryYOffset   = L.slotBatteryYOffset;
+        this.slotLevelTextYOffset = L.slotLevelTextYOffset;
+        this.slotLevelTextSize    = L.slotLevelTextSize;
         this.batteryYOffset     = L.batteryYOffset;
         this.levelTextYOffset   = L.levelTextYOffset;
         this.levelTextSize      = L.levelTextSize;
@@ -1094,7 +1120,18 @@ console.log(
         const B   = this.layoutConfig.partB;
         const map = this._levelMap(levelIndex);
         if (!map) return null;
-        const cols = map.width, rows = map.height;
+        let cols = map.width;
+        const rows = map.height;
+        // TRIMMED ON PHONES. Columns come off each side and the grid is read as
+        // narrower, which makes every tile proportionally bigger — see
+        // TILEMAP.MOBILE_TRIM. `cut` is how many go from the LEFT, and every
+        // reader below shifts by it.
+        const MT2 = TM.MOBILE_TRIM || {};
+        let cut = 0;
+        if (this.isPortrait && MT2.ENABLED !== false) {
+            const want = Math.max(1, MT2.COLS || cols);
+            if (want < cols) { cut = Math.floor((cols - want) / 2); cols = want; }
+        }
         // Fixed by the half's WIDTH alone. It used to be the smaller of the
         // width fit and the height fit, which gave a 20-row level and an 8-row
         // level slightly different tile sizes — and levels that stack flush have
@@ -1108,7 +1145,19 @@ console.log(
         const layer = (spec) => {
             for (const name of (Array.isArray(spec) ? spec : [spec])) {
                 const l = map.layers.find((x) => x.name === name);
-                if (l && l.data) return l.data;
+                if (!l || !l.data) continue;
+                if (!cut) return l.data;
+                // RE-CUT TO THE NARROWER GRID. A tile layer is one flat array of
+                // map.width per row, so trimming is a row-by-row slice — and it
+                // must be a COPY: Phaser caches the parsed map and every level
+                // built from the same file shares this array.
+                const out = new Array(cols * rows);
+                for (let r = 0; r < rows; r++) {
+                    for (let c = 0; c < cols; c++) {
+                        out[r * cols + c] = l.data[r * map.width + c + cut];
+                    }
+                }
+                return out;
             }
             return null;
         };
@@ -1125,13 +1174,16 @@ console.log(
             // Width and height come through as well, so an object can be an
             // AREA and not only a position — a pen is a rectangle drawn round
             // the ground it covers. A point reports 0 for both.
+            // Objects carry PIXELS, so the trim is subtracted in cells after
+            // the conversion — and anything that falls outside the narrower grid
+            // is dropped, since there is nowhere left to draw it.
             return l.objects.map((o) => ({
                 name: o.name || o.class || o.type || '',
-                col:  o.x / (map.tilewidth  || 1),
+                col:  o.x / (map.tilewidth  || 1) - cut,
                 row:  o.y / (map.tileheight || 1),
                 w:   (o.width  || 0) / (map.tilewidth  || 1),
                 h:   (o.height || 0) / (map.tileheight || 1),
-            })).filter((o) => o.name);
+            })).filter((o) => o.name && o.col >= 0 && o.col <= cols);
         };
         // How this map's gids resolve to art. Built per map, because firstgid is
         // a property of the MAP, not of the tileset: the same sheet can start at
@@ -8576,8 +8628,9 @@ console.log(
         const p   = this.platforms[slotIndex];
         const chargePerMinute  = getBatteryChargeValue(level);
         const batteryIconLevel = getBatteryIconLevel(level);
-        const yOff  = this.batteryYOffset;
-        const tOff  = this.levelTextYOffset;
+        // The SLOT's figures, not the grid cell's — see calculateLayout.
+        const yOff  = this.slotBatteryYOffset;
+        const tOff  = this.slotLevelTextYOffset;
 
         // Transparent draggable overlay that covers the whole slot cell —
         // gives a reliable pick-up region independent of sprite texture.
@@ -8587,11 +8640,11 @@ console.log(
             .setInteractive({ draggable: true, useHandCursor: true });
 
         const batterySprite = this.add.image(p.slotX, p.slotY + yOff, `battery${batteryIconLevel}`);
-        batterySprite.setDisplaySize(this.batteryDisplaySize, this.batteryDisplaySize);
+        batterySprite.setDisplaySize(this.slotBatterySize, this.slotBatterySize);
         batterySprite.setDepth(11);
 
         const levelText = this.add.text(p.slotX, p.slotY + yOff + tOff, `LVL ${level}`, {
-            fontSize: this.levelTextSize, fontFamily: CONFIG.FONT_FAMILY,
+            fontSize: this.slotLevelTextSize, fontFamily: CONFIG.FONT_FAMILY,
             color: CONFIG.CELL.LEVEL_TEXT_COLOR, fontStyle: CONFIG.FONT_WEIGHT,
         }).setOrigin(0.5).setDepth(12);
 
