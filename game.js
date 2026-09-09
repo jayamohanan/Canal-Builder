@@ -446,7 +446,7 @@ class GameScene extends Phaser.Scene {
         // the flat colour at bake time (see _makeCellTextures).
         this.load.image('cell_noise',    'graphics/cell_noise.png');
         this.load.image('battery_crown', 'graphics/battery_crown.png');
-        this.load.image('bolt',          'graphics/bolt_64.png');
+        this.load.image('bolt',          'graphics/ui/bolt.png');
 
         // The trencher's art: two parts, each its own 5-frame animation. They
         // are separate sprites (not one sheet) so each part's frames stay
@@ -875,10 +875,15 @@ console.log(
                 // because the pair is centred as a group and the figure's width
                 // moves with the number.
                 if (TC.BOLT !== false) {
+                    // FITTED BY HEIGHT. BOLT_SIZE is how tall it stands and the
+                    // width follows the source — asking for a square would
+                    // squash a bolt, which is a tall shape by nature.
+                    const bsrc = this.textures.get('bolt').getSourceImage();
+                    const bh   = sp(TC.BOLT_SIZE || 26);
                     this.totalChargeBolt = this.add.image(0, 0, 'bolt')
-                        .setDisplaySize(sp(TC.BOLT_SIZE || 26), sp(TC.BOLT_SIZE || 26))
+                        .setDisplaySize(bh * (bsrc.width / bsrc.height), bh)
                         .setOrigin(0, 0.5).setDepth(5).setVisible(false)
-                        .setTint(0xFFFF00);
+                        .setTint(TC.BOLT_TINT !== undefined ? TC.BOLT_TINT : 0xffffff);
                     this.totalChargeVert = vert;
                 }
                 this._placeTotalCharge();
@@ -982,9 +987,11 @@ console.log(
             const chargeRateBolt = SR.BOLT === false
                 ? { setVisible() { return this; } }
                 : this.add.image(rateX + 2, rateY, 'bolt')
-                    .setDisplaySize(boltSize, boltSize)
+                    .setDisplaySize(boltSize * (this.textures.get('bolt').getSourceImage().width /
+                                                this.textures.get('bolt').getSourceImage().height),
+                                    boltSize)
                     .setOrigin(0, 0.5).setDepth(5).setVisible(false)
-                    .setTint(0xFFFF00);
+                    .setTint(SR.BOLT_TINT !== undefined ? SR.BOLT_TINT : 0xffffff);
 
             this.platforms.push({
                 index: i,
@@ -2542,7 +2549,9 @@ console.log(
         if (R.ENABLED === false) return;
         const s = this.layoutConfig.scale, B = this.layoutConfig.partB;
         const n    = Math.max(1, R.SLOTS || 5);
-        const size = (R.SIZE || 46) * s;
+        // Portrait reads at arm's length on a smaller tile — see ROSTER.PORTRAIT_SCALE.
+        const pm   = this.isPortrait ? (R.PORTRAIT_SCALE || 1) : 1;
+        const size = (R.SIZE || 46) * s * pm;
         const gap  = (R.GAP  || 8)  * s;
         const total = n * size + (n - 1) * gap;
         const x0 = (B.width - total) / 2 + size / 2;   // centred in the farm half
@@ -3969,8 +3978,11 @@ console.log(
         const g = this.tileGrid;
         if (!g) return;
 
-        const s0   = this.layoutConfig.scale;
-        const size0 = (G.SIZE !== undefined ? G.SIZE : 1.05) * g.tile;
+        // One multiplier for the whole block, portrait only — cells, counts and
+        // the level's name together, so the group keeps its proportions.
+        const pm   = this.isPortrait ? (G.PORTRAIT_SCALE || 1) : 1;
+        const s0   = this.layoutConfig.scale * pm;
+        const size0 = (G.SIZE !== undefined ? G.SIZE : 1.05) * g.tile * pm;
         const yLine = band.bandTop - size0 / 2
                     - (G.LIFT !== undefined ? G.LIFT : 0.35) * g.tile;
         // SORTED WITH THE BOUNDARY IT STANDS ON, not on a flat number. The tally
@@ -4040,7 +4052,7 @@ console.log(
         });
 
         const s    = this.layoutConfig.scale;
-        const size = (G.SIZE !== undefined ? G.SIZE : 1.05) * g.tile;
+        const size = size0;
         const gap  = (G.GAP  !== undefined ? G.GAP  : 0.08) * g.tile;
         const rad  = Math.min(size / 2, (G.RADIUS !== undefined ? G.RADIUS : 0.18) * size);
         // The boundary line itself, then lifted clear of it so the cells sit ON
@@ -4070,7 +4082,7 @@ console.log(
             }
             cell.text = this._addB(this.add.text(
                     x, y0 + (G.COUNT_Y !== undefined ? G.COUNT_Y : 0.3) * size, String(n), {
-                fontSize: Math.max(8, Math.round((G.COUNT_SIZE || 15) * s)) + 'px',
+                fontSize: Math.max(8, Math.round((G.COUNT_SIZE || 15) * s * pm)) + 'px',
                 fontFamily: CONFIG.FONT_FAMILY,
                 fontStyle: CONFIG.FONT_WEIGHT,
                 color: G.COUNT_COLOR || '#3a2c1c',
@@ -7779,6 +7791,13 @@ console.log(
                     tn.wetV += (nT * gEl.tile) / this._springPeak(w, S.DAMP !== undefined ? S.DAMP : 0.45);
                 }
             }
+            // CAPPED. See WATER.MAX_SPEED: the dam lifting leaves the spring
+            // looking at a gap most of a level wide, and a spring pulled that
+            // far snaps forward faster than the eye can read as water.
+            const vMax = (WA.MAX_SPEED !== undefined ? WA.MAX_SPEED : 12) *
+                         ((tn.flood && tn.flood.g) ? tn.flood.g.tile
+                            : (this.tileGrid ? this.tileGrid.tile : 0));
+            if (vMax > 0) tn.wetV = Math.max(-vMax, Math.min(vMax, tn.wetV));
             tn.wet  += tn.wetV * dt;
             // The water may lag, and may crowd the blade, but it may never get
             // AHEAD OF THE CUT — that is the one overshoot that reads as broken
@@ -8805,7 +8824,11 @@ console.log(
             t.x = t._x0;
             b.setPosition(t.x + t.displayWidth + gap, t.y);
         }
-        b.setVisible(t.visible);
+        // ...AND ONLY IF THERE IS A FIGURE. The text object starts visible with
+        // an empty string, which draws nothing — so an icon keyed to its
+        // visibility alone sat there on its own before the first battery went
+        // in. The content is what says whether there is a total at all.
+        b.setVisible(!!(t.visible && t.text));
     }
 
     _refreshTotalCharge(pulse) {

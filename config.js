@@ -166,6 +166,9 @@ var CONFIG = {
     // which matters on a platform where nobody reads.
     ROSTER: {
         ENABLED: true,
+        // ...and the same on the roster strip, for the same reason. Scales the
+        // slot, which carries its icon and its stroke with it.
+        PORTRAIT_SCALE: 1.2,
         SLOTS:   5,          // per block — the unlock ladder runs in fives
         // The stretch of the run you are in, named over the slots. It changes
         // every SLOTS levels, which is what makes it worth reading: a level
@@ -590,7 +593,23 @@ var CONFIG = {
             STROKE:     '#3a2a00',
             STROKE_W:   4,
             BOLT:     true,     // the charge icon, beside the sum
-            BOLT_SIZE: 26,      // px @ design scale
+            // ITS OWN COLOUR, not a fixed tint. The icon is the UNIT on the
+            // figure — the "kg" after a weight — so it takes the figure's
+            // colour and reads as part of the same number.
+            //
+            // It was hardcoded yellow, from when the art was a white 64px bolt
+            // that needed colouring. Yellow is also the COIN counter's colour
+            // (#f7ca42) and nothing else's, so a yellow bolt beside a white
+            // charge figure read as the wrong currency.
+            //
+            // Tint MULTIPLIES: white leaves the art exactly as drawn, which is
+            // what you want once the art is the colour it should be.
+            BOLT_TINT: 0xffffff,
+            BOLT_SIZE: 26,      // its HEIGHT, px @ design scale. The width comes
+                                // from the art's own aspect, so a redrawn bolt of
+                                // any proportion drops in without a number
+                                // changing — and never gets squashed into a
+                                // square it was not drawn as
             BOLT_GAP:  4,       // between the figure and the icon
             PULSE:   1.18,      // grows this much on each battery tick, in step
                                 // with the individual battery icons — the whole
@@ -610,6 +629,7 @@ var CONFIG = {
             // SUM instead, where it names the figure that matters and appears
             // once.
             BOLT: false,
+            BOLT_TINT: 0xffffff,   // as above — multiplies, so white is 'as drawn'
         },
         SLOT_LABEL_W: 46,              // width reserved for a charge-rate label
                                        // (px @ design). PORTRAIT ONLY: the
@@ -1991,6 +2011,12 @@ var CONFIG = {
             // because the right of that line is where the machine climbs out.
             GOALS: {
                 ENABLED:   true,
+                // BIGGER ON A PHONE. Everything here is sized in TILES, and a
+                // portrait tile is the smaller of the two (49px against 52) on a
+                // screen held much further from the eye than a desktop one — so
+                // a cell that reads at a glance on a monitor is a smudge on a
+                // phone. Landscape is left alone.
+                PORTRAIT_SCALE: 1.2,
                 SIZE:      1.05,     // cell side, in tiles
                 GAP:       0.08,     // between cells, in tiles
                 MARGIN:    0.5,      // from the map's left edge, in tiles
@@ -3255,6 +3281,23 @@ var CONFIG = {
             LAG:        1.0,       // how much dry cut the blade keeps open ahead of
                                    // the water, in machine lengths. This is a LIMIT,
                                    // not a leash: 1 = the rig works on dry soil
+            // HOW FAST THE MAIN WATERLINE MAY TRAVEL, in tiles a second.
+            //
+            // Only ever binds on the CATCH-UP. Each level's water is dammed
+            // while the farm below is being watched (ENDLESS.QUEUE_WATER) and
+            // the blade digs on regardless, so when the dam lifts the spring is
+            // looking at a gap most of a level wide — and a spring pulled that
+            // far snaps. It closed ten tiles in 0.4s at a peak of 33 tiles a
+            // second, which reads as a cut rather than as water arriving.
+            //
+            // At 6 the same ten tiles take about 1.7s: unmistakably water
+            // running up a ditch rather than a line being redrawn. Normal
+            // following never comes near it, so the spring's own feel — the
+            // slosh, the overshoot — is untouched.
+            //
+            // BRANCHES ARE NOT AFFECTED. They fill by their own cascade off the
+            // main cells, nothing to do with this line.
+            MAX_SPEED:  6,         // tiles/s
             FLOOD_SPEED: 140,      // the FINAL flood's speed (px/s @ platformScale),
                                    // flat from the mouth to the wall. Flat because
                                    // the target does not move: a gap-closing
