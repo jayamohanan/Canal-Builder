@@ -293,11 +293,40 @@ class GameScene extends Phaser.Scene {
         // Cell gap
         const cellGap           = Math.max(2, Math.round(CONFIG.CELL.GAP * scale));
 
-        // Battery icon + level text inside grid cells (and platform slots)
-        const batteryDisplaySize = Math.round(CONFIG.CELL.BATTERY_DISPLAY_SIZE * scale);
-        const batteryYOffset     = Math.round(CONFIG.CELL.BATTERY_Y_OFFSET     * scale);
-        const levelTextYOffset   = Math.round(CONFIG.CELL.LEVEL_TEXT_Y_OFFSET  * scale);
-        const levelTextSize      = Math.max(8, Math.round(11 * scale)) + 'px';
+        // Battery icon + level text inside grid cells (and platform slots).
+        //
+        // PORTRAIT DERIVES THEM FROM THE CELL; landscape keeps the authored
+        // figures. On a phone the authored ones leave a battery half the width
+        // of its cell and a label under 8px, because they were chosen against a
+        // desktop cell with room to spare. Here the cell's own height is the
+        // only input: pad it, give the label its share, and the battery takes
+        // everything else.
+        const MB = CONFIG.CELL.MOBILE || {};
+        let batteryDisplaySize, batteryYOffset, levelTextYOffset, levelTextSize;
+        if (isP && MB.ENABLED !== false) {
+            const pad   = (MB.PAD !== undefined ? MB.PAD : 2) * scale;
+            const gap   = (MB.GAP !== undefined ? MB.GAP : 1) * scale;
+            const inner = Math.max(8, cellSize - 2 * pad);
+            const textH = inner * (MB.TEXT_SHARE !== undefined ? MB.TEXT_SHARE : 0.24);
+            const batt  = Math.max(4, inner - textH - gap);
+            // Laid out from the padded TOP down, then expressed as offsets from
+            // the cell's centre — which is what the drawing code works in.
+            const top   = -inner / 2;
+            const textC = top + textH / 2;
+            const battC = top + textH + gap + batt / 2;
+            batteryDisplaySize = Math.round(batt);
+            batteryYOffset     = Math.round(battC);
+            // The label's offset is measured from the BATTERY, not the cell:
+            // the sprite is placed at yOff and the text at yOff + tOff.
+            levelTextYOffset   = Math.round(textC - battC);
+            levelTextSize      = Math.max(8, Math.round(textH /
+                                    (MB.LINE !== undefined ? MB.LINE : 1.28))) + 'px';
+        } else {
+            batteryDisplaySize = Math.round(CONFIG.CELL.BATTERY_DISPLAY_SIZE * scale);
+            batteryYOffset     = Math.round(CONFIG.CELL.BATTERY_Y_OFFSET     * scale);
+            levelTextYOffset   = Math.round(CONFIG.CELL.LEVEL_TEXT_Y_OFFSET  * scale);
+            levelTextSize      = Math.max(8, Math.round(11 * scale)) + 'px';
+        }
 
         // Spawn button interior (coin value text, coin icon, battery icon)
         const spawnCoinTextSize  = Math.max(14, Math.round(32 * scale)) + 'px';

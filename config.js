@@ -422,12 +422,39 @@ var CONFIG = {
             TILE:     1,               // 1 = tile stretched to the cell.
                                        // 0.5 = blown up 2× → coarser grain
         },
+        // LANDSCAPE / DESKTOP figures. A 64px battery in a 130px cell, with the
+        // label parked 40px above it — sized by eye against a big screen, where
+        // there is room to spare and the cell can breathe.
         BATTERY_DISPLAY_SIZE: 64,
         BATTERY_SCALE: 1.0,
         BATTERY_Y_OFFSET: 5,
         LEVEL_TEXT_SIZE: '11px',
         LEVEL_TEXT_COLOR: '#000000',
         LEVEL_TEXT_Y_OFFSET: -40,
+
+        // ── PORTRAIT: FILL THE CELL ─────────────────────────────────────────
+        // The same figures on a phone are a battery half the width of its cell
+        // and a label under 8px — legible on a desktop at arm's length and not
+        // on a phone at all. The cell itself is not the problem; the content
+        // sitting in the middle of it is.
+        //
+        // So portrait DERIVES all four instead of scaling them: pad the cell top
+        // and bottom, give the label its share of what is left, and the battery
+        // takes the rest. Nothing is chosen by eye — the cell's own height is
+        // the only input, so it stays right at any phone size.
+        //
+        // The label goes ABOVE the battery, which is the order the desktop
+        // offsets already put them in.
+        MOBILE: {
+            ENABLED:    true,
+            PAD:        2,      // top and bottom of the cell, px @ design scale
+            GAP:        1,      // between the label and the battery
+            TEXT_SHARE: 0.24,   // the label's share of the padded height
+            LINE:       1.28,   // font size vs the line box it has to fit — type
+                                // is measured with its ascenders and descenders,
+                                // so asking for a 20px line means asking for
+                                // about 16px of type
+        },
         DRAGGABLE_BG_COLOR: "#FFFFFF",
         DRAGGABLE_BG_ALPHA: 0,
         GRID_PANEL_PADDING: 14,        // the panel is a drawn rounded square now,
