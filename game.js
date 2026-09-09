@@ -306,7 +306,10 @@ class GameScene extends Phaser.Scene {
         // and the battery takes the rest — returned as offsets from the box's
         // CENTRE, which is what the drawing code works in.
         const fitBox = (box) => {
-            const pad   = (MB.PAD !== undefined ? MB.PAD : 4) * scale;
+            // A SHARE of the box, floored at PAD_MIN. Fixed design pixels do
+            // not survive the cell's own inset border — see CELL.MOBILE.
+            const pad   = Math.max((MB.PAD_FRAC !== undefined ? MB.PAD_FRAC : 0.07) * box,
+                                   (MB.PAD_MIN  !== undefined ? MB.PAD_MIN  : 6) * scale);
             const gap   = (MB.GAP !== undefined ? MB.GAP : 1) * scale;
             const inner = Math.max(8, box - 2 * pad);
             const textH = inner * (MB.TEXT_SHARE !== undefined ? MB.TEXT_SHARE : 0.24);

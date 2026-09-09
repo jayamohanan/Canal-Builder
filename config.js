@@ -447,10 +447,20 @@ var CONFIG = {
         // offsets already put them in.
         MOBILE: {
             ENABLED:    true,
-            PAD:        4,      // top and bottom of the cell, px @ design scale.
-                                // The battery takes the whole remainder, so its
-                                // edge lands exactly on this line — at 2 it read
-                                // as touching the cell
+            // TOP AND BOTTOM PADDING, as a SHARE of the cell — not a fixed
+            // number of design pixels.
+            //
+            // The battery takes the whole remainder, so its edge lands exactly
+            // on this line, and the cell draws its own INSET_BORDER_WIDTH (3.5)
+            // stroke inside its bounds. A 4px pad therefore left about half a
+            // pixel between the battery's ink and that stroke — the padding was
+            // being applied and there was nothing to see.
+            //
+            // A share scales with the cell instead, so the gap reads the same on
+            // every device, and PAD_MIN keeps it clear of the border on the
+            // smallest one.
+            PAD_FRAC:   0.07,   // of the cell's side, each end
+            PAD_MIN:    6,      // ...but never less than this, px @ design scale
             GAP:        1,      // between the label and the battery
             TEXT_SHARE: 0.24,   // the label's share of the padded height
             LINE:       1.28,   // font size vs the line box it has to fit — type
