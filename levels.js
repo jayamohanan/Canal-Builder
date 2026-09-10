@@ -80,9 +80,9 @@ const LEVEL_DATA = {
         // one, and the one that reaches the roster.
         { FILE: 'maps/levels/level_01.tmj', CROPS: { 1: 'tomato' } },
         { FILE: 'maps/levels/level_02.tmj', CROPS: { 1: 'tomato', 2: 'potato' } },
-        { FILE: 'maps/levels/level_03.tmj', CROPS: { 1: 'tomato', 2: 'potato', 3: 'egg-plant' } },
-        { FILE: 'maps/levels/level_04.tmj', CROP: 'green-beans' },
-        { FILE: 'maps/levels/level_05.tmj', CROP: 'melon' },
+        { FILE: 'maps/levels/level_03.tmj', CROPS: {  1: 'tomato', 2: 'potato', 3: 'egg-plant' }},
+        { FILE: 'maps/levels/level_04.tmj', CROPS:  {1: 'tomato', 2: 'potato', 3: 'egg-plant', 4: 'green-beans' } },
+        { FILE: 'maps/levels/level_05.tmj', CROPS: {1: 'tomato', 2: 'potato', 3: 'egg-plant', 4: 'green-beans', 5: 'melon' } },
 
 
         { FILE: 'maps/levels/level_11.tmj', CROP: 'corn', RANCH: { SPECIES: 'cow',} },

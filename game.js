@@ -8135,6 +8135,17 @@ console.log(
                     this._panToLevel(nextSeg, () => {
                         E.held = false;
                         E.camHold = false;
+                        // THE ROSTER TURNS OVER LAST OF ALL — after the icon
+                        // has landed, after the task, after the camera has
+                        // moved. The fifth slot has to be SEEN filled: cleared
+                        // on the icon's own arrival it lasted a single frame,
+                        // and cleared at the handover it was gone before the
+                        // melon ever left the field.
+                        //
+                        // Here it coincides with arriving at the new farm, which
+                        // is also when an empty row starts meaning something
+                        // again.
+                        this._setRosterLabel(nextSeg ? nextSeg.levelIndex || 0 : 0);
                         if (next) {
                             next.ready = true;
                             // AND ITS WATER IS LET GO. The farm below is
@@ -8373,9 +8384,13 @@ console.log(
         // not gathered, its icon has not flown. Let this level fill now and the
         // two farms would come in on top of each other.
         next.tunnel.waterHold = (CONFIG.ROAD.ENDLESS || {}).QUEUE_WATER !== false;
-        // The roster names the block being worked, so it turns over here — after
-        // the finished field's icon has landed, not while it is still in flight.
-        this._setRosterLabel(next.levelIndex || 0);
+        // THE ROSTER IS NOT TOUCHED HERE. The handover fires the moment the
+        // water reaches the boundary, which is the START of the level below's
+        // completion — its crops are still coming up and its icon has not flown.
+        // Turning the roster over now emptied the row before the farm that
+        // earned the fifth slot had filled it, and its icon then landed in slot
+        // ONE of the next block. It turns over at the END of that beat instead,
+        // in _finishStretch.
         // Where the outgoing rig actually stands, and where the incoming one is
         // about to. These must be the same point: the new level's floor IS the
         // old level's top, and the new tunnel is seeded with exactly the overrun

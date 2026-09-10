@@ -18,8 +18,35 @@ farm stacked above it. Levels are authored as Tiled maps.
 | Width | **always 22 columns.** Never varies — tile size is derived from it and levels stack flush |
 | Height | 6 to 20 rows |
 | Tile size | 128 × 128 |
-| Main canal | **always columns 12 and 11** (the two centre columns), running the full height |
+| Main canal | **always columns 10 and 11** (the two centre columns), running the full height |
 | Origin | row 0 is the TOP; the machine digs from the bottom row upward |
+| Bleed | **columns 0 and 21 must be left empty.** See below |
+
+### The bleed columns
+
+**Leave column 0 and column 21 empty. Nothing that matters may go in them.**
+
+A phone reads the map as **20 columns wide**, trimming one from each side, and
+draws the middle 20 across the same screen width. That makes every tile 10%
+wider and 21% bigger by area — the farmer, the crops, the machine, the canal and
+everything else with it — which is the difference between legible and squinting
+on a handset.
+
+Nothing else changes. It is the **same map file** for both: desktop and landscape
+draw all 22 columns, and the extra strip at each edge reads as a little more
+field. The canal does not move — it centres on `floor(cols / 2)`, so trimming one
+column from the left shifts the centre by exactly the same one, and columns 10
+and 11 stay the canal on both.
+
+So anything painted in column 0 or 21 — a tree, a fence post, a prop marker — is
+simply **not there** for most players, while looking perfectly fine to whoever
+authored it on a desktop. That is the only way to get this wrong, and it is why
+the rule is a rule rather than a suggestion.
+
+Object markers outside the trimmed grid are dropped rather than clamped, so a
+`bridge_main_ew` or a `cow_s` in an edge column vanishes on phones.
+
+(Config: `ROAD.TILEMAP.MOBILE_TRIM`, `COLS: 20`.)
 
 Levels are played in a fixed order and should **grow**. The first levels are
 short — 6 to 9 rows with one or two branch runs. Do not open with a 20-row map.

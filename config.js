@@ -97,7 +97,7 @@ var CONFIG = {
     DEBUG_PERF: true,        // log object / tween / timer / texture counts each
                              // time the world rebases (once per level). Climbing
                              // numbers = something is outliving its band
-    BATTERY_START_LEVEL: 1,
+    BATTERY_START_LEVEL: 25,
     BATTERY_IMAGE_EXTENSIONS: ['svg', 'png', 'jpg', 'webp'],
 
     // BACKGROUND: {
