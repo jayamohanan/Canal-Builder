@@ -97,7 +97,7 @@ var CONFIG = {
     DEBUG_PERF: true,        // log object / tween / timer / texture counts each
                              // time the world rebases (once per level). Climbing
                              // numbers = something is outliving its band
-    BATTERY_START_LEVEL: 25,
+    BATTERY_START_LEVEL: 1,
     BATTERY_IMAGE_EXTENSIONS: ['svg', 'png', 'jpg', 'webp'],
 
     // BACKGROUND: {
@@ -181,9 +181,16 @@ var CONFIG = {
         //
         // Farmyard rather than Ranch: a ranch is cattle on open land, and this
         // block has pigs, chickens and rabbits in it.
+        // PLAIN NOUNS, no verb. The row filling one slot at a time IS the
+        // restoring, so a label that also said "Restored" was either premature —
+        // it sits over four empty slots for most of a block — or repeating what
+        // the slots are already doing. A noun is true at every moment of the
+        // block, and it is one word to translate rather than two.
         BLOCKS: [
-            'Vegetable Patch',   // 1-5
-            'Farmyard',          // 6-10
+            'Vegetables',        // 1-5
+            'Livestock',         // 6-10   (no plural: it is already collective)
+            'Orchard',           // 11-15
+            'Flowers',           // 16-20
         ],
         LABEL_SIZE:  15,     // px at design scale
         // White on a dark outline, not dark on the field. The name sits over
@@ -194,7 +201,22 @@ var CONFIG = {
         LABEL_COLOR:  '#ffffff',
         LABEL_STROKE: '#2b2013',
         LABEL_STROKE_W: 3,   // px at design scale
-        LABEL_GAP:   5,      // between the name and the slots
+        LABEL_GAP:   2.5,    // between the name and the slots
+
+        // ── WHAT WAS JUST BROUGHT BACK ──────────────────────────────────────
+        // The newest slot's produce, named under it — and only that one. Naming
+        // every slot would turn the strip into a list to read; naming the last
+        // one makes it a caption on the thing that just happened, and it moves
+        // along the row as the block fills.
+        PRODUCE: {
+            ENABLED: true,
+            SIZE:    13,         // px @ design scale, under the block name's 15
+            COLOR:  '#4a3a26',
+            STROKE: '#fffdf6',   // pale, not dark: this sits on open ground below
+                                 // the strip rather than over it
+            STROKE_W: 3,
+            GAP:     3,          // below the slots
+        },
 
         SIZE:    46,         // slot side, px at design scale
         RADIUS:  12,         // corner rounding, px at design scale. Clamped to
@@ -252,7 +274,14 @@ var CONFIG = {
         //
         // Anything missing here falls back to the fruit cropped out of its crop
         // sheet, so an unlock with no icon yet still shows something.
+        // A NUMBER is a frame in the SHEETS grid; a STRING is a standalone
+        // texture, for art that is not 48px square and has no business being
+        // squeezed into the grid.
         ICONS: {
+            // Standalone icons in graphics/ui/, by texture name. Loaded from
+            // this table, so an entry here is all a new one needs.
+            churn: 'churn_icon',
+            corn:  'corn_icon',
             'tomato': 0, 'potato':  1, 'egg-plant': 2, 'green-beans': 3, 'melon': 4,
             'cow':    5, 'chicken': 6, 'bunny':     7, 'sheep':       8, 'goat':  9,
         },
@@ -901,6 +930,28 @@ var CONFIG = {
                     // and the same reason as the dams'. It then drops in from
                     // above exactly as the wall does. Branch bridges have no
                     // such entry: their canals are drawn with the level.
+                    // ── Buildings ───────────────────────────────────────
+                    // A barn: the one thing that says "ranch" rather than
+                    // "field" at a glance, and the only prop on a level tall
+                    // enough to break its horizon.
+                    //
+                    // SIZE is its HEIGHT in tiles and the width follows the
+                    // art's own aspect (323x381), so it can be redrawn at any
+                    // proportion without a number changing here.
+                    //
+                    // ORIGIN [0.5, 1] anchors it by its BOTTOM CENTRE — the
+                    // marker is the point the building stands on, which is what
+                    // a point on a map means for anything with a footprint. It
+                    // also makes the depth right for free: with the origin at
+                    // the foot, the y it sorts on IS the ground it occupies, so
+                    // a cow in front of the barn draws over it and one behind
+                    // does not.
+                    barn:             { FILE: 'graphics/animals/cows/barn.webp', SIZE: 3.4, ORIGIN: [0.5, 1] },
+                    // The chicken block's building. Well under the barn on
+                    // purpose: the size difference is most of what says one
+                    // holds cattle and the other holds birds.
+                    coop:             { FILE: 'graphics/animals/chicken/coop.png', SIZE: 1.4, ORIGIN: [0.5, 1] },
+
                     bridge_main_ns:   { FILE: 'graphics/bridge/bridge_main_ns.webp', SIZE:   2, ORIGIN: [0.5, 0.5], WALKABLE: true, DEPTH: 3.15, AFTER_DIG_TILES: 4 },
                     bridge_main_ew:   { FILE: 'graphics/bridge/bridge_main_ew.webp', SIZE_W: 2, ORIGIN: [0.5, 0.5], WALKABLE: true, DEPTH: 3.15, AFTER_DIG_TILES: 4 },
                     // A ONE-TILE BRIDGE HAS ITS OWN ART at half the size, and
@@ -929,7 +980,23 @@ var CONFIG = {
                     cow_w: { SPECIES: 'cow', FACING: 'w', ORIGIN: [0,   1], FACE: [-1,  0] },
                 },
             },
-            POND_LAYER: 'pond',            // marker layer the ponds are painted on
+            POND_LAYER: 'pond',            // the ponds' layer. Read BOTH ways: as an
+                                           // OBJECT layer of rectangles (the way
+                                           // props and ranches are authored), and
+                                           // as a tile layer of painted markers
+                                           // (how ponds were done first). A map
+                                           // may use either; objects are the way
+                                           // to author a new one
+            // WHICH ART A POND USES. An object's NAME picks it — a rectangle
+            // called `pond2` draws pond2 — and a plain `pond` takes the first
+            // entry here. The names are the DRY art; the water and flow versions
+            // are derived from it by suffix, so one name gives all three.
+            //
+            // Everything listed is loaded, because an object layer names its art
+            // inside the MAP and the loader would otherwise have to parse every
+            // level to find out what to fetch. Six 256px files is 1.2MB of
+            // texture, which is not worth a scan.
+            POND_ART: ['pond1', 'pond2'],
             POND_DIR:   'graphics/pond/',  // where the pond art lives
 
             // ── Filling a pond ───────────────────────────────────────────
@@ -1029,6 +1096,10 @@ var CONFIG = {
                 'copy.tsx':    { KEY: 'canal_sheet', CANAL: true },
                 'terrain.tsx': { IMAGE: 'graphics/tilesheets/terrain.webp',
                                  KEY: 'terrain' },
+                // Paddock fencing, painted INSIDE a level — not the run of poles
+                // at a level's boundary, which is its own sprite (FENCE).
+                'fence.tsx':   { IMAGE: 'graphics/tilesheets/fence.webp',
+                                 KEY: 'fence_sheet' },
             },
             FRAME:   128,           // frame size in the sheet
             SHEET_PAD: 2,           // EXTRUSION, in px, added around every frame
@@ -1270,7 +1341,60 @@ var CONFIG = {
                 // HEIGHT lets a fence stand taller than the cell it occupies —
                 // the art is anchored to the BOTTOM of its tile and rises out of
                 // it, which is what a post does.
-                FENCE_LAYER:  'fences',
+                // Both spellings: the config said 'fences' and the maps say
+                // 'fence'. First match wins, the same way the crop layer accepts
+                // either — a layer name is not worth a migration.
+                FENCE_LAYER:  ['fence', 'fences'],
+                // Upright, so it sorts by world Y like an actor rather than
+                // lying flat with the ground: an animal in front of a rail draws
+                // over it, one behind it does not. The bias lifts it a hair off
+                // whatever shares its row.
+                FENCE_BIAS:   -0.0004,
+
+                // ── WHAT AN ANIMAL PRODUCES ─────────────────────────────
+                // A ranch level had nothing to gather: grass is pasture, so it
+                // greens up and stops, while a crop level ripens, is walked, is
+                // tallied and ticks. This gives the herd the same beat — the
+                // animal is both the reward in the roster AND the source of the
+                // level's produce.
+                //
+                // IT IS LEFT WHERE THE ANIMAL STOOD, not carried. That is the
+                // whole reason this needs no new machinery: a churn on the grass
+                // is a yield in a cell, indistinguishable from a fruit as far as
+                // the harvest run is concerned — same nearest-first targeting,
+                // same reach, same MAX_HOLD clock, same flight to the tally. The
+                // cow may wander off; the milk stays.
+                //
+                // ONE PER ANIMAL, so the tally's count is simply the herd size
+                // and is known before a drop has happened.
+                PRODUCE: {
+                    ENABLED:  true,
+                    // WHAT each species leaves is on the species itself, in
+                    // SPECIES.<name>.PRODUCE — a churn is 0.93 tiles and an egg
+                    // is 0.34, and neither number means anything to the other
+                    // animal. What is shared is WHEN and HOW it appears.
+                    SIZE:     0.62,        // fallback height, in tiles, for a
+                                           // species that names no size of its
+                                           // own. The width follows the art
+                    AFTER_MS: [3000, 14000],  // once it has appeared and grazed a
+                                              // while. Spread wide: a herd that
+                                              // yields together reads as a
+                                              // machine, not as animals
+                    POP_MS:   320,
+                    POP_FROM: 0.4,
+                    // OVER THE ANIMAL, not under it. An animal sorts at
+                    // _yDepth(y) with no bias, and the churn is dropped at the
+                    // animal's own feet — so anything negative put it behind a
+                    // cow standing on the exact same spot, which is every churn
+                    // at the moment it appears. It only becomes visible once the
+                    // cow wanders off, which is far too late to read as being
+                    // produced.
+                    //
+                    // Depth is still by world Y, so a cow standing lower in the
+                    // field still draws over a churn higher up. This only settles
+                    // ties, and a tie means "the animal that just left it".
+                    BIAS:     0.0006,
+                },
                 FENCE_HEIGHT: 1,        // in tiles; 1.5 for a tall fence
 
                 // ── Wandering ───────────────────────────────────────────
@@ -1388,6 +1512,12 @@ var CONFIG = {
                     // farmer does on a straight vertical walk too, and reads as
                     // an animal that simply has not turned.
                     chicken: {
+                        // 0.68 rather than the honest 0.34: an egg that size
+                        // beside a hen is right and unreadable — 17px lost among
+                        // a hundred corn plants. Produce has to be findable, and
+                        // the player is looking for it.
+                        PRODUCE: { NAME: 'egg', FILE: 'graphics/animals/chicken/egg.png',
+                                   ICON: 'egg_icon', SIZE: 0.68 },
                         SHEETS: {
                             e: { FILE: 'graphics/animals/chicken/chicken_e.webp', FRAME_W: 100, FRAME_H: 100 },
                         },
@@ -1402,8 +1532,33 @@ var CONFIG = {
                             e: { SHEET: 'e', IDLE: 0, WALK: 1, EAT: 2, SIZE: 0.85 },
                             w: { SHEET: 'e', IDLE: 0, WALK: 1, EAT: 2, SIZE: 0.85, FLIP: true },
                         },
+                        // IT SCATTERS WHEN THE FARMER COMES CLOSE. The one bit of
+                        // behaviour that makes a hen a hen rather than a small
+                        // cow — and it makes the gathering run lively, since the
+                        // eggs he is walking to are exactly where the birds sat.
+                        //
+                        // It runs to somewhere it could have wandered anyway:
+                        // its own farm's rows, the columns a phone draws, never
+                        // the ditch. Scattering never takes it anywhere the
+                        // farmer could not follow.
+                        FLEE: {
+                            RADIUS:      1.5,         // tiles — how close is too close
+                            DIST:        [1.4, 2.6],  // tiles — how far it bolts
+                            SPEED_MUL:   4,           // against its amble; a hen
+                                                      // that walks away is not
+                                                      // startled
+                            COOLDOWN_MS: 700,         // before it can bolt again,
+                                                      // so a farmer standing near
+                                                      // does not make it vibrate
+                        },
                     },
                     cow: {
+                        // WHAT IT LEAVES. Named, sized and pathed per species,
+                        // because a churn and an egg are nothing alike: one is
+                        // nearly as tall as the cow that made it, the other sits
+                        // under a hen. Only the TIMING is shared (PRODUCE above).
+                        PRODUCE: { NAME: 'churn', FILE: 'graphics/animals/cows/churn.png',
+                                   ICON: 'churn_icon', SIZE: 0.93 },
                         SHEETS: {
                             ns: { FILE: 'graphics/animals/cows/cow_ns.webp', FRAME_W: 57,  FRAME_H: 114 },
                             e:  { FILE: 'graphics/animals/cows/cow_e.webp',  FRAME_W: 128, FRAME_H: 84  },
@@ -2021,6 +2176,16 @@ var CONFIG = {
                 GAP:       0.08,     // between cells, in tiles
                 MARGIN:    0.5,      // from the map's left edge, in tiles
                 LIFT:      0.35,     // clear of the boundary line, in tiles
+                // ...unless that would put it off the top of the screen. A tall
+                // level nearly fills the view, so its top boundary sits at the
+                // very edge and anything ABOVE that line — which the tally is,
+                // by design — falls outside it. On a 20-row map the block was 72
+                // px past the top and simply never seen.
+                //
+                // Pushed down into the field in that case, by the least that
+                // brings it back. Short levels are untouched: they have a screen
+                // of room above them.
+                SCREEN_MARGIN: 0.25, // least clearance from the top, in tiles
                 COLOR:      0xfffdf6, ALPHA: 0.9,
                 DONE_COLOR: 0xc9d8b6,          // when its last one is in
                 STROKE_COLOR: 0x5c4a33, STROKE_ALPHA: 0.85, STROKE_W: 2,
@@ -2211,6 +2376,32 @@ var CONFIG = {
             // The mask is fixed at build: tilling happens before any water, and
             // the patch's outline never changes afterwards — only its colour,
             // when the water arrives.
+            // ── PASTURE ─────────────────────────────────────────────────────
+            // Grass is not a crop in the way the others are, and the difference
+            // is worth drawing: it is turf, not a worked plot.
+            //
+            // NO TILLED PATCH. The brown furrowed square under every plant is
+            // the loudest "vegetable plot" signal the game has, and a pasture
+            // has none of it. Turning it off is what makes a cow level read as
+            // grazing land the moment it is watered, before a single animal
+            // appears — and it keeps a potato field under a pig farm looking
+            // properly cultivated, which it should, because it is.
+            //
+            // SCATTERED, NOT PLANTED. Other crops sit dead centre in their cell,
+            // which is right for rows someone dug. Grass grows where it lands,
+            // so it is offset within its cell — and some cells carry TWO, so the
+            // sward thickens and thins instead of reading as a grid at one
+            // plant per square.
+            PASTURE: {
+                JITTER: 0.32,    // offset from the cell's centre, in tiles, each
+                                 // axis. Past ~0.4 plants start crossing into
+                                 // neighbouring cells and the field loses its
+                                 // shape entirely
+                EXTRA:  0.2,     // this share again, dropped into cells that
+                                 // already have one — 20% more plants, gathered
+                                 // into clumps rather than spread evenly
+            },
+
             CROP_BASE: {
                 ENABLED: true,
                 ALPHA:   1,

@@ -78,11 +78,22 @@ const LEVEL_DATA = {
         // Levels 1-3 paint markers 1, 1-2 and 1-2-3 — each field carries what
         // the ones before it grew, plus its own. The last one named is the new
         // one, and the one that reaches the roster.
+
         { FILE: 'maps/levels/level_01.tmj', CROPS: { 1: 'tomato' } },
+        { FILE: 'maps/levels/level_13.tmj', CROPS: { 1: 'potato' }, RANCH: { SPECIES: 'pig', COUNT:30} },
+
+        { FILE: 'maps/levels/level_12.tmj', CROPS: { 1: 'corn' }, RANCH: { SPECIES: 'chicken', COUNT:100} },
+        { FILE: 'maps/levels/level_11.tmj', CROPS: { 1: 'grass' }, RANCH: { SPECIES: 'cow',} },
+        
+
         { FILE: 'maps/levels/level_02.tmj', CROPS: { 1: 'tomato', 2: 'potato' } },
         { FILE: 'maps/levels/level_03.tmj', CROPS: {  1: 'tomato', 2: 'potato', 3: 'egg-plant' }},
         { FILE: 'maps/levels/level_04.tmj', CROPS:  {1: 'tomato', 2: 'potato', 3: 'egg-plant', 4: 'green-beans' } },
         { FILE: 'maps/levels/level_05.tmj', CROPS: {1: 'tomato', 2: 'potato', 3: 'egg-plant', 4: 'green-beans', 5: 'melon' } },
+
+
+
+        
 
 
         { FILE: 'maps/levels/level_11.tmj', CROP: 'corn', RANCH: { SPECIES: 'cow',} },
@@ -105,6 +116,10 @@ const LEVEL_DATA = {
     // CLASS decides how the frames after the growth run are interpreted:
     //   trellis  last frame is the SUPPORT, drawn behind and never animated
     //   root     last frame is the pulled vegetable, for harvest; no fruit
+    //   pasture  turf, not a plot: NO tilled patch under it, no fruit and
+    //            nothing to harvest — the animal grazing it is the yield. Its
+    //            plants are also scattered within their cells and clumped,
+    //            rather than one dead centre in each (TILEMAP.PASTURE)
     //   (unset)  normal — last frame is the fruit, drawn over the final body
     CROP_LIBRARY: {
         DIR: 'graphics/crops/',
@@ -114,6 +129,12 @@ const LEVEL_DATA = {
             'green-beans': 'trellis',
             'carrot':      'root',
             'potato':      'root',
+            // Feed crops. A potato under a pig farm is still a potato — worked
+            // ground, pulled at harvest — so only the grasses are pasture.
+            'grass':       'pasture',
+            'grass2':      'pasture',
+            'grass3':      'pasture',
+            'grass4':      'pasture',
         },
     },
 

@@ -487,6 +487,31 @@ class GameScene extends Phaser.Scene {
         // The LAKE's lilies are a different thing: one composed layout, read
         // out of its own Tiled map. The sheet is sliced into frames because the
         // map addresses them by gid.
+        // ANIMAL PRODUCE, per species: the thing left on the grass and the icon
+        // the tally counts it with. Both are named on the species itself, so
+        // adding an animal that lays, gives or yields something needs no code —
+        // wool and honey would arrive the same way.
+        const AN = ((CONFIG.ROAD || {}).TILEMAP || {}).ANIMALS || {};
+        if ((AN.PRODUCE || {}).ENABLED !== false) {
+            for (const sp of Object.values(AN.SPECIES || {})) {
+                const P = sp.PRODUCE;
+                if (!P || !P.NAME) continue;
+                if (P.FILE) this.load.image(P.NAME, P.FILE);
+            }
+        }
+        // EVERY STANDALONE ICON, once. Two places name them — string entries in
+        // ROSTER.ICONS (a crop like corn) and a species' PRODUCE.ICON (an egg) —
+        // so they are gathered into one set first; loading a key twice only
+        // earns a warning from Phaser and a second fetch.
+        const uiIcons = new Set();
+        for (const v of Object.values((CONFIG.ROSTER || {}).ICONS || {})) {
+            if (typeof v === 'string') uiIcons.add(v);
+        }
+        for (const sp of Object.values(AN.SPECIES || {})) {
+            if (sp.PRODUCE && sp.PRODUCE.ICON) uiIcons.add(sp.PRODUCE.ICON);
+        }
+        for (const key of uiIcons) this.load.image(key, `graphics/ui/${key}.png`);
+
         // The tally's tick.
         const TK = (((CONFIG.ROAD || {}).TILEMAP || {}).GOALS || {}).TICK || {};
         if (TK.FILE) this.load.image('tick', TK.FILE);
@@ -1259,6 +1284,17 @@ console.log(
             mainData:   layer(TM.MAIN_LAYER)   || [],   // dug main canal
             cropsData:  layer(TM.CROPS_LAYER)  || [],   // crop markers (not drawn)
             pondData:   layer(TM.POND_LAYER)   || [],   // pond markers (not drawn)
+            pondObjs:   objects(TM.POND_LAYER),         // ...or rectangles, the newer way
+            // THE BLEED COLUMNS, for anything the game places ITSELF. A phone
+            // reads the map without them (see MOBILE_TRIM), so a scattered
+            // animal or a spawned farmer put there would be invisible to most
+            // players — and a herd would come out a different size on a phone
+            // than on a desktop. Hand-painted content is the author's business;
+            // this is the number automatic placement has to respect.
+            //
+            // Zero once trimmed: the columns are already gone.
+            edgeCols:   cut ? 0 : Math.max(0, Math.floor((map.width - Math.min(map.width,
+                            (TM.MOBILE_TRIM || {}).COLS || map.width)) / 2)),
             props:      objects((TM.PROPS || {}).LAYER),// placed scenery (object layer)
             ranch:      objects((TM.ANIMALS || {}).LAYER),  // placed animals (object layer)
             fenceData:  layer((TM.ANIMALS || {}).FENCE_LAYER) || [],  // upright fences
@@ -1755,6 +1791,25 @@ console.log(
         // The ground pass keeps its sprites, indexed by cell, so a crop can
         // green the tile under itself as it grows (see _updateCrops). Branch
         // tiles never change, so that pass stays anonymous.
+        // PADDOCK FENCING, painted on the level's own fence layer. Drawn before
+        // the ground pass sets up so it can share this method's grid, but in its
+        // own loop: unlike ground and branch it is UPRIGHT, so it sorts by world
+        // Y instead of lying at a flat depth, and an animal walking in front of
+        // a rail draws over it.
+        const FB = ((CONFIG.ROAD.TILEMAP || {}).ANIMALS || {}).FENCE_BIAS;
+        for (let row = 0; row < g.rows; row++) {
+            for (let col = 0; col < g.cols; col++) {
+                const gid = (g.fenceData || [])[row * g.cols + col];
+                if (!gid) continue;
+                const t = this._tileOf(gid);
+                if (!t) continue;                    // not from a drawable sheet
+                const cy = gTop + (row + 0.5) * g.tile;
+                this._addB(this.add.image(g.left + (col + 0.5) * g.tile, cy, t.key, t.frame)
+                    .setDisplaySize(g.tile + 1, g.tile + 1)
+                    .setDepth(this._yDepth(cy, FB !== undefined ? FB : -0.0004)), seg);
+            }
+        }
+
         const ground = seg.groundSprites = [];
         const TM = CONFIG.ROAD.TILEMAP;
         // The GROUND layer's own gid is ignored — every painted cell draws the
@@ -1835,14 +1890,17 @@ console.log(
         // crop records have to exist before it runs.
         this._buildCrops(seg, band);
         this._buildWetGround(seg);
-        this._buildGoals(seg, band);
-        // The FIRST level is built already lit — _focusDim ran before its tally
-        // existed, so nothing would ever raise it.
-        if (this._dimmedSeg === seg) this._showGoals(seg, true);
         this._buildFarmer(seg, gTop);
         this._buildFence(seg, gTop);
         this._buildProps(seg, gTop);
         this._buildAnimals(seg, gTop);
+        // AFTER the herd, because the tally counts what the level will produce
+        // and a ranch's produce is one per animal — a number that does not exist
+        // until the herd does.
+        this._buildGoals(seg, band);
+        // The FIRST level is built already lit — _focusDim ran before its tally
+        // existed, so nothing would ever raise it.
+        if (this._dimmedSeg === seg) this._showGoals(seg, true);
         // The band's middle, for the camera to settle on when this level is
         // finished. Recorded here because this is where the band's top and
         // height are both in hand.
@@ -1853,6 +1911,7 @@ console.log(
         // the light last moved.
         this._focusFenceDepth(this._dimmedSeg);
         this._buildPonds(seg, band);
+        this._buildPondObjects(seg, band);
     }
 
     // ── Watered ground ───────────────────────────────────────────────────────
@@ -2279,6 +2338,76 @@ console.log(
         }
     }
 
+    // WHAT A SPECIES LEAVES — its own entry, over the shared defaults.
+    //
+    // The shared block (ANIMALS.PRODUCE) holds the timing and the pop, which are
+    // the same for every animal; the species holds the art, the name and the
+    // size, which are not: a churn stands nearly as tall as the cow that made it
+    // and an egg sits under a hen.
+    _produceOf(species) {
+        const A = CONFIG.ROAD.TILEMAP.ANIMALS || {};
+        const base = A.PRODUCE || {};
+        const own  = ((A.SPECIES || {})[species] || {}).PRODUCE || {};
+        return {
+            name: own.NAME,
+            art:  own.NAME,                       // the texture is keyed by name
+            size: own.SIZE !== undefined ? own.SIZE
+                : (base.SIZE !== undefined ? base.SIZE : 0.62),
+        };
+    }
+
+    // AN ANIMAL LEAVES ITS PRODUCE ON THE GRASS.
+    //
+    // One per animal, once, a staggered while after it has walked on and been
+    // grazing. It is left WHERE THE ANIMAL STOOD and the animal walks away from
+    // it — which is what lets the existing harvest take it unchanged: a churn in
+    // a cell is a yield in a cell, and the run's nearest-first targeting, reach
+    // test, MAX_HOLD clock and flight to the tally all apply without knowing it
+    // came from a cow rather than a plant.
+    //
+    // It joins seg.crops as a crop-shaped record, already `done`, so _updateCrops
+    // skips it (that loop's first test is cr.done) while _cropYield, _pickFruit,
+    // _cropsDone and _fieldPicked all read it as the produce it is.
+    _dropProduce(seg, a) {
+        const A = CONFIG.ROAD.TILEMAP.ANIMALS || {}, P = A.PRODUCE || {};
+        const g = this.tileGrid;
+        const kind = this._produceOf(a.species);
+        if (!g || !kind.art || !this.textures.exists(kind.art)) return;
+        const src = this.textures.get(kind.art).getSourceImage();
+        const h   = kind.size * g.tile;
+        const w   = h * (src.width / src.height);
+        const x = a.spr.x, y = a.spr.y;
+        const spr = this._addB(this.add.image(x, y, kind.art)
+            .setDisplaySize(w, h)
+            .setOrigin(0.5, 0.9)          // stands on the ground, not centred on it
+            .setDepth(this._yDepth(y, P.BIAS !== undefined ? P.BIAS : -0.0002)), seg);
+        // It pops in: something appeared, and an object that fades reads as
+        // scenery being switched on rather than as a thing being produced.
+        const ms = P.POP_MS !== undefined ? P.POP_MS : 320;
+        const sx = spr.scaleX, sy = spr.scaleY;
+        if (ms > 0) {
+            const from = P.POP_FROM !== undefined ? P.POP_FROM : 0.4;
+            spr.setScale(sx * from, sy * from);
+            this.tweens.add({ targets: spr, scaleX: sx, scaleY: sy,
+                duration: ms, ease: 'Back.easeOut' });
+        }
+        // CROP-SHAPED, so every part of the harvest reads it without a special
+        // case: `fruit` is the thing to take, `lay.fruit` says there is one to
+        // take, `done` keeps the growth loop off it, and readyAt starts the
+        // clock that decides when the farmer sets out.
+        const col = Math.floor((x - g.left) / g.tile);
+        const row = Math.floor((y - a.gTop) / g.tile);
+        (seg.crops || (seg.crops = [])).push({
+            crop: kind.name, col, row,
+            sprite: spr, fruit: spr, picked: false, done: true,
+            lay: { cls: 'produce', growth: 1, fruit: 0, support: null, harvest: null },
+            stage: 1, timer: 0, sc: sx, watch: null,
+            baseAngle: 0, sway: 0, swayV: 0, twF: null,
+            tilled: null, ground: null, ovl: 0,
+            readyAt: this.time.now,
+        });
+    }
+
     // Rock the lake's lilies: the whole surface lifting as one.
     //
     // Every lily is moved about its OWN placed position and never away from it —
@@ -2643,9 +2772,44 @@ console.log(
                 this._paintSlot(slot, false);
             }
             ro.filled = 0;
+            this._setRosterProduce(null, null);   // the caption goes with the row
         }
         ro.block = i;
         ro.label.setText((R.BLOCKS || [])[i] || '');
+    }
+
+    // Name the newest slot's produce, under it.
+    //
+    // ONE CAPTION, NOT A LIST. Only the last slot filled is named, and the
+    // caption travels along the row as the block fills — naming every slot would
+    // make the strip something to read rather than something to glance at, and
+    // the point of the row is the shape of it, not the words.
+    //
+    // A crop's name is its FILE name, so it is tidied for reading here:
+    // "egg-plant" is a texture key, "Egg Plant" is a caption.
+    _setRosterProduce(slot, name) {
+        const R = CONFIG.ROSTER || {}, P = R.PRODUCE || {}, ro = this.roster;
+        if (P.ENABLED === false || !ro) return;
+        if (!name) { if (ro.produce) ro.produce.setText(''); return; }
+        const s = this.layoutConfig.scale *
+                  (this.isPortrait ? (R.PORTRAIT_SCALE || 1) : 1);
+        const gap = (P.GAP !== undefined ? P.GAP : 3) * s;
+        const y   = ro.y + ro.size / 2 + gap;
+        if (!ro.produce) {
+            ro.produce = this._addB(this.add.text(slot.x, y, '', {
+                    fontSize: Math.max(8, Math.round((P.SIZE || 13) * s)) + 'px',
+                    fontFamily: CONFIG.FONT_FAMILY,
+                    fontStyle: CONFIG.FONT_WEIGHT,
+                    color: P.COLOR || '#4a3a26',
+                    stroke: P.STROKE || '#fffdf6',
+                    strokeThickness: Math.max(1, Math.round((P.STROKE_W !== undefined ? P.STROKE_W : 3) * s)),
+                }).setOrigin(0.5, 0).setScrollFactor(0)
+                  .setDepth((R.DEPTH !== undefined ? R.DEPTH : 99000) + 2), null);
+        }
+        const pretty = String(name).split(/[-_]/)
+            .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+            .join(' ');
+        ro.produce.setText(pretty).setPosition(slot.x, y);
     }
 
     // Drop something into the next empty slot.
@@ -2675,7 +2839,12 @@ console.log(
 
         const slot = ro.slots[ro.filled++];
         this._paintSlot(slot, true);
-        if (!sheet || !this.textures.exists(sheet)) { end(); return; }
+        // The caption lands WITH the icon, so it is written at each arrival
+        // rather than here — except when there is no icon to wait for.
+        if (!sheet || !this.textures.exists(sheet)) {
+            this._setRosterProduce(slot, name);
+            end(); return;
+        }
 
         const fit = ro.size * (R.ICON_FRAC !== undefined ? R.ICON_FRAC : 0.78);
         // The frame number says both WHICH SHEET and which cell of it, so adding
@@ -2733,7 +2902,11 @@ console.log(
                     const k = big + (1 - big) * t;      // produce -> icon
                     spr.setScale(sx * k, sy * k);
                 },
-                onComplete: () => { spr.setPosition(x1, y1).setScale(sx, sy); end(); },
+                onComplete: () => {
+                    spr.setPosition(x1, y1).setScale(sx, sy);
+                    this._setRosterProduce(slot, name);
+                    end();
+                },
             });
             return;
         }
@@ -2743,8 +2916,9 @@ console.log(
         if (ms > 0) {
             spr.setScale(sx * 1.6, sy * 1.6).setAlpha(0);
             this.tweens.add({ targets: spr, scaleX: sx, scaleY: sy, alpha: 1,
-                duration: ms, ease: 'Back.easeOut', onComplete: end });
-        } else end();
+                duration: ms, ease: 'Back.easeOut',
+                onComplete: () => { this._setRosterProduce(slot, name); end(); } });
+        } else { this._setRosterProduce(slot, name); end(); }
     }
 
     // Where a world point sits for a PINNED object on the same camera.
@@ -2839,8 +3013,9 @@ console.log(
         const bare = [], beside = [], loose = [];
         const planted = (c, r) => c >= 0 && c < g.cols && r >= 0 && r < g.rows &&
                                   !!g.cropsData[r * g.cols + c];
+        const bleed = g.edgeCols || 0;
         for (let r = 0; r < g.rows; r++) {
-            for (let c = 0; c < g.cols; c++) {
+            for (let c = bleed; c < g.cols - bleed; c++) {
                 if (this._farmerBand(g, c) === 0) continue;
                 if (this._canalCell(g, c, r)) continue;      // never on water
                 if (planted(c, r)) continue;                 // never on a seed
@@ -3288,8 +3463,9 @@ console.log(
             // Every cell an animal could stand on. Canal tiles are the only
             // thing ruled out so far — they stand on the land, not the ditch.
             const open = [];
+            const bleed = g.edgeCols || 0;
             for (let r = 0; r < g.rows; r++) {
-                for (let c = 0; c < g.cols; c++) {
+                for (let c = bleed; c < g.cols - bleed; c++) {
                     if (this._canalCell(g, c, r)) continue;
                     open.push({ c, r, k: this._cellHash(c, r, 11) });
                 }
@@ -3375,6 +3551,9 @@ console.log(
             const down  = this._cellHash(c, r, 13) < 0.75;
             (seg.herd || (seg.herd = [])).push({
                 spr, poses, face, roams,
+                // WHAT IT IS, kept on the animal: its produce is looked up from
+                // this, and a level may hold more than one kind.
+                species: spec.species,
                 gTop, row: r, col: c,
                 mode: 'stand', down,
                 // Nothing wanders before it exists. Grazing still ticks while
@@ -3462,7 +3641,7 @@ console.log(
     _updateHerd(dtMs) {
         const TM = CONFIG.ROAD.TILEMAP, A = TM.ANIMALS || {};
         if (A.ENABLED === false) return;
-        const G = (TM.PROPS || {}).GRAZE || {}, MV = A.MOVE || {};
+        const G = (TM.PROPS || {}).GRAZE || {}, MV = A.MOVE || {}, PR = A.PRODUCE || {};
         const down = G.DOWN_MS || [4200, 9500], up = G.UP_MS || [900, 2300];
         const stepMs = 1000 / Math.max(1, MV.WALK_FPS || 5);
         const dt = Math.min(dtMs, 100), dts = dt / 1000;
@@ -3470,20 +3649,46 @@ console.log(
         for (const seg of this.segments || []) {
             const list = seg.herd;
             if (!list || !list.length) continue;
-            const g = this.tileGrid;
+            // THIS LEVEL'S GRID, never this.tileGrid. Levels are built ahead of
+            // the machine, so the global grid belongs to the newest one — a herd
+            // bounded by it took another level's row count (a longer map let
+            // animals walk off their own floor into the level below) and dodged
+            // another level's canals while wading through their own.
+            const g = (seg.tunnel && seg.tunnel.flood && seg.tunnel.flood.g) || this.tileGrid;
             for (let i = list.length - 1; i >= 0; i--) {
                 const a = list[i];
                 if (!a.spr || !a.spr.scene) { list.splice(i, 1); continue; }
+                // ITS PRODUCE, once, a while after it walked on. Ticked here
+                // rather than in the graze loop because that one is shared with
+                // static props: a well does not give milk.
+                if (a.shown && !a.gave && PR.ENABLED !== false) {
+                    if (a.giveT === undefined) a.giveT = this._rndRange(PR.AFTER_MS || [3000, 14000]);
+                    a.giveT -= dt;
+                    if (a.giveT <= 0) { a.gave = true; this._dropProduce(seg, a); }
+                }
+                // SCATTERING, which overrides whatever it was doing — standing,
+                // grazing or ambling. Checked before the pose is read, because a
+                // bolt can turn it and that changes which pose applies.
+                if (a.shown) this._fleeFarmer(seg, a, g, dt);
                 const p = a.poses[a.face];
                 if (!p) continue;
 
                 if (a.mode === 'walk') {
                     const dx = a.tx - a.spr.x, dy = a.ty - a.spr.y;
                     const d  = Math.hypot(dx, dy);
-                    const step = (MV.SPEED || 0.45) * (a.tile || g.tile) * dts;
+                    // BOLTING, it covers ground SPEED_MUL times faster and its
+                    // feet go that much quicker too — the same gait at the old
+                    // cadence would read as sliding.
+                    const FL = a.flee ? (((A.SPECIES || {})[a.species] || {}).FLEE || {}) : null;
+                    const mul = FL ? (FL.SPEED_MUL !== undefined ? FL.SPEED_MUL : 4) : 1;
+                    const step = (MV.SPEED || 0.45) * mul * (a.tile || g.tile) * dts;
                     if (d <= step) {
                         a.spr.setPosition(a.tx, a.ty);
                         a.mode = 'stand';
+                        if (a.flee) {
+                            a.flee = false;
+                            a.fleeCd = FL.COOLDOWN_MS !== undefined ? FL.COOLDOWN_MS : 700;
+                        }
                         a.wait = this._rndRange(MV.PAUSE_MS || [4000, 15000]);
                         a.down = false; a.t = 0;
                         a.next = this._rndRange(up);
@@ -3494,8 +3699,8 @@ console.log(
                         // The two walk frames alternating. Its own clock, not the
                         // graze timer — one is a gait, the other is a mood.
                         a.stepT += dt;
-                        if (a.stepT >= stepMs) {
-                            a.stepT -= stepMs;
+                        if (a.stepT >= stepMs / mul) {
+                            a.stepT -= stepMs / mul;
                             a.stepOn = !a.stepOn;
                             this._wearFrame(a.spr, a.stepOn && p.walk ? p.walk : p.idle, p.w, p.h);
                         }
@@ -3531,6 +3736,62 @@ console.log(
         }
     }
 
+    // May this animal stand at (tx, ty)?
+    //
+    // INSIDE ITS OWN FARM, and inside what a phone draws. The rows are this
+    // level's rows — so an egg is never left where the farmer would have to walk
+    // into the next farm for it — and the bleed columns are out, since a phone
+    // does not draw them and whatever an animal leaves there could never be
+    // seen or collected. Never the ditch.
+    //
+    // Only the destination is tested. The walk to it is a straight line, and a
+    // straight line between two points inside a rectangle never leaves it.
+    _animalCanStand(a, g, tx, ty) {
+        const c = Math.floor((tx - g.left) / g.tile);
+        const r = Math.ceil((ty - a.gTop) / g.tile) - 1;     // feet stand on the cell above the line
+        const bleed = g.edgeCols || 0;
+        if (c < bleed || c >= g.cols - bleed || r < 0 || r >= g.rows) return false;
+        return !this._canalCell(g, c, r);
+    }
+
+    // SCATTER FROM THE FARMER, if this species does and he is close.
+    //
+    // The destination is the farmer's bearing turned around, fanned out a
+    // little each try until one lands somewhere the animal may stand — so it
+    // bolts AWAY when it can and sideways when a canal or the farm's edge is
+    // behind it, and stays put only when boxed in on every side.
+    //
+    // Only HIS OWN level's farmer: each farm has one, and a farmer two levels
+    // down has no business startling anything here.
+    _fleeFarmer(seg, a, g, dt) {
+        const sp = ((CONFIG.ROAD.TILEMAP.ANIMALS || {}).SPECIES || {})[a.species] || {};
+        const F  = sp.FLEE;
+        if (!F || F.ENABLED === false) return false;
+        if (a.fleeCd > 0) { a.fleeCd -= dt; return false; }
+        if (a.flee) return false;                        // already running
+        const f = seg.farmer;
+        if (!f || !f.spr || !f.spr.scene || f.waiting) return false;
+        const dx = a.spr.x - f.spr.x, dy = a.spr.y - f.spr.y;
+        const d  = Math.hypot(dx, dy);
+        if (d > (F.RADIUS !== undefined ? F.RADIUS : 1.5) * g.tile) return false;
+        const away = d > 1e-3 ? Math.atan2(dy, dx) : Math.random() * Math.PI * 2;
+        const dist = F.DIST || [1.4, 2.6];
+        // Straight away first, then fanning out ~30 degrees a step to either side.
+        for (const off of [0, 0.5, -0.5, 1, -1, 1.5, -1.5]) {
+            const len = this._rndRange(dist) * g.tile;
+            const tx = a.spr.x + Math.cos(away + off) * len;
+            const ty = a.spr.y + Math.sin(away + off) * len;
+            if (!this._animalCanStand(a, g, tx, ty)) continue;
+            a.tile = g.tile;
+            a.tx = tx; a.ty = ty; a.mode = 'walk'; a.stepT = 0; a.flee = true;
+            const mx = tx - a.spr.x, my = ty - a.spr.y;
+            this._faceAnimal(a, Math.abs(my) > Math.abs(mx) ? (my > 0 ? 's' : 'n')
+                                                            : (mx > 0 ? 'e' : 'w'));
+            return true;
+        }
+        return false;                                     // boxed in: holds its ground
+    }
+
     // Pick somewhere near to amble to, and turn that way.
     //
     // A few tries and then it simply stays put — which is the right answer on a
@@ -3544,10 +3805,7 @@ console.log(
             const len = this._rndRange(trip) * g.tile;
             const tx = a.spr.x + Math.cos(ang) * len;
             const ty = a.spr.y + Math.sin(ang) * len;
-            const c  = Math.floor((tx - g.left) / g.tile);
-            const r  = Math.ceil((ty - a.gTop) / g.tile) - 1;    // feet stand on the cell above the line
-            if (c < 0 || c >= g.cols || r < 0 || r >= g.rows) continue;
-            if (this._canalCell(g, c, r)) continue;              // never into the ditch
+            if (!this._animalCanStand(a, g, tx, ty)) continue;
             a.tx = tx; a.ty = ty; a.mode = 'walk'; a.stepT = 0;
             // WHICHEVER AXIS IT COVERS MORE OF is the way it faces — the same
             // split as 45 degrees, without the trigonometry.
@@ -3958,8 +4216,25 @@ console.log(
     // strip and the level tally alike, so a crop drawn once is drawn everywhere.
     _iconOf(name) {
         const R = CONFIG.ROSTER || {};
-        const at = (R.ICONS || {})[name];
+        let at = (R.ICONS || {})[name];
+        // NOT IN THE TABLE: an animal's produce names its own icon on its
+        // species. That field was loaded but never read here — so an egg's
+        // tally cell came up empty while the churn only worked because it also
+        // happened to have a table entry.
+        if (at === undefined) {
+            const S = ((CONFIG.ROAD.TILEMAP || {}).ANIMALS || {}).SPECIES || {};
+            for (const sp of Object.values(S)) {
+                if (sp.PRODUCE && sp.PRODUCE.NAME === name && sp.PRODUCE.ICON) {
+                    at = sp.PRODUCE.ICON; break;
+                }
+            }
+        }
         if (at === undefined) return null;
+        // A STRING names a texture of its own — art that is not 48px square and
+        // would have to be padded or cropped to join the grid.
+        if (typeof at === 'string') {
+            return this.textures.exists(at) ? { sheet: at, frame: 0 } : null;
+        }
         const per = Math.max(1, R.PER_SHEET || 10);
         const sheet = (R.SHEETS || [])[Math.floor(at / per)];
         if (!sheet || !this.textures.exists(sheet)) return null;
@@ -3983,8 +4258,28 @@ console.log(
         const pm   = this.isPortrait ? (G.PORTRAIT_SCALE || 1) : 1;
         const s0   = this.layoutConfig.scale * pm;
         const size0 = (G.SIZE !== undefined ? G.SIZE : 1.05) * g.tile * pm;
-        const yLine = band.bandTop - size0 / 2
+        let yLine = band.bandTop - size0 / 2
                     - (G.LIFT !== undefined ? G.LIFT : 0.35) * g.tile;
+        // KEPT ON SCREEN. The tally stands above its level's top boundary, and a
+        // level as tall as the view puts that boundary at the screen's edge — so
+        // the whole block lands outside it.
+        //
+        // Where the camera WILL rest when this farm is lit is known now: it
+        // centres the band (_followMachine). The first level is the exception —
+        // it keeps the framing it booted with, so that is read straight off the
+        // camera instead.
+        if (this.camB) {
+            const N0 = G.NUMBER || {};
+            const labelH = (N0.ENABLED === false ? 0
+                            : (N0.SIZE || 22) * s0 * 1.3
+                              + (N0.GAP !== undefined ? N0.GAP : 0.12) * g.tile);
+            const camTop = (seg.levelIndex === 0)
+                ? this.camB.scrollY
+                : band.bandTop + g.h / 2 - this.camB.height / 2;
+            const want = camTop + (G.SCREEN_MARGIN !== undefined ? G.SCREEN_MARGIN : 0.25) * g.tile
+                       + labelH + size0 / 2;
+            if (yLine < want) yLine = want;
+        }
         // SORTED WITH THE BOUNDARY IT STANDS ON, not on a flat number. The tally
         // is drawn in the band ABOVE its own farm, and that band's shade sits at
         // the depth of its floor — which is this very line. A fixed depth would
@@ -4024,9 +4319,21 @@ console.log(
 
         // HOW MANY OF EACH.
         const counts = new Map();
-        for (const cr of seg.crops) {
+        for (const cr of (seg.crops || [])) {
             if (!this._cropWillBear(cr)) continue;   // nothing to gather, nothing to count
             counts.set(cr.crop, (counts.get(cr.crop) || 0) + 1);
+        }
+        // ...AND WHAT THE HERD WILL LEAVE. One per animal, so the figure is the
+        // herd's size and is known now, long before the first churn is dropped —
+        // which is the point of a tally: it counts DOWN from what is owed.
+        const AP = (TM.ANIMALS || {}).PRODUCE || {};
+        if (AP.ENABLED !== false && seg.herd) {
+            // Counted per ANIMAL, not per herd: a level could hold two species,
+            // and each leaves its own thing.
+            for (const a of seg.herd) {
+                const nm = this._produceOf(a.species).name;
+                if (nm) counts.set(nm, (counts.get(nm) || 0) + 1);
+            }
         }
         if (!counts.size) return;
 
@@ -4057,7 +4364,11 @@ console.log(
         const rad  = Math.min(size / 2, (G.RADIUS !== undefined ? G.RADIUS : 0.18) * size);
         // The boundary line itself, then lifted clear of it so the cells sit ON
         // the fence rather than behind it.
-        const y0 = band.bandTop - size / 2 - (G.LIFT !== undefined ? G.LIFT : 0.35) * g.tile;
+        // THE LINE THE LABEL WAS PLACED ON, not a fresh one off the boundary.
+        // This recomputed the same expression from bandTop and so missed the
+        // on-screen clamp above — the level's name came down on a tall map and
+        // its cells stayed on the boundary, off the top of the view.
+        const y0 = yLine;
         let x = g.left + (G.MARGIN !== undefined ? G.MARGIN : 0.5) * g.tile + size / 2;
         const cells = seg.goals = new Map();
 
@@ -5076,61 +5387,101 @@ console.log(
                 // Marker → this level's art. The gid is only ever used here, to
                 // subtract the sheet's base; config never sees it.
                 const art = g.ponds[gid - g.markerBase];
-                if (!art || !this.textures.exists(`pond_${art}`)) continue;
-                const w = (c1 - c0 + 1) * g.tile, h = (r1 - r0 + 1) * g.tile;
-                const px = g.left + (c0 * g.tile) + w / 2;
-                const py = gTop + (r0 * g.tile) + h / 2;
-                this._addB(this.add.image(px, py, `pond_${art}`)
-                    .setDisplaySize(w, h)
-                    .setDepth(1.45), seg);          // over the ground, under the canal
-
-                // The filled version sits on top of the dry bed, hidden until the
-                // canal draws level with the pond. It is the SAME rectangle, so
-                // the water lands exactly inside its own banks; only its scale
-                // changes as it fills.
-                const wet = this._pondWaterName(art);
-                if (!this.textures.exists(`pond_${wet}`)) continue;
-                const PF = CONFIG.ROAD.TILEMAP.POND_FILL || {};
-                const water = this._addB(this.add.image(px, py, `pond_${wet}`)
-                    .setDisplaySize(w, h)
-                    .setDepth(PF.DEPTH !== undefined ? PF.DEPTH : 1.46)
-                    .setVisible(false), seg);
-                // The dig is measured up from the band's foot, so the pond's
-                // centre row converts to the distance the machine must have cut
-                // before the water starts arriving.
-                const midRow = (r0 + r1) / 2;
-                // The flow art, riding over the water: a couple of copies of the
-                // same picture, each running centre-to-bank a fraction of a cycle
-                // apart, so water is always seen to be arriving.
-                const FL = PF.FLOW || {};
-                const rings = [];
-                const flowKey = `pond_${this._pondFlowName(art)}`;
-                if (FL.ENABLED !== false && this.textures.exists(flowKey)) {
-                    for (let n = 0; n < (FL.RINGS || 2); n++) {
-                        rings.push(this._addB(this.add.image(px, py, flowKey)
-                            .setDisplaySize(w, h)
-                            .setDepth((PF.DEPTH !== undefined ? PF.DEPTH : 1.46)
-                                    + (FL.DEPTH_OFFSET || 0.005))
-                            .setVisible(false), seg));
-                    }
-                }
-                (seg.ponds || (seg.ponds = [])).push({
-                    water, rings,
-                    // A tint MULTIPLIES the art, so the value it ends on is not
-                    // the deep colour — it is deep ÷ shallow, per channel. Work
-                    // that out once here from the two colours in config, so the
-                    // config stays readable: the colour the art was painted at,
-                    // and the colour it should reach.
-                    tintTo: this._tintRatio(PF.SHALLOW_COLOR, PF.DEEP_COLOR),
-                    alphaFrom: PF.ALPHA_FROM !== undefined ? PF.ALPHA_FROM : 1,
-                    // Each ring keeps its own phase, staggered around the cycle,
-                    // so they can retire one at a time as each finishes its run.
-                    ringPhase: rings.map((_, n) => n / Math.max(1, rings.length)),
-                    filling: false, done: false, spent: false,
-                    sx: water.scaleX, sy: water.scaleY,          // full size
-                    startPx: (g.rows - midRow - 0.5) * g.tile,
-                });
+                this._makePond(seg, art, c0, r0, c1 - c0 + 1, r1 - r0 + 1, gTop);
             }
+        }
+    }
+
+    // One pond, from a rectangle of cells.
+    //
+    // Both authoring routes end here: a block of painted markers reduced to its
+    // bounding box, or — the way to do it now — a rectangle drawn straight onto
+    // the pond OBJECT layer. The painted version only ever produced a box
+    // anyway, so drawing the box is the same instruction with the middle step
+    // taken out, and the object carries its own art name instead of an index
+    // into a per-level table.
+    _makePond(seg, art, c0, r0, cols, rows, gTop) {
+        const g = this.tileGrid;
+        if (!art || !this.textures.exists(`pond_${art}`)) return;
+        const w = cols * g.tile, h = rows * g.tile;
+        const px = g.left + (c0 * g.tile) + w / 2;
+        const py = gTop + (r0 * g.tile) + h / 2;
+        const c1 = c0 + cols - 1, r1 = r0 + rows - 1;
+        this._addB(this.add.image(px, py, `pond_${art}`)
+            .setDisplaySize(w, h)
+            .setDepth(1.45), seg);          // over the ground, under the canal
+
+        // The filled version sits on top of the dry bed, hidden until the
+        // canal draws level with the pond. It is the SAME rectangle, so
+        // the water lands exactly inside its own banks; only its scale
+        // changes as it fills.
+        const wet = this._pondWaterName(art);
+        if (!this.textures.exists(`pond_${wet}`)) return;
+        const PF = CONFIG.ROAD.TILEMAP.POND_FILL || {};
+        const water = this._addB(this.add.image(px, py, `pond_${wet}`)
+            .setDisplaySize(w, h)
+            .setDepth(PF.DEPTH !== undefined ? PF.DEPTH : 1.46)
+            .setVisible(false), seg);
+        // The dig is measured up from the band's foot, so the pond's
+        // centre row converts to the distance the machine must have cut
+        // before the water starts arriving.
+        const midRow = (r0 + r1) / 2;
+        // The flow art, riding over the water: a couple of copies of the
+        // same picture, each running centre-to-bank a fraction of a cycle
+        // apart, so water is always seen to be arriving.
+        const FL = PF.FLOW || {};
+        const rings = [];
+        const flowKey = `pond_${this._pondFlowName(art)}`;
+        if (FL.ENABLED !== false && this.textures.exists(flowKey)) {
+            for (let n = 0; n < (FL.RINGS || 2); n++) {
+                rings.push(this._addB(this.add.image(px, py, flowKey)
+                    .setDisplaySize(w, h)
+                    .setDepth((PF.DEPTH !== undefined ? PF.DEPTH : 1.46)
+                            + (FL.DEPTH_OFFSET || 0.005))
+                    .setVisible(false), seg));
+            }
+        }
+        (seg.ponds || (seg.ponds = [])).push({
+            water, rings,
+            // A tint MULTIPLIES the art, so the value it ends on is not
+            // the deep colour — it is deep ÷ shallow, per channel. Work
+            // that out once here from the two colours in config, so the
+            // config stays readable: the colour the art was painted at,
+            // and the colour it should reach.
+            tintTo: this._tintRatio(PF.SHALLOW_COLOR, PF.DEEP_COLOR),
+            alphaFrom: PF.ALPHA_FROM !== undefined ? PF.ALPHA_FROM : 1,
+            // Each ring keeps its own phase, staggered around the cycle,
+            // so they can retire one at a time as each finishes its run.
+            ringPhase: rings.map((_, n) => n / Math.max(1, rings.length)),
+            filling: false, done: false, spent: false,
+            sx: water.scaleX, sy: water.scaleY,          // full size
+            startPx: (g.rows - midRow - 0.5) * g.tile,
+        });
+    }
+
+    // Ponds drawn as RECTANGLES on the pond object layer.
+    //
+    // The object's name picks the art — `pond2` draws pond2, a plain `pond`
+    // takes the first entry of POND_ART — so a pond declares its own look in the
+    // map, the way a bridge or a cow marker does, and needs no entry in
+    // levels.js at all.
+    _buildPondObjects(seg, band) {
+        const TM = CONFIG.ROAD.TILEMAP, g = this.tileGrid;
+        if (!g || !g.pondObjs || !g.pondObjs.length) return;
+        const dry  = (TM.POND_FILL || {}).DRY_SUFFIX || '_dry';
+        const dflt = (TM.POND_ART || [])[0] || 'pond1';
+        for (const o of g.pondObjs) {
+            // A POINT is not a pond. Rectangles carry a size; stray points left
+            // on the layer report zero for both and are skipped rather than
+            // drawn as a pond of no width.
+            if (!(o.w > 0) || !(o.h > 0)) continue;
+            const base = (o.name === TM.POND_LAYER || o.name === 'pond') ? dflt : o.name;
+            const art  = String(base).endsWith(dry) ? String(base) : base + dry;
+            // Snapped to whole cells: the pond sits in the grid like everything
+            // else, so a rectangle dragged a few pixels off still lands square.
+            const c0 = Math.round(o.col), r0 = Math.round(o.row);
+            this._makePond(seg, art, c0, r0,
+                Math.max(1, Math.round(o.w)), Math.max(1, Math.round(o.h)), band.bandTop);
         }
     }
 
@@ -5278,13 +5629,23 @@ console.log(
     // marker to the DRY art, and the filled version is the same name with
     // _water in place of _dry. One name in config, two files.
     _pondArt() {
+        const TM = CONFIG.ROAD.TILEMAP || {};
         const out = new Set();
+        const add = (name) => {
+            if (!name) return;
+            const dry = String(name).endsWith(TM.POND_FILL && TM.POND_FILL.DRY_SUFFIX || '_dry')
+                      ? String(name)
+                      : String(name) + ((TM.POND_FILL || {}).DRY_SUFFIX || '_dry');
+            out.add(dry);
+            out.add(this._pondWaterName(dry));
+            out.add(this._pondFlowName(dry));
+        };
+        // The set declared in config — an object layer names its art inside the
+        // MAP, so the loader cannot learn it from levels.js alone.
+        for (const name of (TM.POND_ART || [])) add(name);
+        // ...and whatever the tile-marker levels still name themselves.
         for (const lv of this._levels()) {
-            for (const name of Object.values(lv.PONDS || {})) {
-                out.add(name);
-                out.add(this._pondWaterName(name));
-                out.add(this._pondFlowName(name));
-            }
+            for (const name of Object.values(lv.PONDS || {})) add(name);
         }
         return [...out];
     }
@@ -5515,7 +5876,10 @@ console.log(
                 const BS = TM.CROP_BASE || {};
                 const ev = this._edgeVariants()[edge] || { off: 0, angle: 0 };
                 let tilled = null;
-                if (BS.ENABLED !== false && TM.TERRAIN_TILLED !== undefined
+                // ...but never under PASTURE. Turf is not worked ground, and the
+                // furrowed square is what makes a field read as a plot.
+                if (BS.ENABLED !== false && lay.cls !== 'pasture'
+                        && TM.TERRAIN_TILLED !== undefined
                         && this.textures.exists('terrain')) {
                     tilled = this._addB(this.add.image(
                             g.left + (c + 0.5) * g.tile, gTop + (r + 0.5) * g.tile,
@@ -5550,18 +5914,37 @@ console.log(
                         .setDepth(this._yDepth(cy, TM.CROP_SUPPORT_BIAS !== undefined
                                                  ? TM.CROP_SUPPORT_BIAS : -0.0003)), seg);
                 }
-                const spr = this._addB(this.add.image(
-                        g.left + (c + 0.5) * g.tile, gTop + (r + 0.5) * g.tile, key, 0)
+                // GRASS GROWS WHERE IT LANDS. Other crops sit dead centre in
+                // their cell, which is right for rows someone dug; turf has no
+                // rows. Offset from the cell's own hash, so a field is scattered
+                // and always scattered the same way.
+                //
+                // And some cells carry TWO. EXTRA of them, chosen by a fourth
+                // hash, get a second plant at its own offset — so the sward
+                // thickens and thins instead of reading as one-per-square. The
+                // second is a full plant: it grows, sways and waits on the same
+                // water as the first.
+                const PS  = TM.PASTURE || {};
+                const turf = lay.cls === 'pasture';
+                const jit2 = turf ? (PS.JITTER !== undefined ? PS.JITTER : 0.32) * g.tile : 0;
+                const dbl  = turf && this._cellHash(c, r, 12) <
+                                     (PS.EXTRA !== undefined ? PS.EXTRA : 0.2);
+                for (let k = 0; k <= (dbl ? 1 : 0); k++) {
+                const ox = jit2 ? (this._cellHash(c, r, 20 + k) - 0.5) * 2 * jit2 : 0;
+                const oy = jit2 ? (this._cellHash(c, r, 30 + k) - 0.5) * 2 * jit2 : 0;
+                const px = g.left + (c + 0.5) * g.tile + ox;
+                const py = gTop + (r + 0.5) * g.tile + oy;
+                const spr = this._addB(this.add.image(px, py, key, 0)
                     .setOrigin(0.5, stemY).setScale(psc)
-                    .setDepth(this._yDepth(gTop + (r + 0.5) * g.tile)), seg);
+                    .setDepth(this._yDepth(py)), seg);
                 // Mirroring is safe here: the art's shadow sits centred under the
                 // stem, so a flipped plant is not lit from the wrong side.
-                if (V.FLIP !== false && h2 < 0.5) spr.setFlipX(true);
+                if (V.FLIP !== false && (k ? 1 - h2 : h2) < 0.5) spr.setFlipX(true);
                 // Each plant leans a little, so the field is not a grid of
                 // clones. Kept on the record too: a sway has to settle back to
                 // THIS angle, not to zero, or every plant the farmer brushes
                 // would quietly straighten and the field would comb itself flat.
-                const baseAngle = V.ROT_DEG ? (h3 - 0.5) * 2 * V.ROT_DEG : 0;
+                const baseAngle = V.ROT_DEG ? ((k ? 1 - h3 : h3) - 0.5) * 2 * V.ROT_DEG : 0;
                 if (baseAngle) spr.setAngle(baseAngle);
                 // `sc` is cached per crop so the stage-change spring knows the
                 // full y-scale to settle back to. Stage 1 spawns hard, unscaled.
@@ -5573,13 +5956,20 @@ console.log(
                 const rec = { watch: best, stage: 1, timer: 0, sprite: spr, sc: psc, crop, edge,
                              col: c, row: r,
                              baseAngle, sway: 0, swayV: 0,
-                             lay, support, fruit: null, twF: null,
-                             tilled, tilledOff: ev.off, tilledAngle: ev.angle,
+                             lay, support: k ? null : support, fruit: null, twF: null,
+                             tilled: k ? null : tilled, tilledOff: ev.off, tilledAngle: ev.angle,
                              growMul: 1 + (this._cellHash(c, r, 4) - 0.5) * 2 * (V.GROW_VAR || 0),
                              ground: (seg.groundSprites || [])[r * g.cols + c] || null,
                              ovl: 0, done: false };
                 crops.push(rec);
-                cropAt.set(c + ',' + r, rec);
+                // FIRST ONE OWNS THE CELL. cropAt answers "what is growing at
+                // this spot" for the farmer's brush and the harvest, and it maps
+                // one cell to one plant — so a clump's second blade lives in the
+                // list but not in the lookup. Nothing asks after it: pasture is
+                // never harvested, and a brush that rocks one of two blades is
+                // not worth a second index.
+                if (!k) cropAt.set(c + ',' + r, rec);
+                }
             }
         }
     }
@@ -5602,8 +5992,13 @@ console.log(
         const n   = this.textures.get(key).frameTotal - 1;   // __BASE is not a frame
         let support = null, harvest = null, fruit = null, growth = n;
         if (cls === 'trellis') { support = --growth; }
-        if (cls === 'root')    { harvest = --growth; }
-        else                   { fruit   = --growth; }       // roots have none
+        // PASTURE KEEPS EVERY FRAME AS GROWTH. There is nothing to take off it —
+        // the animal grazing it is the yield — so it has no fruit and no pulled
+        // form, and _cropWillBear reads that straight off: no tally cell, no
+        // harvest run, no roster slot.
+        if (cls === 'pasture')  { /* all frames are growth */ }
+        else if (cls === 'root') { harvest = --growth; }
+        else                     { fruit   = --growth; }      // roots have none
         return { cls, growth: Math.max(1, growth), fruit, support, harvest };
     }
 
