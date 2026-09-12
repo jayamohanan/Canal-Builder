@@ -997,6 +997,29 @@ var CONFIG = {
             // level to find out what to fetch. Six 256px files is 1.2MB of
             // texture, which is not worth a scan.
             POND_ART: ['pond1', 'pond2'],
+
+            // ── MUD ─────────────────────────────────────────────────────────
+            // Drawn wherever a rectangle named `mud` sits on the map's `mud`
+            // object layer. Rectangles that touch or overlap merge into one
+            // wallow, so any shape can be built from boxes.
+            //
+            // mud.webp is SIX pieces in one row, the same six and the same order
+            // the tilled soil uses, each drawn with a ragged bank on the sides
+            // that meet ground:
+            //   0 none (inner)  1 n  2 n+e  3 n+s  4 n+e+s  5 all four (lone)
+            // Each cell looks at its four neighbours, picks the piece, and turns
+            // it to face the right way, so six drawings cover all sixteen cases.
+            //
+            // Its own sheet rather than a row on terrain.webp, because it is not
+            // wanted on every level — and a level that has none never loads it
+            // once loading goes per-level.
+            MUD: {
+                ENABLED: true,
+                LAYER:   'mud',
+                KEY:     'mud_sheet',
+                DEPTH:   1.45,     // on the ground and the soil overlays (1.40-1.44),
+                                   // under the dry branch canals (1.5)
+            },
             POND_DIR:   'graphics/pond/',  // where the pond art lives
 
             // ── Filling a pond ───────────────────────────────────────────
@@ -1100,6 +1123,12 @@ var CONFIG = {
                 // at a level's boundary, which is its own sprite (FENCE).
                 'fence.tsx':   { IMAGE: 'graphics/tilesheets/fence.webp',
                                  KEY: 'fence_sheet' },
+                // Mud. No map paints with it — the game lays it from rectangles
+                // on the `mud` object layer — but listing it here is what gets
+                // it loaded on the 128px grid AND extruded like every other
+                // sheet, so its ragged edges never pick up a seam line.
+                'mud.tsx':     { IMAGE: 'graphics/tilesheets/mud.webp',
+                                 KEY: 'mud_sheet' },
             },
             FRAME:   128,           // frame size in the sheet
             SHEET_PAD: 2,           // EXTRUSION, in px, added around every frame

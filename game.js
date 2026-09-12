@@ -1285,6 +1285,7 @@ console.log(
             cropsData:  layer(TM.CROPS_LAYER)  || [],   // crop markers (not drawn)
             pondData:   layer(TM.POND_LAYER)   || [],   // pond markers (not drawn)
             pondObjs:   objects(TM.POND_LAYER),         // ...or rectangles, the newer way
+            mudObjs:    objects((TM.MUD || {}).LAYER || 'mud'),  // wallows, as rectangles
             // THE BLEED COLUMNS, for anything the game places ITSELF. A phone
             // reads the map without them (see MOBILE_TRIM), so a scattered
             // animal or a spawned farmer put there would be invisible to most
@@ -1912,6 +1913,7 @@ console.log(
         this._focusFenceDepth(this._dimmedSeg);
         this._buildPonds(seg, band);
         this._buildPondObjects(seg, band);
+        this._buildMud(seg, band);
     }
 
     // ── Watered ground ───────────────────────────────────────────────────────
@@ -5457,6 +5459,58 @@ console.log(
             sx: water.scaleX, sy: water.scaleY,          // full size
             startPx: (g.rows - midRow - 0.5) * g.tile,
         });
+    }
+
+    // MUD, from rectangles named `mud` on the mud object layer.
+    //
+    // The rectangles are unioned into a set of cells first, so boxes that touch
+    // or overlap become one wallow with one continuous bank — an L or a blob is
+    // just two or three boxes. Then each cell picks its piece from its four
+    // neighbours: a ragged bank on every side that meets ground, a plain join on
+    // every side that meets more mud.
+    //
+    // The piece table is the tilled soil's own (_edgeVariants) — mud.webp was
+    // drawn as the same six pieces in the same order on purpose, so one piece of
+    // rotation logic serves both and they can never disagree.
+    _buildMud(seg, band) {
+        const TM = CONFIG.ROAD.TILEMAP, M = TM.MUD || {};
+        const g = this.tileGrid;
+        if (M.ENABLED === false || !g || !g.mudObjs || !g.mudObjs.length) return;
+        const key = M.KEY || 'mud_sheet';
+        if (!this.textures.exists(key)) return;
+
+        const cells = new Set();
+        for (const o of g.mudObjs) {
+            if (o.name !== 'mud' || !(o.w > 0) || !(o.h > 0)) continue;   // a point is not a wallow
+            // Snapped to whole cells, and clipped to the grid — which on a phone
+            // is the TRIMMED grid, so a box reaching into a bleed column simply
+            // loses that column instead of drawing off the edge.
+            const c0 = Math.max(0, Math.round(o.col)), r0 = Math.max(0, Math.round(o.row));
+            const c1 = Math.min(g.cols, Math.round(o.col + o.w));
+            const r1 = Math.min(g.rows, Math.round(o.row + o.h));
+            for (let r = r0; r < r1; r++)
+                for (let c = c0; c < c1; c++) cells.add(c + ',' + r);
+        }
+        if (!cells.size) return;
+
+        const mud = (c, r) => cells.has(c + ',' + r);
+        const table = this._edgeVariants();
+        const gTop = band.bandTop;
+        for (const k of cells) {
+            const i = k.indexOf(',');
+            const c = +k.slice(0, i), r = +k.slice(i + 1);
+            // Which sides face GROUND: N=1 E=2 S=4 W=8, the tilled soil's bits.
+            const edge = (mud(c, r - 1) ? 0 : 1) | (mud(c + 1, r) ? 0 : 2) |
+                         (mud(c, r + 1) ? 0 : 4) | (mud(c - 1, r) ? 0 : 8);
+            const v = table[edge] || { off: 0, angle: 0 };
+            this._addB(this.add.image(
+                    g.left + (c + 0.5) * g.tile, gTop + (r + 0.5) * g.tile, key, v.off)
+                // +1px so neighbours overlap and no sub-pixel seam shows, the same
+                // trick the ground pass uses.
+                .setDisplaySize(g.tile + 1, g.tile + 1)
+                .setAngle(v.angle)
+                .setDepth(M.DEPTH !== undefined ? M.DEPTH : 1.45), seg);
+        }
     }
 
     // Ponds drawn as RECTANGLES on the pond object layer.
